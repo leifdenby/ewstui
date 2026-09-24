@@ -273,13 +273,24 @@ class MailClient:
     def send_mail(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> None:
         self.account.send_mail(subject=subject, body=body, to_recipients=to, cc_recipients=cc or [])
 
-    def reply(self, folder_id: str, message_id: str, body: str, reply_all: bool = False) -> None:
+    def reply(
+        self,
+        folder_id: str,
+        message_id: str,
+        subject: str,
+        body: str,
+        to: list[str] | None = None,
+        reply_all: bool = False,
+    ) -> None:
+        """`to` overrides the reply recipients (plain reply only —
+        exchangelib's reply_all always goes to the original recipients).
+        """
         folder = self._folder_by_id(folder_id)
         item = folder.get(id=message_id)
         if reply_all:
-            item.reply_all(body=body)
+            item.reply_all(subject=subject, body=body)
         else:
-            item.reply(body=body)
+            item.reply(subject=subject, body=body, to_recipients=to or None)
 
 
 class CalendarClient:

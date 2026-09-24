@@ -28,6 +28,7 @@ _LOREM = (
 class DemoMailClient:
     def __init__(self, page_size: int = 50):
         self.page_size = page_size
+        self.sent: list[dict] = []  # demo "outbox": what send_mail/reply would have sent
         self._folders = [
             FolderSummary(id="inbox", name="Inbox", total_count=4, unread_count=2, depth=0),
             FolderSummary(id="sent", name="Sent Items", total_count=2, unread_count=0, depth=0),
@@ -143,10 +144,21 @@ class DemoMailClient:
         return self.move_message(folder_id, message_id, "archive")
 
     def send_mail(self, to, subject, body, cc=None) -> None:
-        pass  # demo: no-op
+        self.sent.append({"to": to, "subject": subject, "body": body, "cc": cc or []})
 
-    def reply(self, folder_id: str, message_id: str, body: str, reply_all: bool = False) -> None:
-        pass  # demo: no-op
+    def reply(
+        self,
+        folder_id: str,
+        message_id: str,
+        subject: str,
+        body: str,
+        to: list[str] | None = None,
+        reply_all: bool = False,
+    ) -> None:
+        self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
+        self.sent.append(
+            {"in_reply_to": message_id, "to": to, "subject": subject, "body": body, "reply_all": reply_all}
+        )
 
     def list_attachments(self, folder_id: str, message_id: str) -> list[AttachmentSummary]:
         out = []

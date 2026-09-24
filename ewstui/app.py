@@ -25,6 +25,11 @@ from .widgets.priority_view import PriorityView
 log = logging.getLogger(__name__)
 
 
+def _split_addresses(field: str) -> list[str]:
+    """'a@x, b@y; c@z' -> ['a@x', 'b@y', 'c@z'] (the To field is free text)."""
+    return [a.strip() for a in field.replace(";", ",").split(",") if a.strip()]
+
+
 @dataclass
 class UndoEntry:
     """A reversible mail action: `moved` is where the message is now,
@@ -210,22 +215,50 @@ class EwstuiApp(App):
     def on_message_table_reply_requested(self, event: MessageTable.ReplyRequested) -> None:
         if not self.current_folder_id:
             return
-        detail = self.mail_client.get_message(self.current_folder_id, event.message_id)
+        folder_id = self.current_folder_id
+        detail = self.mail_client.get_message(folder_id, event.message_id)
         quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
         prefill_body = f"\n\n-- original message --\n{quoted}"
+
+        def _send(result: dict) -> None:
+            self.mail_client.reply(
+                folder_id,
+                event.message_id,
+                subject=result["subject"],
+                body=result["body"],
+                to=_split_addresses(result["to"]),
+                reply_all=event.reply_all,
+            )
+
+        self._compose_and_send(
+            ComposeScreen(to=detail.sender, subject=f"Re: {detail.subject}", body=prefill_body),
+            _send,
+            sent_message="Reply sent",
+        )
+
+    def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str) -> None:
+        """Show `screen`; on Ctrl+S call `send(result)`. If sending fails,
+        say why and reopen the compose screen with the draft intact, so
+        a server error never throws away what the user wrote.
+        """
 
         def _on_result(result: dict | None) -> None:
             if result is None:
                 return
-            self.mail_client.reply(
-                self.current_folder_id, event.message_id, result["body"], reply_all=event.reply_all
-            )
-            self.notify("Reply sent")
+            try:
+                send(result)
+            except Exception as e:  # noqa: BLE001 - surface any EWS error, keep the draft
+                log.exception("send failed")
+                self.notify(f"Send failed: {e} — draft kept", severity="error", timeout=10)
+                self._compose_and_send(
+                    ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"]),
+                    send,
+                    sent_message,
+                )
+                return
+            self.notify(sent_message)
 
-        self.push_screen(
-            ComposeScreen(to=detail.sender, subject=f"Re: {detail.subject}", body=prefill_body),
-            _on_result,
-        )
+        self.push_screen(screen, _on_result)
 
     def on_message_table_delete_requested(self, event: MessageTable.DeleteRequested) -> None:
         if not self.current_folder_id:
@@ -447,13 +480,12 @@ class EwstuiApp(App):
                     pass  # older than the loaded page; restored but not on screen
 
     def action_compose_new(self) -> None:
-        def _on_result(result: dict | None) -> None:
-            if result is None:
-                return
-            self.mail_client.send_mail(to=[result["to"]], subject=result["subject"], body=result["body"])
-            self.notify("Message sent")
+        def _send(result: dict) -> None:
+            self.mail_client.send_mail(
+                to=_split_addresses(result["to"]), subject=result["subject"], body=result["body"]
+            )
 
-        self.push_screen(ComposeScreen(), _on_result)
+        self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent")
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
