@@ -121,6 +121,12 @@ class MailClient:
         walk(self.account.root / "Top of Information Store" if False else self.account.msg_folder_root)
         return folders
 
+    def default_folder_id(self) -> str:
+        """The folder to open on startup: the Inbox, via its EWS
+        well-known id so it's found regardless of display language.
+        """
+        return self.account.inbox.id
+
     def _folder_by_id(self, folder_id: str):
         # exchangelib folders are usually navigated by object, but the UI
         # only knows ids (strings) — look the folder up by walking from

@@ -35,6 +35,13 @@ class FolderList(ListView):
             unread = f" ({f.unread_count})" if f.unread_count else ""
             self.append(ListItem(Label(f"{indent}{f.name}{unread}"), name=f.id))
 
+    def highlight_folder(self, folder_id: str) -> None:
+        """Move the cursor to `folder_id` (no-op if it isn't listed)."""
+        for i, f in enumerate(self._folders):
+            if f.id == folder_id:
+                self.index = i
+                return
+
     def action_cursor_first(self) -> None:
         if self._folders:
             self.index = 0

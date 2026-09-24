@@ -103,6 +103,9 @@ class DemoMailClient:
     def list_folders(self) -> list[FolderSummary]:
         return list(self._folders)
 
+    def default_folder_id(self) -> str:
+        return "inbox"
+
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
         msgs = self._messages.get(folder_id, [])
         limit = limit or self.page_size

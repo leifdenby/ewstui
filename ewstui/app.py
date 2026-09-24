@@ -138,9 +138,22 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001 - surface any EWS error to the user
             self.notify(f"Failed to load folders: {e}", severity="error", timeout=10)
             return
-        self.query_one("#folders", FolderList).set_folders(folders)
-        if folders:
-            self.select_folder(folders[0].id)
+        if not folders:
+            return
+        folder_list = self.query_one("#folders", FolderList)
+        folder_list.set_folders(folders)
+        # Open the Inbox, not the first row: live mailboxes list "Top of
+        # Information Store" first. Fall back to the first folder if the
+        # Inbox can't be resolved or isn't in the list.
+        try:
+            default_id = self.mail_client.default_folder_id()
+        except Exception:  # noqa: BLE001
+            log.warning("could not resolve the Inbox folder", exc_info=True)
+            default_id = None
+        if default_id not in {f.id for f in folders}:
+            default_id = folders[0].id
+        folder_list.highlight_folder(default_id)
+        self.select_folder(default_id)
 
     def select_folder(self, folder_id: str) -> None:
         self.current_folder_id = folder_id
