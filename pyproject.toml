@@ -9,6 +9,8 @@ dependencies = [
     "textual>=0.60",
     # Needed for --auth oauth2 / auto (the default)
     "msal>=1.28",
+    "keyring>=25.7.0",
+    "pyobjc-framework-localauthentication>=12.2.2 ; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

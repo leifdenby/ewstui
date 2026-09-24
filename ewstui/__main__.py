@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import auth
         from .ews_client import CalendarClient, MailClient
 
+        if cfg.forget_password:
+            return _forget_password(cfg)
         if cfg.debug:
             print(f"Debug logging to {LOG_FILE.resolve()}", file=sys.stderr)
         try:
@@ -46,13 +48,68 @@ def main(argv: list[str] | None = None) -> int:
                 traceback.print_exc()
             else:
                 print("Re-run with --debug for a traceback and full EWS traffic in the log.", file=sys.stderr)
+            _drop_rejected_keychain_password(cfg, e)
             return 1
+        _offer_to_save_password(cfg, account)
         mail_client = MailClient(account, page_size=cfg.page_size)
         calendar_client = CalendarClient(account)
 
     app = EwstuiApp(mail_client, calendar_client, cfg)
     app.run()
     return 0
+
+
+def _forget_password(cfg) -> int:
+    from . import auth, keychain
+
+    username = auth.login_username(cfg)
+    if keychain.available() and keychain.delete_password(username, cfg.ews_url):
+        print(f"Removed the Keychain password for {username}", file=sys.stderr)
+    else:
+        print(f"No Keychain password stored for {username}", file=sys.stderr)
+    return 0
+
+
+def _offer_to_save_password(cfg, account) -> None:
+    """After a verified login with a typed password, offer to keep it in
+    the Keychain. Only asked interactively, and only once it's known good.
+    """
+    from . import keychain
+
+    if cfg.password_source != "prompt" or not cfg.use_keychain or not keychain.available():
+        return
+    if not sys.stdin.isatty():
+        return
+    creds = account.protocol.credentials
+    answer = input("Save this password in the macOS Keychain (unlock with Touch ID next time)? [y/N] ")
+    if answer.strip().lower() not in ("y", "yes"):
+        return
+    try:
+        keychain.save_password(creds.username, cfg.ews_url, creds.password)
+    except Exception as e:  # noqa: BLE001 - saving is a convenience; never block startup
+        print(f"Couldn't save to the Keychain: {e}", file=sys.stderr)
+        return
+    print("Saved. Use --forget-password to remove it.", file=sys.stderr)
+
+
+def _drop_rejected_keychain_password(cfg, error: Exception) -> None:
+    """A stored password the server rejects (e.g. after a password
+    change) would fail on every start — remove it so the next run
+    prompts again.
+    """
+    from exchangelib.errors import UnauthorizedError
+
+    from . import auth, keychain
+
+    if cfg.password_source != "keychain" or not isinstance(error.__cause__, UnauthorizedError):
+        return
+    username = auth.login_username(cfg)
+    keychain.delete_password(username, cfg.ews_url)
+    print(
+        f"The password stored in the Keychain for {username} was rejected and has been removed. "
+        "Run again to enter the new one.",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

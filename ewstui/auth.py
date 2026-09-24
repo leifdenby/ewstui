@@ -43,6 +43,7 @@ from exchangelib import (
 )
 from exchangelib.errors import UnauthorizedError
 
+from . import keychain
 from .config import AuthMethod, Config
 
 log = logging.getLogger(__name__)
@@ -183,16 +184,42 @@ def _oauth2_account(cfg: Config) -> Account:
 # NTLM / Basic (password passthrough, no disk state)
 # --------------------------------------------------------------------------
 
+def login_username(cfg: Config, auth_type: str | None = None) -> str:
+    """The username actually sent for ntlm/basic (and used as the
+    Keychain item key): --username or --email, plus --domain for NTLM.
+    """
+    if auth_type is None:
+        auth_type = BASIC if cfg.auth_method == AuthMethod.BASIC else NTLM
+    username = cfg.username or cfg.email or ""
+    if cfg.domain and auth_type == NTLM and "\\" not in username:
+        username = f"{cfg.domain}\\{username}"
+    return username
+
+
+def _resolve_password(cfg: Config, username: str) -> str:
+    """EWSTUI_PASSWORD env var, else Keychain (after Touch ID), else a
+    getpass prompt. Records where it came from in cfg.password_source.
+    """
+    if cfg.password:
+        cfg.password_source = "env"
+        return cfg.password
+    if cfg.use_keychain and keychain.available():
+        _status("Looking up password in the macOS Keychain (Touch ID) ...")
+        password = keychain.get_password(username, cfg.ews_url)
+        if password is not None:
+            cfg.password_source = "keychain"
+            return password
+    cfg.password_source = "prompt"
+    return getpass.getpass(f"EWS password for {username}: ")
+
+
 def _password_account(cfg: Config, auth_type: str) -> Account:
     if not cfg.email:
         raise AuthUnavailable("--email is required")
 
-    username = cfg.username or cfg.email
-    if cfg.domain and auth_type == NTLM and "\\" not in username:
-        username = f"{cfg.domain}\\{username}"
-
+    username = login_username(cfg, auth_type)
     _status(f"Using {auth_type} auth as {username}")
-    password = cfg.password or getpass.getpass(f"EWS password for {username}: ")
+    password = _resolve_password(cfg, username)
 
     credentials = Credentials(username=username, password=password)
     config_kwargs = {"credentials": credentials, "auth_type": auth_type}

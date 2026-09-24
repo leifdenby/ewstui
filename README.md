@@ -83,6 +83,20 @@ and `ps`). Either set `EWSTUI_PASSWORD` in the environment for a
 scripted/non-interactive run, or just leave it unset — you'll get a
 `getpass` prompt at startup.
 
+**macOS Keychain + Touch ID**: after a successful login with a typed
+password, ewstui asks whether to save it in your login Keychain
+(service `ewstui`, one item per username + EWS URL). On later starts it
+asks for Touch ID (or your Mac password if there's no sensor) and uses
+the stored password; cancel the dialog to type it instead. If the
+server rejects a stored password (e.g. after a password change) the
+item is removed and the next run prompts again. `--forget-password`
+deletes it; `--no-keychain` skips the Keychain entirely.
+
+Note the Touch ID check is enforced by ewstui, not by the Keychain:
+OS-level biometric protection needs a signed app with Keychain
+entitlements. The item itself is protected like any login Keychain
+item (encrypted, unlocked while you're logged in).
+
 ### Troubleshooting the connection
 
 Before the UI opens, ewstui checks the connection in plain terminal

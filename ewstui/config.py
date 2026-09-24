@@ -32,6 +32,9 @@ class Config:
     email: str | None = None
     username: str | None = None           # defaults to `email` if unset
     password: str | None = None           # only used for ntlm/basic; prefer prompting
+    use_keychain: bool = True             # read/offer to save the password in the macOS Keychain
+    forget_password: bool = False         # delete the stored Keychain password and exit
+    password_source: str | None = None    # set at login: "env" | "keychain" | "prompt"
     ews_url: str | None = None            # e.g. https://mail.example.com/EWS/Exchange.asmx
     autodiscover: bool = False
     domain: str | None = None             # NTLM domain, e.g. "CORP"
@@ -78,6 +81,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     auth.add_argument("--username", help="Login username for ntlm/basic (defaults to --email)")
     auth.add_argument("--domain", help="NTLM domain, e.g. CORP (only for --auth ntlm/auto fallback)")
+    auth.add_argument(
+        "--no-keychain",
+        action="store_true",
+        help="Don't read the password from, or offer to save it to, the macOS Keychain",
+    )
+    auth.add_argument(
+        "--forget-password",
+        action="store_true",
+        help="Delete the password stored in the macOS Keychain for this username/server, then exit",
+    )
     auth.add_argument(
         "--ntlm-no-cbt",
         action="store_true",
@@ -132,6 +145,8 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime
+        use_keychain=not ns.no_keychain,
+        forget_password=ns.forget_password,
         ews_url=ns.ews_url,
         autodiscover=ns.autodiscover,
         domain=ns.domain,
