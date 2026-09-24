@@ -83,6 +83,25 @@ and `ps`). Either set `EWSTUI_PASSWORD` in the environment for a
 scripted/non-interactive run, or just leave it unset — you'll get a
 `getpass` prompt at startup.
 
+### Troubleshooting the connection
+
+Before the UI opens, ewstui checks the connection in plain terminal
+output: it probes the EWS URL (reachability, TLS, which auth schemes
+the server offers), then fetches the Inbox once with your credentials
+(30 s timeout). On failure it exits with the error and hints instead
+of opening an empty UI.
+
+- `--debug` prints tracebacks and logs full EWS traffic to
+  `ewstui.log` (it can contain mail content and auth tokens — delete it
+  afterwards).
+- **NTLM login hangs** (the Inbox check never answers, while
+  `--auth basic` at least gets a quick reply): the server is likely
+  behind a TLS-terminating proxy/load balancer (e.g. F5) that can't
+  handle NTLM channel binding. Add `--ntlm-no-cbt`, e.g.
+  `--ntlm-no-cbt --domain PROD --username jdoe`.
+- In zsh/bash, quote `DOMAIN\user` (`--username 'PROD\jdoe'`) or the
+  backslash is eaten — or use `--domain` instead.
+
 ## Priority list (`2`)
 
 A local, `todo.txt`-formatted list for triaging mail — separate from

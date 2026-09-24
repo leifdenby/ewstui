@@ -61,6 +61,12 @@ class AuthUnavailable(AuthError):
     """
 
 
+def _status(msg: str) -> None:
+    # Pre-TUI progress output. stderr, like the device-flow prompt, so
+    # it's visible before Textual takes over the terminal.
+    print(msg, file=sys.stderr, flush=True)
+
+
 # --------------------------------------------------------------------------
 # OAuth2 (device code flow via MSAL)
 # --------------------------------------------------------------------------
@@ -185,6 +191,7 @@ def _password_account(cfg: Config, auth_type: str) -> Account:
     if cfg.domain and auth_type == NTLM and "\\" not in username:
         username = f"{cfg.domain}\\{username}"
 
+    _status(f"Using {auth_type} auth as {username}")
     password = cfg.password or getpass.getpass(f"EWS password for {username}: ")
 
     credentials = Credentials(username=username, password=password)
@@ -244,6 +251,20 @@ def _kerberos_account(cfg: Config) -> Account:
 # --------------------------------------------------------------------------
 
 def get_account(cfg: Config) -> Account:
+    if not cfg.verify_ssl:
+        from exchangelib.protocol import BaseProtocol, NoVerifyHTTPAdapter
+
+        BaseProtocol.HTTP_ADAPTER_CLS = NoVerifyHTTPAdapter
+        _status("WARNING: TLS certificate verification is disabled (--no-verify-ssl)")
+    if not cfg.ntlm_send_cbt:
+        import functools
+
+        import requests_ntlm
+        from exchangelib import transport
+
+        transport.AUTH_TYPE_MAP[NTLM] = functools.partial(requests_ntlm.HttpNtlmAuth, send_cbt=False)
+        _status("NTLM channel binding disabled (--ntlm-no-cbt)")
+
     method = cfg.auth_method
 
     if method == AuthMethod.OAUTH2:
@@ -261,8 +282,132 @@ def get_account(cfg: Config) -> Account:
             return _oauth2_account(cfg)
         except AuthUnavailable as e:
             log.warning("auto: OAuth2 unavailable (%s), falling back to NTLM", e)
+            _status(f"auto: skipping OAuth2 ({e}), falling back to NTLM")
         except AuthError as e:
             log.warning("auto: OAuth2 failed (%s), falling back to NTLM", e)
+            _status(f"auto: OAuth2 failed ({e}), falling back to NTLM")
         return _password_account(cfg, NTLM)
 
     raise AssertionError(f"unhandled auth method {method!r}")  # pragma: no cover
+
+
+# --------------------------------------------------------------------------
+# Pre-flight diagnostics
+#
+# With an explicit --ews-url, building an exchangelib Account makes no
+# network calls at all, so a wrong password / unreachable server only
+# surfaces once the TUI is up (as a blank screen). These run first and
+# report in plain terminal output instead.
+# --------------------------------------------------------------------------
+
+PROBE_TIMEOUT = 15  # seconds
+
+
+def probe_endpoint(url: str, verify_ssl: bool = True) -> None:
+    """Unauthenticated GET against the EWS URL: checks DNS/TCP/TLS and
+    reports which auth schemes the server advertises. Raises AuthError
+    if the server can't be reached at all.
+    """
+    import requests
+
+    _status(f"Probing {url} ...")
+    try:
+        r = requests.get(url, timeout=PROBE_TIMEOUT, verify=verify_ssl, allow_redirects=False)
+    except requests.exceptions.SSLError as e:
+        raise AuthError(
+            f"TLS error talking to {url}: {e}\n"
+            "  Hint: if the server uses an internal CA, retry with --no-verify-ssl "
+            "(or add the CA to your trust store)."
+        ) from e
+    except requests.exceptions.Timeout as e:
+        raise AuthError(
+            f"No response from {url} within {PROBE_TIMEOUT}s.\n"
+            "  Hint: is the server only reachable on the internal network / VPN?"
+        ) from e
+    except requests.exceptions.ConnectionError as e:
+        raise AuthError(
+            f"Could not connect to {url}: {e}\n"
+            "  Hint: check the hostname, and whether you need VPN."
+        ) from e
+
+    offered = r.headers.get("WWW-Authenticate", "")
+    schemes = sorted({part.strip().split(" ")[0] for part in offered.split(",") if part.strip()})
+    _status(f"  HTTP {r.status_code}; server offers auth: {', '.join(schemes) or '(none advertised)'}")
+    if r.is_redirect:
+        _status(f"  Redirects to {r.headers.get('Location')} — the EWS URL may be wrong.")
+    if schemes and schemes == ["Bearer"]:
+        _status("  Note: server only offers Bearer (OAuth2); NTLM/Basic won't work — use --auth oauth2.")
+
+
+VERIFY_TIMEOUT = 30  # seconds; exchangelib's own default is 120
+_HANG_HINT = (
+    "  Still waiting... the server hasn't answered. Some gateways (e.g. F5 in front\n"
+    "  of Exchange) hang instead of rejecting a login they don't like. If this times\n"
+    "  out, try --auth basic, or --username 'DOMAIN\\user' / --domain DOMAIN."
+)
+
+
+def verify_account(account: Account, timeout: int = VERIFY_TIMEOUT) -> None:
+    """One real authenticated EWS call (fetch the Inbox folder). Raises
+    AuthError with a human-readable explanation on failure, including
+    when the server doesn't answer within `timeout` seconds.
+    """
+    import threading
+
+    _status(f"Checking credentials by fetching the Inbox (timeout {timeout}s) ...")
+    protocol = account.protocol
+    saved_timeout = protocol.TIMEOUT
+    protocol.TIMEOUT = timeout  # per-instance override, restored below
+    hint = threading.Timer(min(10, timeout / 2), _status, args=(_HANG_HINT,))
+    hint.daemon = True
+    hint.start()
+    try:
+        inbox = account.inbox
+        _status(f"  OK: Inbox has {inbox.total_count} messages ({inbox.unread_count} unread)")
+    except Exception as e:  # noqa: BLE001 - translate anything EWS throws
+        auth_type = getattr(getattr(protocol, "config", None), "auth_type", None)
+        raise AuthError(explain_error(e, auth_type)) from e
+    finally:
+        hint.cancel()
+        protocol.TIMEOUT = saved_timeout
+
+
+def explain_error(e: Exception, auth_type: str | None = None) -> str:
+    import requests
+    from exchangelib.errors import (
+        ErrorNonExistentMailbox,
+        ErrorTimeoutExpired,
+        RateLimitError,
+        TransportError,
+    )
+
+    msg = f"{type(e).__name__}: {e}"
+    # exchangelib re-raises requests' connection/read timeouts as ErrorTimeoutExpired
+    if isinstance(e, (ErrorTimeoutExpired, requests.exceptions.Timeout)):
+        tips = ["--auth basic (if the server offers Basic; it's still encrypted over HTTPS)"]
+        if auth_type == NTLM:
+            tips.insert(0, "--ntlm-no-cbt (NTLM behind a TLS-terminating proxy often hangs on channel binding)")
+        return (
+            f"{msg}\n"
+            "  The server accepted the connection but never answered the login. Things to try:\n"
+            + "".join(f"   - {t}\n" for t in tips)
+            + "   - a different username form: --username 'DOMAIN\\user' or --domain DOMAIN"
+        )
+    if isinstance(e, UnauthorizedError):
+        other = {NTLM: "--auth basic", BASIC: "--auth ntlm"}.get(auth_type, "--auth ntlm or --auth basic")
+        return (
+            f"{msg}\n"
+            f"  The server rejected the credentials (HTTP 401{f', {auth_type} auth' if auth_type else ''}). "
+            "Things to try:\n"
+            "   - check the password\n"
+            "   - a different username form: 'DOMAIN\\user' (quote it in the shell), your email,\n"
+            "     plain user id, or your UPN (user@domain) if it differs from your email\n"
+            f"   - a different auth method: {other} (or oauth2 if the server only offers Bearer)"
+        )
+    if isinstance(e, ErrorNonExistentMailbox):
+        return f"{msg}\n  Logged in, but no mailbox for that --email on this server. Check the address."
+    if isinstance(e, RateLimitError):
+        return f"{msg}\n  The server is throttling requests; wait a bit and retry."
+    if isinstance(e, TransportError):
+        return f"{msg}\n  Network/HTTP-level failure talking to EWS. Check --ews-url and VPN."
+    return msg

@@ -42,12 +42,15 @@ class Config:
     oauth_authority: str | None = None    # override for ADFS / non-AAD OAuth2 issuers
     token_cache_path: Path = field(default_factory=lambda: DEFAULT_TOKEN_CACHE)
 
+    ntlm_send_cbt: bool = True            # NTLM channel binding (EPA); some TLS-terminating proxies choke on it
+
     # TLS
     verify_ssl: bool = True
 
     # UI / behavior
     page_size: int = DEFAULT_PAGE_SIZE
     demo: bool = False                    # run against fake in-memory data, no network
+    debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
     attachment_dir: Path = field(default_factory=lambda: Path.home() / "Downloads" / "ewstui-attachments")
 
@@ -73,6 +76,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     auth.add_argument("--username", help="Login username for ntlm/basic (defaults to --email)")
     auth.add_argument("--domain", help="NTLM domain, e.g. CORP (only for --auth ntlm/auto fallback)")
+    auth.add_argument(
+        "--ntlm-no-cbt",
+        action="store_true",
+        help="Don't send NTLM channel binding tokens. Try this if NTLM login hangs behind a "
+        "TLS-terminating proxy/load balancer (e.g. F5)",
+    )
     auth.add_argument("--tenant-id", help="Azure AD tenant id (oauth2)")
     auth.add_argument("--client-id", help="Azure AD app registration client id (oauth2)")
     auth.add_argument("--oauth-authority", help="Override OAuth2 authority URL (e.g. for ADFS / hybrid modern auth)")
@@ -81,6 +90,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ui = p.add_argument_group("ui")
     ui.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="Messages fetched per page")
     ui.add_argument("--demo", action="store_true", help="Run with fake in-memory data, no network/EWS calls at all")
+    ui.add_argument(
+        "--debug",
+        action="store_true",
+        help="Log full EWS request/response traffic to ewstui.log and print tracebacks on connection errors "
+        "(the log can contain mail content — delete it afterwards)",
+    )
     ui.add_argument(
         "--priority-file",
         type=Path,
@@ -115,9 +130,11 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         client_id=ns.client_id,
         oauth_authority=ns.oauth_authority,
         token_cache_path=ns.token_cache,
+        ntlm_send_cbt=not ns.ntlm_no_cbt,
         verify_ssl=not ns.no_verify_ssl,
         page_size=ns.page_size,
         demo=ns.demo,
+        debug=ns.debug,
         priority_file=ns.priority_file,
         attachment_dir=ns.attachment_dir,
     )
