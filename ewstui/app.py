@@ -3,15 +3,17 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets import Footer, Header, Tab, Tabs
 
 from .config import Config
-from .ews_client import CalendarClient, MailClient
+from .ews_client import CalendarClient, MailClient, MovedMessage
 from .priority_store import PriorityStore
 from .screens import AddNoteScreen, AttachmentListScreen, ComposeScreen, HelpScreen, NewEventScreen
 from .widgets.calendar_view import CalendarView
@@ -21,6 +23,17 @@ from .widgets.preview import PreviewPane
 from .widgets.priority_view import PriorityView
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class UndoEntry:
+    """A reversible mail action: `moved` is where the message is now,
+    `original_folder_id` is where `u` puts it back.
+    """
+    verb: str  # past tense, for notifications: "deleted", "archived"
+    subject: str
+    original_folder_id: str
+    moved: MovedMessage
 
 
 class EwstuiApp(App):
@@ -73,6 +86,7 @@ class EwstuiApp(App):
         Binding("2", "show_priority", "Priority"),
         Binding("3", "show_calendar", "Calendar"),
         Binding("w", "compose_new", "Compose"),
+        Binding("u", "undo", "Undo"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
     ]
@@ -87,6 +101,9 @@ class EwstuiApp(App):
         self.calendar_range_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         self.calendar_range_days = 7
         self.priority_store = PriorityStore(config.priority_file)
+        # Session-only; most recent last. Not persisted across restarts.
+        self.undo_stack: list[UndoEntry] = []
+
     # -- layout -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
@@ -200,9 +217,19 @@ class EwstuiApp(App):
     def on_message_table_delete_requested(self, event: MessageTable.DeleteRequested) -> None:
         if not self.current_folder_id:
             return
-        self.mail_client.delete_message(self.current_folder_id, event.message_id)
-        self.notify("Message deleted")
-        self.select_folder(self.current_folder_id)  # refresh list
+        folder_id = self.current_folder_id
+        try:
+            subject = self.mail_client.get_message(folder_id, event.message_id).subject
+            moved = self.mail_client.delete_message(folder_id, event.message_id)
+        except Exception as e:  # noqa: BLE001
+            self.notify(f"Delete failed: {e}", severity="error", timeout=10)
+            return
+        if moved is None:
+            self.notify("Message permanently deleted (can't be undone)", severity="warning")
+        else:
+            self.undo_stack.append(UndoEntry("deleted", subject, folder_id, moved))
+            self.notify("Moved to Deleted Items — press u to undo")
+        self.select_folder(folder_id)  # refresh list
 
     def on_message_table_toggle_read_requested(self, event: MessageTable.ToggleReadRequested) -> None:
         if not self.current_folder_id:
@@ -249,13 +276,16 @@ class EwstuiApp(App):
     def on_message_table_archive_requested(self, event: MessageTable.ArchiveRequested) -> None:
         if not self.current_folder_id:
             return
+        folder_id = self.current_folder_id
         try:
-            self.mail_client.archive_message(self.current_folder_id, event.message_id)
+            subject = self.mail_client.get_message(folder_id, event.message_id).subject
+            moved = self.mail_client.archive_message(folder_id, event.message_id)
         except Exception as e:  # noqa: BLE001 - e.g. no Archive folder found
             self.notify(f"Archive failed: {e}", severity="error", timeout=10)
             return
-        self.notify("Message archived")
-        self.select_folder(self.current_folder_id)  # refresh list
+        self.undo_stack.append(UndoEntry("archived", subject, folder_id, moved))
+        self.notify("Message archived — press u to undo")
+        self.select_folder(folder_id)  # refresh list
 
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
         if not self.current_folder_id:
@@ -380,6 +410,28 @@ class EwstuiApp(App):
         else:
             self.load_calendar_range()
             self.query_one("#calendar", CalendarView).focus()
+
+    def action_undo(self) -> None:
+        if not self.undo_stack:
+            self.notify("Nothing to undo")
+            return
+        entry = self.undo_stack.pop()
+        try:
+            restored = self.mail_client.move_message(
+                entry.moved.folder_id, entry.moved.message_id, entry.original_folder_id
+            )
+        except Exception as e:  # noqa: BLE001 - e.g. already purged from Deleted Items
+            self.notify(f"Undo failed: {e}", severity="error", timeout=10)
+            return
+        self.notify(f"Restored {entry.verb} message: {entry.subject}")
+        if self.current_folder_id in (entry.original_folder_id, entry.moved.folder_id):
+            self.select_folder(self.current_folder_id)
+            if self.current_folder_id == entry.original_folder_id:
+                table = self.query_one("#messages", MessageTable)
+                try:
+                    table.move_cursor(row=table.get_row_index(restored.message_id))
+                except RowDoesNotExist:
+                    pass  # older than the loaded page; restored but not on screen
 
     def action_compose_new(self) -> None:
         def _on_result(result: dict | None) -> None:

@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from .ews_client import AttachmentSummary, EventSummary, FolderSummary, MessageDetail, MessageSummary, _unique_path
+from .ews_client import (
+    AttachmentSummary,
+    EventSummary,
+    FolderSummary,
+    MessageDetail,
+    MessageSummary,
+    MovedMessage,
+    _unique_path,
+)
 
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
@@ -25,6 +33,7 @@ class DemoMailClient:
             FolderSummary(id="sent", name="Sent Items", total_count=2, unread_count=0, depth=0),
             FolderSummary(id="drafts", name="Drafts", total_count=1, unread_count=0, depth=0),
             FolderSummary(id="archive", name="Archive", total_count=1, unread_count=0, depth=0),
+            FolderSummary(id="trash", name="Deleted Items", total_count=0, unread_count=0, depth=0),
         ]
         now = datetime.now()
         self._attachments: dict[str, list[tuple[str, str, bytes]]] = {
@@ -112,16 +121,23 @@ class DemoMailClient:
         m = self.get_message(folder_id, message_id)
         m.is_read = read
 
-    def delete_message(self, folder_id: str, message_id: str) -> None:
-        self._messages[folder_id] = [m for m in self._messages.get(folder_id, []) if m.id != message_id]
+    def move_message(self, folder_id: str, message_id: str, dest_folder_id: str) -> MovedMessage:
+        moving = self.get_message(folder_id, message_id)
+        self._messages[folder_id] = [m for m in self._messages[folder_id] if m.id != message_id]
+        dest = self._messages.setdefault(dest_folder_id, [])
+        dest.append(moving)
+        dest.sort(key=lambda m: m.received or datetime.min, reverse=True)
+        return MovedMessage(folder_id=dest_folder_id, message_id=message_id)
 
-    def archive_message(self, folder_id: str, message_id: str) -> None:
-        msgs = self._messages.get(folder_id, [])
-        moving = next((m for m in msgs if m.id == message_id), None)
-        if moving is None:
-            raise KeyError(message_id)
-        self._messages[folder_id] = [m for m in msgs if m.id != message_id]
-        self._messages.setdefault("archive", []).append(moving)
+    def delete_message(self, folder_id: str, message_id: str) -> MovedMessage | None:
+        if folder_id == "trash":
+            self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
+            self._messages["trash"] = [m for m in self._messages["trash"] if m.id != message_id]
+            return None
+        return self.move_message(folder_id, message_id, "trash")
+
+    def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
+        return self.move_message(folder_id, message_id, "archive")
 
     def send_mail(self, to, subject, body, cc=None) -> None:
         pass  # demo: no-op

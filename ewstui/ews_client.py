@@ -57,6 +57,15 @@ class AttachmentSummary:
 
 
 @dataclass
+class MovedMessage:
+    """Where a message ended up after a move. EWS gives a moved item a
+    new id, so this is what's needed to find it again (e.g. to undo).
+    """
+    folder_id: str
+    message_id: str
+
+
+@dataclass
 class EventSummary:
     id: str
     changekey: str
@@ -169,10 +178,28 @@ class MailClient:
         item.is_read = read
         item.save(update_fields=["is_read"])
 
-    def delete_message(self, folder_id: str, message_id: str) -> None:
+    def move_message(self, folder_id: str, message_id: str, dest_folder_id: str) -> MovedMessage:
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        dest = self._folder_by_id(dest_folder_id)
+        item.move(dest)
+        return MovedMessage(folder_id=dest.id, message_id=item.id)
+
+    def delete_message(self, folder_id: str, message_id: str) -> MovedMessage | None:
+        """Move to Deleted Items and return its new location there, so
+        the delete can be undone. Deleting from Deleted Items itself
+        soft-deletes (Recoverable Items, only reachable via Outlook/OWA
+        "Recover deleted items") and returns None: not undoable here.
+        """
         folder = self._folder_by_id(folder_id)
         item = folder.get(id=message_id)
-        item.move_to_trash()
+        trash = self.account.trash
+        if folder.id == trash.id:
+            item.soft_delete()
+            return None
+        # Explicit move rather than item.move_to_trash(): same result,
+        # but move() gives us the item's new id in Deleted Items.
+        item.move(trash)
+        return MovedMessage(folder_id=trash.id, message_id=item.id)
 
     def _find_archive_folder(self):
         # "Archive" is typically just a regular folder under the mailbox
@@ -191,11 +218,12 @@ class MailClient:
             "Create one (or move a message into one manually once) and try again."
         )
 
-    def archive_message(self, folder_id: str, message_id: str) -> None:
+    def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
         folder = self._folder_by_id(folder_id)
         item = folder.get(id=message_id)
         archive_folder = self._find_archive_folder()
         item.move(archive_folder)
+        return MovedMessage(folder_id=archive_folder.id, message_id=item.id)
 
     def list_attachments(self, folder_id: str, message_id: str) -> list[AttachmentSummary]:
         from exchangelib import FileAttachment

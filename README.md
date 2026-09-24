@@ -159,7 +159,16 @@ active one highlighted), `q` quit, `?` help.
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note, `A` archive, `v`
-view/save/open attachments.
+view/save/open attachments, `u` undo.
+
+**Deleting and undo**: `d` moves the message to Exchange's **Deleted
+Items** folder (same as Delete in Outlook) — nothing is purged. `u`
+moves the most recently deleted or archived message back to the folder
+it came from; press it repeatedly to walk back further. The undo
+history lasts for the session only; after a restart, recover from
+Deleted Items by hand. Pressing `d` *inside* Deleted Items soft-deletes
+the message (only recoverable via Outlook/OWA's "Recover deleted
+items") and can't be undone with `u`.
 
 **Calendar**: `n` new event, `d` delete event, `[`/`]` shift the
 visible date range.

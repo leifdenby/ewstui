@@ -33,6 +33,7 @@ MAIL_KEYS = [
     ("P", "add to priority list (no priority, no prompt)"),
     ("p", "add to priority list with a note"),
     ("A", "archive message"),
+    ("u", "undo last delete/archive (repeatable)"),
     ("v", "view/save/open attachments"),
 ]
 
