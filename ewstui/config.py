@@ -23,6 +23,7 @@ class AuthMethod(str, Enum):
 
 DEFAULT_TOKEN_CACHE = Path.home() / ".config" / "ewstui" / "token_cache.bin"
 DEFAULT_PAGE_SIZE = 50
+DEFAULT_REFRESH_MINUTES = 5.0
 
 
 @dataclass
@@ -49,6 +50,7 @@ class Config:
 
     # UI / behavior
     page_size: int = DEFAULT_PAGE_SIZE
+    refresh_interval: float = DEFAULT_REFRESH_MINUTES  # minutes between background mail checks; 0 = off
     demo: bool = False                    # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
@@ -89,6 +91,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     ui = p.add_argument_group("ui")
     ui.add_argument("--page-size", type=int, default=DEFAULT_PAGE_SIZE, help="Messages fetched per page")
+    ui.add_argument(
+        "--refresh-interval",
+        type=float,
+        default=DEFAULT_REFRESH_MINUTES,
+        metavar="MINUTES",
+        help=f"Check for new mail in the background every MINUTES (default {DEFAULT_REFRESH_MINUTES:g}; 0 = off). "
+        "Ctrl+l refreshes on demand",
+    )
     ui.add_argument("--demo", action="store_true", help="Run with fake in-memory data, no network/EWS calls at all")
     ui.add_argument(
         "--debug",
@@ -133,6 +143,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         ntlm_send_cbt=not ns.ntlm_no_cbt,
         verify_ssl=not ns.no_verify_ssl,
         page_size=ns.page_size,
+        refresh_interval=ns.refresh_interval,
         demo=ns.demo,
         debug=ns.debug,
         priority_file=ns.priority_file,

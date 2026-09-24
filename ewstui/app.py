@@ -6,9 +6,11 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets import Footer, Header, Tab, Tabs
 
@@ -92,6 +94,7 @@ class EwstuiApp(App):
         Binding("3", "show_calendar", "Calendar"),
         Binding("w", "compose_new", "Compose"),
         Binding("u", "undo", "Undo"),
+        Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
     ]
@@ -108,6 +111,10 @@ class EwstuiApp(App):
         self.priority_store = PriorityStore(config.priority_file)
         # Session-only; most recent last. Not persisted across restarts.
         self.undo_stack: list[UndoEntry] = []
+        # What's on screen, so a refresh can tell what changed.
+        self._folder_unread: dict[str, int] = {}
+        self._message_snapshot: list[tuple[str, bool]] = []
+        self._last_refresh_failed = False
 
     # -- layout -------------------------------------------------------
 
@@ -134,6 +141,8 @@ class EwstuiApp(App):
     def on_mount(self) -> None:
         self.sub_title = self.config.email or "(demo)"
         self.load_folders()
+        if self.config.refresh_interval > 0:
+            self.set_interval(self.config.refresh_interval * 60, self._background_refresh)
 
     # -- data loading ---------------------------------------------------
 
@@ -147,6 +156,7 @@ class EwstuiApp(App):
             return
         folder_list = self.query_one("#folders", FolderList)
         folder_list.set_folders(folders)
+        self._folder_unread = {f.id: f.unread_count for f in folders}
         # Open the Inbox, not the first row: live mailboxes list "Top of
         # Information Store" first. Fall back to the first folder if the
         # Inbox can't be resolved or isn't in the list.
@@ -168,8 +178,80 @@ class EwstuiApp(App):
             self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
             return
         self.query_one("#messages", MessageTable).set_messages(messages)
+        self._message_snapshot = [(m.id, m.is_read) for m in messages]
         self.query_one("#preview", PreviewPane).clear()
         self.current_message_id = None
+
+    # -- refresh (Ctrl+l, and every --refresh-interval minutes) ------------
+
+    def action_refresh(self) -> None:
+        mode = self.query_one("#modes", Tabs).active
+        if mode == "mode-calendar":
+            self.load_calendar_range()
+        elif mode == "mode-priority":
+            self.load_priority_list()
+        else:
+            self._refresh_mail(manual=True)
+
+    # Not `_auto_refresh`: Textual's DOMNode already uses that attribute.
+    def _background_refresh(self) -> None:
+        self._refresh_mail(manual=False)
+
+    @work(thread=True, exclusive=True, group="refresh")
+    def _refresh_mail(self, manual: bool) -> None:
+        """Fetch in a thread so a slow server never freezes the UI; the
+        result is applied on the UI thread by _apply_refresh.
+        """
+        worker = get_current_worker()
+        folder_id = self.current_folder_id
+        try:
+            folders = self.mail_client.list_folders()
+            messages = self.mail_client.list_messages(folder_id, limit=self.config.page_size) if folder_id else None
+        except Exception as e:  # noqa: BLE001 - surface any EWS error to the user
+            log.warning("refresh failed", exc_info=True)
+            if not worker.is_cancelled:
+                self.call_from_thread(self._refresh_failed, e, manual)
+            return
+        if not worker.is_cancelled:
+            self.call_from_thread(self._apply_refresh, folder_id, folders, messages, manual)
+
+    def _refresh_failed(self, error: Exception, manual: bool) -> None:
+        # Auto-refresh keeps failing while offline; say so once, not every tick.
+        if manual or not self._last_refresh_failed:
+            self.notify(f"Refresh failed: {error}", severity="error", timeout=10)
+        self._last_refresh_failed = True
+
+    def _apply_refresh(self, folder_id, folders, messages, manual: bool) -> None:
+        self._last_refresh_failed = False
+        if self.screen is not self.screen_stack[0]:
+            return  # a modal (compose, help, ...) is open; the next refresh catches up
+
+        gained = [
+            (f.name, f.unread_count - self._folder_unread[f.id])
+            for f in folders
+            if f.id in self._folder_unread and f.unread_count > self._folder_unread[f.id]
+        ]
+        self._folder_unread = {f.id: f.unread_count for f in folders}
+        if gained:
+            self.notify("New mail: " + ", ".join(f"{name} (+{n})" for name, n in gained))
+        elif manual:
+            self.notify("No new mail")
+
+        folder_list = self.query_one("#folders", FolderList)
+        highlighted = folder_list.highlighted_folder_id()
+        folder_list.set_folders(folders)
+        if highlighted:
+            folder_list.highlight_folder(highlighted)
+
+        if messages is None or folder_id != self.current_folder_id:
+            return  # user switched folders while we were fetching
+        snapshot = [(m.id, m.is_read) for m in messages]
+        if snapshot == self._message_snapshot:
+            return
+        table = self.query_one("#messages", MessageTable)
+        # Nothing selected yet (e.g. folder was empty): a normal fill is fine.
+        table.set_messages(messages, keep_cursor_on=table._current_message_id())
+        self._message_snapshot = snapshot
 
     def open_message(self, message_id: str) -> None:
         if not self.current_folder_id:

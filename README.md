@@ -173,7 +173,13 @@ same as mutt/aerc; only an explicit open (`l`/`Enter`) shifts focus.
 (`l` also opens the item under the cursor), `Shift+Tab`/`h` previous
 pane, `Enter`/`l` open, `1`/`2`/`3` switch to mail/priority/calendar
 view (also shown as clickable mode tabs under the header, with the
-active one highlighted), `q` quit, `?` help.
+active one highlighted), `Ctrl+l` refresh, `q` quit, `?` help.
+
+**New mail**: `Ctrl+l` checks for new mail now (in the calendar or
+priority view it reloads that view instead). ewstui also checks in the
+background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it
+off) and shows e.g. "New mail: Inbox (+2)". Fetching happens off the UI
+thread, and the cursor and open message stay where they were.
 
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
+from textual.widgets.data_table import RowDoesNotExist
 
 from ..ews_client import MessageSummary
 
@@ -87,7 +88,22 @@ class MessageTable(DataTable):
         self.cursor_type = "row"
         self.add_columns(" ", "From", "Subject", "Received")
 
-    def set_messages(self, messages: list[MessageSummary]) -> None:
+    def set_messages(self, messages: list[MessageSummary], keep_cursor_on: str | None = None) -> None:
+        """Replace the rows. With `keep_cursor_on`, the cursor stays on
+        that message (if still listed) and no MessageOpened is posted, so
+        a background refresh doesn't refetch/reset the preview.
+        """
+        if keep_cursor_on is None:
+            self._fill(messages)
+            return
+        with self.prevent(DataTable.RowHighlighted):
+            self._fill(messages)
+            try:
+                self.move_cursor(row=self.get_row_index(keep_cursor_on), animate=False)
+            except RowDoesNotExist:
+                pass  # gone (deleted/moved elsewhere); cursor stays at the top
+
+    def _fill(self, messages: list[MessageSummary]) -> None:
         self.clear()
         for m in messages:
             flag = "" if m.is_read else "●"

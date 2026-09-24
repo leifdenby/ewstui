@@ -19,6 +19,7 @@ GLOBAL_KEYS = [
     ("1", "mail view"),
     ("2", "priority list view"),
     ("3", "calendar view"),
+    ("Ctrl+l", "refresh (check for new mail; also automatic, see --refresh-interval)"),
     ("q", "quit"),
     ("?", "toggle this help"),
 ]

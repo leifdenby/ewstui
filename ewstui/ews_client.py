@@ -152,6 +152,9 @@ class MailClient:
             for child in folder.children:
                 walk(child, depth + 1)
 
+        # exchangelib caches the whole folder tree (and its counts) on the
+        # root after the first walk; drop it so every listing is current.
+        self.account.root.clear_cache()
         walk(self.account.root / "Top of Information Store" if False else self.account.msg_folder_root)
         return folders
 
