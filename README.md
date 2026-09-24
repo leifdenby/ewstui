@@ -180,6 +180,10 @@ active one highlighted), `q` quit, `?` help.
 no prompt), `p` add to priority list with a note, `A` archive, `v`
 view/save/open attachments, `u` undo.
 
+**Reading pane** (after `l`/`Enter` moves focus into it): `j`/`k`
+scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
+`Space`) a full page, `g`/`G` top/bottom, `h` back to the list.
+
 **Deleting and undo**: `d` moves the message to Exchange's **Deleted
 Items** folder (same as Delete in Outlook) — nothing is purged. `u`
 moves the most recently deleted or archived message back to the folder

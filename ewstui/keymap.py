@@ -37,6 +37,14 @@ MAIL_KEYS = [
     ("v", "view/save/open attachments"),
 ]
 
+PREVIEW_KEYS = [
+    ("j / k", "scroll down / up one line"),
+    ("Ctrl+d / Ctrl+u", "scroll half a page down / up"),
+    ("Ctrl+f / Ctrl+b", "scroll a page down / up (Space also pages down)"),
+    ("g / G", "top / bottom of the message"),
+    ("h", "back to the message list"),
+]
+
 CALENDAR_KEYS = [
     ("n", "new event"),
     ("d", "delete selected event"),
@@ -61,6 +69,7 @@ COMPOSE_KEYS = [
 HELP_TEXT = "\n".join(
     ["Global", *(f"  {k:<12} {d}" for k, d in GLOBAL_KEYS), ""]
     + ["Mail screen", *(f"  {k:<12} {d}" for k, d in MAIL_KEYS), ""]
+    + ["Reading pane (focused)", *(f"  {k:<16} {d}" for k, d in PREVIEW_KEYS), ""]
     + ["Calendar screen", *(f"  {k:<12} {d}" for k, d in CALENDAR_KEYS), ""]
     + ["Priority screen", *(f"  {k:<12} {d}" for k, d in PRIORITY_KEYS), ""]
     + ["Compose screen", *(f"  {k:<12} {d}" for k, d in COMPOSE_KEYS)]

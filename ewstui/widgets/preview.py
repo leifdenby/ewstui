@@ -13,6 +13,15 @@ class PreviewPane(VerticalScroll):
 
     BINDINGS = [
         Binding("h", "focus_messages", "Focus list", show=False),
+        Binding("j", "scroll_down", "Scroll down", show=False),
+        Binding("k", "scroll_up", "Scroll up", show=False),
+        Binding("g", "scroll_home", "Top", show=False),
+        Binding("G", "scroll_end", "Bottom", show=False),
+        Binding("ctrl+d", "half_page_down", "Half page down", show=False),
+        Binding("ctrl+u", "half_page_up", "Half page up", show=False),
+        Binding("ctrl+f", "page_down", "Page down", show=False),
+        Binding("ctrl+b", "page_up", "Page up", show=False),
+        Binding("space", "page_down", "Page down", show=False),
     ]
 
     class FocusMessagesRequested(Message):
@@ -20,6 +29,12 @@ class PreviewPane(VerticalScroll):
 
     def action_focus_messages(self) -> None:
         self.post_message(self.FocusMessagesRequested())
+
+    def action_half_page_down(self) -> None:
+        self.scroll_relative(y=self.scrollable_content_region.height // 2, animate=False)
+
+    def action_half_page_up(self) -> None:
+        self.scroll_relative(y=-(self.scrollable_content_region.height // 2), animate=False)
 
     def compose(self):
         yield Static(id="preview-body")
