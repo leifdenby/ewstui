@@ -62,7 +62,7 @@ PRIORITY_KEYS = [
 
 COMPOSE_KEYS = [
     ("Tab", "next field"),
-    ("Ctrl+Enter", "send"),
+    ("Ctrl+s / Cmd+Enter", "send (Cmd+Enter needs a terminal that reports Cmd)"),
     ("Esc", "discard and close"),
 ]
 
@@ -72,5 +72,5 @@ HELP_TEXT = "\n".join(
     + ["Reading pane (focused)", *(f"  {k:<16} {d}" for k, d in PREVIEW_KEYS), ""]
     + ["Calendar screen", *(f"  {k:<12} {d}" for k, d in CALENDAR_KEYS), ""]
     + ["Priority screen", *(f"  {k:<12} {d}" for k, d in PRIORITY_KEYS), ""]
-    + ["Compose screen", *(f"  {k:<12} {d}" for k, d in COMPOSE_KEYS)]
+    + ["Compose screen", *(f"  {k:<20} {d}" for k, d in COMPOSE_KEYS)]
 )

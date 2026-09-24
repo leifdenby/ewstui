@@ -200,6 +200,9 @@ visible date range.
 complete, `d` remove, `Enter`/`o` jump to email.
 
 **Compose/new-event modals**: `Ctrl+S` send/save, `Esc` discard.
+In compose, `Cmd+Enter` also sends — if your terminal passes the Cmd
+key through (Ghostty, kitty and WezTerm do; in iTerm2 enable Profiles →
+Keys → "Report keys using CSI u"; Terminal.app can't).
 
 ## Project layout
 

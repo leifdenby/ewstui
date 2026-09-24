@@ -19,6 +19,10 @@ class ComposeScreen(ModalScreen[dict | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "send", "Send"),
+        # Cmd+Enter only arrives in terminals that report the Cmd key
+        # (kitty keyboard protocol: Ghostty, kitty, WezTerm, iTerm2 with
+        # "Report keys using CSI u"); Terminal.app swallows it.
+        Binding("super+enter", "send", "Send", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -47,7 +51,7 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="compose-box"):
-            yield Label("Compose  (Ctrl+S to send, Esc to cancel)")
+            yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to cancel)")
             yield Input(value=self._to, placeholder="To", id="compose-to")
             yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
             yield TextArea(self._body, id="compose-body")

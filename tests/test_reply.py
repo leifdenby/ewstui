@@ -100,6 +100,15 @@ async def test_reply_sends_with_subject_and_recipient(app, mail):
     assert sent["body"].startswith("Sounds good")
 
 
+async def test_cmd_enter_sends(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Via Cmd+Enter")
+        await pilot.press("super+enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen)
+    assert len(mail.sent) == 1 and mail.sent[0]["body"].startswith("Via Cmd+Enter")
+
+
 async def test_failed_send_reopens_compose_with_draft(app, mail, monkeypatch):
     def fail(*a, **kw):
         raise RuntimeError("server said no")
