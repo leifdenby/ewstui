@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header
+from textual.widgets import Footer, Header, Tab, Tabs
 
 from .config import Config
 from .ews_client import CalendarClient, MailClient
@@ -29,6 +29,17 @@ class EwstuiApp(App):
     TITLE = "ewstui"
 
     CSS = """
+    #modes {
+        background: $panel;
+    }
+    #modes Tab {
+        padding: 0 2;
+    }
+    #modes Tab.-active {
+        background: $accent;
+        color: $text;
+        text-style: bold;
+    }
     #main {
         height: 1fr;
     }
@@ -59,8 +70,8 @@ class EwstuiApp(App):
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "show_help", "Help"),
         Binding("1", "show_mail", "Mail"),
-        Binding("2", "show_calendar", "Calendar"),
-        Binding("3", "show_priority", "Priority"),
+        Binding("2", "show_priority", "Priority"),
+        Binding("3", "show_calendar", "Calendar"),
         Binding("w", "compose_new", "Compose"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -76,11 +87,20 @@ class EwstuiApp(App):
         self.calendar_range_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         self.calendar_range_days = 7
         self.priority_store = PriorityStore(config.priority_file)
-
     # -- layout -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        modes = Tabs(
+            Tab("1 Mail", id="mode-mail"),
+            Tab("2 Priority", id="mode-priority"),
+            Tab("3 Calendar", id="mode-calendar"),
+            id="modes",
+        )
+        # Mode bar is click/hotkey driven only; keep it out of the
+        # Tab/Shift+Tab pane cycle.
+        modes.can_focus = False
+        yield modes
         with Horizontal(id="main"):
             yield FolderList(id="folders")
             yield MessageTable(id="messages")
@@ -335,25 +355,31 @@ class EwstuiApp(App):
 
     # -- global actions -----------------------------------------------
 
-    def action_show_calendar(self) -> None:
-        self.query_one("#main").add_class("hidden")
-        self.query_one("#priority").add_class("hidden")
-        self.query_one("#calendar").remove_class("hidden")
-        self.load_calendar_range()
-        self.query_one("#calendar", CalendarView).focus()
-
+    # Hotkeys just move the mode bar; the actual view switch happens in
+    # on_tabs_tab_activated, so clicking a tab and pressing 1/2/3 share
+    # one code path and the highlighted tab can't drift from the view.
     def action_show_mail(self) -> None:
-        self.query_one("#calendar").add_class("hidden")
-        self.query_one("#priority").add_class("hidden")
-        self.query_one("#main").remove_class("hidden")
-        self.query_one("#messages", MessageTable).focus()
+        self.query_one("#modes", Tabs).active = "mode-mail"
 
     def action_show_priority(self) -> None:
-        self.query_one("#main").add_class("hidden")
-        self.query_one("#calendar").add_class("hidden")
-        self.query_one("#priority").remove_class("hidden")
-        self.load_priority_list()
-        self.query_one("#priority", PriorityView).focus()
+        self.query_one("#modes", Tabs).active = "mode-priority"
+
+    def action_show_calendar(self) -> None:
+        self.query_one("#modes", Tabs).active = "mode-calendar"
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        mode = event.tab.id.removeprefix("mode-")
+        views = {"mail": "#main", "priority": "#priority", "calendar": "#calendar"}
+        for name, selector in views.items():
+            self.query_one(selector).set_class(name != mode, "hidden")
+        if mode == "mail":
+            self.query_one("#messages", MessageTable).focus()
+        elif mode == "priority":
+            self.load_priority_list()
+            self.query_one("#priority", PriorityView).focus()
+        else:
+            self.load_calendar_range()
+            self.query_one("#calendar", CalendarView).focus()
 
     def action_compose_new(self) -> None:
         def _on_result(result: dict | None) -> None:

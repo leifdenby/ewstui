@@ -17,8 +17,8 @@ GLOBAL_KEYS = [
     ("Esc", "cancel / close modal"),
     ("/", "search current list"),
     ("1", "mail view"),
-    ("2", "calendar view"),
-    ("3", "priority list view"),
+    ("2", "priority list view"),
+    ("3", "calendar view"),
     ("q", "quit"),
     ("?", "toggle this help"),
 ]

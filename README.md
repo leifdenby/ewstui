@@ -83,7 +83,7 @@ and `ps`). Either set `EWSTUI_PASSWORD` in the environment for a
 scripted/non-interactive run, or just leave it unset — you'll get a
 `getpass` prompt at startup.
 
-## Priority list (`3`)
+## Priority list (`2`)
 
 A local, `todo.txt`-formatted list for triaging mail — separate from
 any Exchange folder, stored only on your machine at
@@ -100,9 +100,9 @@ prompt you for a short note, which gets appended to the entry's text
 way it's an unprioritized todo.txt line (no `(X)` prefix); set its
 priority later from the priority view.
 
-**Work the list**: press `3` to switch to the priority view. It's
-sorted `A` first through `Z`, then unprioritized, then by the date
-added.
+**Work the list**: press `2` (or click the **Priority** tab) to
+switch to the priority view. It's sorted `A` first through `Z`, then
+unprioritized, then by the date added.
 
 - `A`–`Z` on the row under your cursor — reprioritizes just that item.
 - `V` — start a visual selection at the current row (vim visual-line
@@ -152,8 +152,9 @@ same as mutt/aerc; only an explicit open (`l`/`Enter`) shifts focus.
 
 **Global**: `j`/`k` move, `g`/`G` top/bottom, `Tab`/`l` next pane
 (`l` also opens the item under the cursor), `Shift+Tab`/`h` previous
-pane, `Enter`/`l` open, `1`/`2`/`3` switch to mail/calendar/priority
-view, `q` quit, `?` help.
+pane, `Enter`/`l` open, `1`/`2`/`3` switch to mail/priority/calendar
+view (also shown as clickable mode tabs under the header, with the
+active one highlighted), `q` quit, `?` help.
 
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
