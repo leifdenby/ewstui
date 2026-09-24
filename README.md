@@ -97,6 +97,42 @@ OS-level biometric protection needs a signed app with Keychain
 entitlements. The item itself is protected like any login Keychain
 item (encrypted, unlocked while you're logged in).
 
+### Config file and accounts
+
+Instead of repeating the flags, keep them as a named account in
+`~/.config/ewstui/config.toml` (or `$XDG_CONFIG_HOME/ewstui/config.toml`;
+override with `--config PATH`). The easiest way to create one is to
+run with `--account NAME` plus your flags once — they're saved after
+the connection succeeds, and the first account becomes the default:
+
+```bash
+uv run ewstui --account work --email you@corp.example \
+  --ews-url https://mail.corp.example/EWS/Exchange.asmx --ntlm-no-cbt --domain CORP
+uv run ewstui                 # uses default_account from then on
+uv run ewstui --account work  # or pick one by name
+```
+
+```toml
+default_account = "work"
+
+[accounts.work]
+email = "you@corp.example"
+ews_url = "https://mail.corp.example/EWS/Exchange.asmx"
+domain = "CORP"
+ntlm_no_cbt = true
+```
+
+- Precedence: built-in defaults < the account's settings < flags on
+  the command line.
+- With `--account NAME`, any other flags you pass are saved into that
+  account. Without it (default account), flags only apply to that run.
+- Keys are the option names with `_` instead of `-` (`ews_url`,
+  `priority_file`, `refresh_interval`, ...). The password, `--debug`
+  and `--demo` are never stored.
+- On/off flags like `--ntlm-no-cbt` can only be switched on from the
+  command line; edit the file to turn one off. Comments you add to the
+  file are kept when ewstui updates it.
+
 ### Troubleshooting the connection
 
 Before the UI opens, ewstui checks the connection in plain terminal

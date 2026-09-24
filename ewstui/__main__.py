@@ -54,9 +54,25 @@ def main(argv: list[str] | None = None) -> int:
         mail_client = MailClient(account, page_size=cfg.page_size)
         calendar_client = CalendarClient(account)
 
+    # Only now, after a working connection, so typos never get persisted.
+    _save_account_updates(cfg)
     app = EwstuiApp(mail_client, calendar_client, cfg)
     app.run()
     return 0
+
+
+def _save_account_updates(cfg) -> None:
+    from . import config_file
+
+    if not cfg.account or not cfg.pending_account_updates:
+        return
+    try:
+        config_file.save_account(cfg.config_path, cfg.account, cfg.pending_account_updates)
+    except (OSError, config_file.ConfigFileError) as e:
+        print(f"Couldn't save account {cfg.account!r} to {cfg.config_path}: {e}", file=sys.stderr)
+        return
+    keys = ", ".join(cfg.pending_account_updates)
+    print(f"Saved {keys} to account {cfg.account!r} in {cfg.config_path}", file=sys.stderr)
 
 
 def _forget_password(cfg) -> int:

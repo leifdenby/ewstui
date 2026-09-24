@@ -39,6 +39,12 @@ class FakePresence:
 
 
 @pytest.fixture(autouse=True)
+def isolated_config_dir(tmp_path, monkeypatch):
+    """Never read or write the user's real ~/.config/ewstui/config.toml."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+
+@pytest.fixture(autouse=True)
 def memory_keyring(monkeypatch):
     """Never touch the real Keychain or pop a real Touch ID dialog in tests."""
     backend = MemoryKeyring()

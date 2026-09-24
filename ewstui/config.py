@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from . import config_file
 from .priority_store import DEFAULT_PATH as DEFAULT_PRIORITY_PATH
 
 
@@ -59,11 +60,33 @@ class Config:
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
     attachment_dir: Path = field(default_factory=lambda: Path.home() / "Downloads" / "ewstui-attachments")
 
+    # Config file profile (see config_file.py)
+    account: str | None = None            # profile in use, if any
+    config_path: Path | None = None
+    # Explicit CLI args to save into the profile once login succeeds
+    # (only when --account was given explicitly).
+    pending_account_updates: dict = field(default_factory=dict)
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ewstui",
         description="Terminal email + calendar client for Exchange (EWS), vim-style bindings.",
+    )
+
+    prof = p.add_argument_group("config file")
+    prof.add_argument(
+        "--account",
+        metavar="NAME",
+        help="Use the [accounts.NAME] profile from the config file. Any other options given alongside it "
+        "are saved into that profile (created if new) once the connection succeeds. Without --account, "
+        "the file's default_account is used and options only apply to this run",
+    )
+    prof.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help=f"Config file to use (default: {config_file.default_path()})",
     )
 
     conn = p.add_argument_group("connection")
@@ -136,12 +159,50 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(argv: list[str] | None = None) -> Config:
-    ns = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    # Parse storable options with SUPPRESS defaults, so `explicit` holds
+    # only what was actually typed; real defaults are layered in below.
+    # (Not parser.set_defaults(SUPPRESS): argparse would then fill in the
+    # literal "==SUPPRESS==" string as a parser-level default.)
+    builtin = {}
+    for action in parser._actions:  # noqa: SLF001 - no public API for this
+        if action.dest in config_file.STORED_KEYS:
+            builtin[action.dest] = action.default
+            action.default = argparse.SUPPRESS
+    ns = parser.parse_args(argv)
+    explicit = {key: value for key, value in vars(ns).items() if key in config_file.STORED_KEYS}
+
+    config_path = ns.config or config_file.default_path()
+    try:
+        doc = config_file.load(config_path)
+        account = config_file.resolve_account_name(doc, ns.account)
+        profile = config_file.account_settings(doc, account) if account else {}
+    except config_file.ConfigFileError as e:
+        raise SystemExit(f"error: {e}") from e
+    if account and not config_file.has_account(doc, account):
+        if ns.account is None:
+            raise SystemExit(f"error: default_account {account!r} has no [accounts.{account}] in {config_path}")
+        if not explicit:
+            raise SystemExit(
+                f"error: no account {account!r} in {config_path}\n"
+                f"  Create it by passing its settings once, e.g.:\n"
+                f"  ewstui --account {account} --email you@corp.example --ews-url https://.../EWS/Exchange.asmx"
+            )
+
+    for key, value in (builtin | profile | explicit).items():
+        setattr(ns, key, value)
 
     if not ns.demo and not ns.email:
-        raise SystemExit("error: --email is required unless --demo is set")
+        raise SystemExit("error: --email is required unless --demo is set (or set email in a config-file account)")
+    try:
+        auth_method = AuthMethod(ns.auth)
+    except ValueError as e:
+        raise SystemExit(f"error: invalid auth {ns.auth!r} (from {config_path})") from e
 
     return Config(
+        account=account,
+        config_path=config_path,
+        pending_account_updates=explicit if ns.account else {},
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime
@@ -150,7 +211,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         ews_url=ns.ews_url,
         autodiscover=ns.autodiscover,
         domain=ns.domain,
-        auth_method=AuthMethod(ns.auth),
+        auth_method=auth_method,
         tenant_id=ns.tenant_id,
         client_id=ns.client_id,
         oauth_authority=ns.oauth_authority,
