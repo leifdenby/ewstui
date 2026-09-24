@@ -77,6 +77,40 @@ class EventSummary:
     is_all_day: bool
 
 
+# Mail folders don't only hold Messages: Drafts can hold unsent meeting
+# invites (CalendarItem), and other folders contacts, tasks, etc. Those
+# lack sender/is_read/to_recipients, so read fields defensively.
+
+def _email(mailbox) -> str:
+    """Mailbox or Attendee (which wraps a Mailbox) -> address or name."""
+    mailbox = getattr(mailbox, "mailbox", mailbox)
+    return str(getattr(mailbox, "email_address", None) or getattr(mailbox, "name", None) or "")
+
+
+def _sender(item) -> str:
+    # Messages have `sender`; calendar items have `organizer` instead.
+    for attr in ("sender", "author", "organizer"):
+        address = _email(getattr(item, attr, None))
+        if address:
+            return address
+    return "(unknown)"
+
+
+def _is_read(item) -> bool:
+    # Items without a read flag (calendar items, contacts, ...) count as read.
+    return bool(getattr(item, "is_read", True))
+
+
+def _addresses(item, *attrs: str) -> list[str]:
+    """Addresses from the first of `attrs` the item has (e.g. to_recipients
+    for a Message, required_attendees for a CalendarItem).
+    """
+    for attr in attrs:
+        if hasattr(item, attr):
+            return [a for a in (_email(r) for r in (getattr(item, attr) or [])) if a]
+    return []
+
+
 def _unique_path(path: Path) -> Path:
     """If `path` already exists, append " (1)", " (2)", ... before the
     extension until it doesn't — never silently overwrite a previous
@@ -154,10 +188,10 @@ class MailClient:
                     id=item.id,
                     changekey=item.changekey,
                     subject=item.subject or "(no subject)",
-                    sender=str(item.sender.email_address) if item.sender else "(unknown)",
+                    sender=_sender(item),
                     received=item.datetime_received,
-                    is_read=bool(item.is_read),
-                    has_attachments=bool(item.has_attachments),
+                    is_read=_is_read(item),
+                    has_attachments=bool(getattr(item, "has_attachments", False)),
                 )
             )
         return out
@@ -169,13 +203,13 @@ class MailClient:
             id=item.id,
             changekey=item.changekey,
             subject=item.subject or "(no subject)",
-            sender=str(item.sender.email_address) if item.sender else "(unknown)",
+            sender=_sender(item),
             received=item.datetime_received,
-            is_read=bool(item.is_read),
-            has_attachments=bool(item.has_attachments),
-            to=[str(r.email_address) for r in (item.to_recipients or [])],
-            cc=[str(r.email_address) for r in (item.cc_recipients or [])],
-            body_text=item.text_body or "",
+            is_read=_is_read(item),
+            has_attachments=bool(getattr(item, "has_attachments", False)),
+            to=_addresses(item, "to_recipients", "required_attendees"),
+            cc=_addresses(item, "cc_recipients", "optional_attendees"),
+            body_text=getattr(item, "text_body", None) or "",
         )
 
     def mark_read(self, folder_id: str, message_id: str, read: bool = True) -> None:
