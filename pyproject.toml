@@ -1,0 +1,24 @@
+[project]
+name = "ewstui"
+version = "0.1.0"
+description = "A terminal (TUI) email + calendar client for Microsoft Exchange, talking EWS directly"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "exchangelib>=5.0",
+    "textual>=0.60",
+    # Needed for --auth oauth2 / auto (the default)
+    "msal>=1.28",
+]
+
+[project.optional-dependencies]
+# --auth kerberos also needs a system Kerberos install (libkrb5-dev on
+# Debian/Ubuntu, krb5-devel on Fedora/RHEL) plus a valid ticket via `kinit`
+kerberos = ["requests-gssapi>=1.2"]
+
+[project.scripts]
+ewstui = "ewstui.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

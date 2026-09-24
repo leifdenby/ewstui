@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.message import Message
+from textual.widgets import Static
+
+from ..ews_client import EventSummary, MessageDetail
+
+
+class PreviewPane(VerticalScroll):
+    """Right pane: full message or event detail. Read-only, scrollable."""
+
+    BINDINGS = [
+        Binding("h", "focus_messages", "Focus list", show=False),
+    ]
+
+    class FocusMessagesRequested(Message):
+        """h: move keyboard focus back to the message list."""
+
+    def action_focus_messages(self) -> None:
+        self.post_message(self.FocusMessagesRequested())
+
+    def compose(self):
+        yield Static(id="preview-body")
+
+    def show_message(self, msg: MessageDetail) -> None:
+        body = self.query_one("#preview-body", Static)
+        when = msg.received.strftime("%Y-%m-%d %H:%M") if msg.received else "(no date)"
+        header = (
+            f"[b]{msg.subject}[/b]\n"
+            f"From: {msg.sender}\n"
+            f"To: {', '.join(msg.to) or '(none)'}\n"
+            + (f"Cc: {', '.join(msg.cc)}\n" if msg.cc else "")
+            + f"Date: {when}\n"
+            + ("[dim]has attachments[/dim]\n" if msg.has_attachments else "")
+            + "\n" + "-" * 40 + "\n\n"
+        )
+        body.update(header + (msg.body_text or "(empty message)"))
+        self.scroll_home(animate=False)
+
+    def show_event(self, ev: EventSummary) -> None:
+        body = self.query_one("#preview-body", Static)
+        when = (
+            "All day" if ev.is_all_day
+            else f"{ev.start.strftime('%Y-%m-%d %H:%M')} \u2013 {ev.end.strftime('%H:%M')}"
+        )
+        text = (
+            f"[b]{ev.subject}[/b]\n"
+            f"When: {when}\n"
+            f"Organizer: {ev.organizer}\n"
+            + (f"Location: {ev.location}\n" if ev.location else "")
+        )
+        body.update(text)
+        self.scroll_home(animate=False)
+
+    def clear(self) -> None:
+        self.query_one("#preview-body", Static).update("")
