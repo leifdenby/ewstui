@@ -37,6 +37,30 @@ def test_reply_all_passes_subject_and_body(live):
     item.reply_all.assert_called_once_with(subject="Re: Hi", body="thanks")
 
 
+def test_send_mail_uses_exchangelib_message(monkeypatch):
+    from exchangelib import Account
+
+    from ewstui import ews_client
+
+    # autospec Account: calling a method it doesn't have (the old
+    # account.send_mail bug) raises AttributeError here too.
+    account = create_autospec(Account, instance=True)
+    message_cls = create_autospec(Message)
+    monkeypatch.setattr(ews_client, "Message", message_cls)
+
+    MailClient(account).send_mail(to=["a@x.test", "b@y.test"], subject="Hi", body="Hello")
+
+    message_cls.assert_called_once_with(
+        account=account,
+        folder=account.sent,
+        subject="Hi",
+        body="Hello",
+        to_recipients=["a@x.test", "b@y.test"],
+        cc_recipients=None,
+    )
+    message_cls.return_value.send_and_save.assert_called_once_with()
+
+
 def test_split_addresses():
     assert _split_addresses(" a@x.test, b@y.test; c@z.test ,") == ["a@x.test", "b@y.test", "c@z.test"]
 

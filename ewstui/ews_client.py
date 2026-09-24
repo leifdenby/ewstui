@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from exchangelib import Account, EWSDateTime, EWSTimeZone
+from exchangelib import Account, EWSDateTime, EWSTimeZone, Message
 
 
 @dataclass
@@ -305,7 +305,15 @@ class MailClient:
         return dest_path
 
     def send_mail(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> None:
-        self.account.send_mail(subject=subject, body=body, to_recipients=to, cc_recipients=cc or [])
+        msg = Message(
+            account=self.account,
+            folder=self.account.sent,
+            subject=subject,
+            body=body,
+            to_recipients=to,
+            cc_recipients=cc or None,
+        )
+        msg.send_and_save()  # sends and keeps a copy in Sent Items
 
     def reply(
         self,
