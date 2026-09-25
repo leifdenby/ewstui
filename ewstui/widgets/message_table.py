@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
@@ -8,10 +10,16 @@ from textual.widgets.data_table import RowDoesNotExist
 from ..ews_client import MessageSummary
 
 
-def _fmt_when(dt) -> str:
+def _fmt_when(dt, now: datetime | None = None) -> str:
+    """Compact local date + time: 'Thu 25 Sep 14:05', or '25 Sep 2025 14:05'
+    for another year. EWS gives UTC; convert to the machine's timezone.
+    """
     if dt is None:
         return ""
-    return dt.strftime("%Y-%m-%d %H:%M")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()  # system local time
+    now = now or datetime.now()
+    return dt.strftime("%a %d %b %H:%M" if dt.year == now.year else "%d %b %Y %H:%M")
 
 
 class MessageTable(DataTable):
@@ -86,7 +94,9 @@ class MessageTable(DataTable):
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
-        self.add_columns(" ", "From", "Subject", "Received")
+        # Date before From/Subject, so it isn't pushed off the pane by a
+        # long subject.
+        self.add_columns(" ", "Received", "From", "Subject")
 
     def set_messages(self, messages: list[MessageSummary], keep_cursor_on: str | None = None) -> None:
         """Replace the rows. With `keep_cursor_on`, the cursor stays on
@@ -107,7 +117,7 @@ class MessageTable(DataTable):
         self.clear()
         for m in messages:
             flag = "" if m.is_read else "●"
-            self.add_row(flag, m.sender, m.subject, _fmt_when(m.received), key=m.id)
+            self.add_row(flag, _fmt_when(m.received), m.sender, m.subject, key=m.id)
 
     def _current_message_id(self) -> str | None:
         if self.row_count == 0:

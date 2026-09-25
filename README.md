@@ -129,6 +129,9 @@ ntlm_no_cbt = true
 - Keys are the option names with `_` instead of `-` (`ews_url`,
   `priority_file`, `refresh_interval`, ...). The password, `--debug`
   and `--demo` are never stored.
+- `layout = "stacked"` (or `--layout stacked`) puts the message list
+  above the email, both to the right of the folders; the default
+  `"columns"` has all three side by side.
 - On/off flags like `--ntlm-no-cbt` can only be switched on from the
   command line; edit the file to turn one off. Comments you add to the
   file are kept when ewstui updates it.

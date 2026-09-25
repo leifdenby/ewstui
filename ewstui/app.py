@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Container, Horizontal
 from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets import Footer, Header, Tab, Tabs
@@ -74,12 +74,26 @@ class EwstuiApp(App):
         width: 22%;
         border-right: solid $accent;
     }
-    #messages {
-        width: 40%;
+    /* Message list + reading pane, right of the folders. "columns": side
+       by side; "stacked": list on top, email below (config `layout`). */
+    #reading {
+        width: 1fr;
+        layout: horizontal;
+    }
+    #reading.stacked {
+        layout: vertical;
+    }
+    #reading.columns #messages {
+        width: 45%;
         border-right: solid $accent;
+    }
+    #reading.stacked #messages {
+        height: 40%;
+        border-bottom: solid $accent;
     }
     #preview {
         width: 1fr;
+        height: 1fr;
         padding: 0 1;
     }
     #calendar {
@@ -139,8 +153,9 @@ class EwstuiApp(App):
         yield modes
         with Horizontal(id="main"):
             yield FolderList(id="folders")
-            yield MessageTable(id="messages")
-            yield PreviewPane(id="preview")
+            with Container(id="reading", classes=self.config.layout):
+                yield MessageTable(id="messages")
+                yield PreviewPane(id="preview")
         yield CalendarView(id="calendar", classes="hidden")
         yield PriorityView(id="priority", classes="hidden")
         yield Footer()

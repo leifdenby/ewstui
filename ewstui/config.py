@@ -26,6 +26,9 @@ class AuthMethod(str, Enum):
 DEFAULT_TOKEN_CACHE = Path.home() / ".config" / "ewstui" / "token_cache.bin"
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_REFRESH_MINUTES = 5.0
+# Mail view: message list and reading pane side by side, or list above pane.
+LAYOUTS = ("columns", "stacked")
+DEFAULT_LAYOUT = "columns"
 
 
 @dataclass
@@ -56,7 +59,8 @@ class Config:
     # UI / behavior
     page_size: int = DEFAULT_PAGE_SIZE
     refresh_interval: float = DEFAULT_REFRESH_MINUTES  # minutes between background mail checks; 0 = off
-    demo: bool = False                    # run against fake in-memory data, no network
+    layout: str = DEFAULT_LAYOUT          # "columns" or "stacked" (see LAYOUTS)
+    demo: bool = False                   # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
     attachment_dir: Path = field(default_factory=lambda: default_attachment_dir(None, None))
@@ -138,7 +142,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=f"Check for new mail in the background every MINUTES (default {DEFAULT_REFRESH_MINUTES:g}; 0 = off). "
         "Ctrl+l refreshes on demand",
     )
-    ui.add_argument("--demo", action="store_true", help="Run with fake in-memory data, no network/EWS calls at all")
+    ui.add_argument(
+        "--layout",
+        choices=LAYOUTS,
+        default=DEFAULT_LAYOUT,
+        help="Mail view layout: 'columns' puts the message list and the email side by side; 'stacked' puts "
+        f"the list above the email (default {DEFAULT_LAYOUT}). Save it with --account, or set layout = "
+        "\"stacked\" in the config file",
+    )
+    ui.add_argument("--demo",action="store_true", help="Run with fake in-memory data, no network/EWS calls at all")
     ui.add_argument(
         "--debug",
         action="store_true",
@@ -203,6 +215,8 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         auth_method = AuthMethod(ns.auth)
     except ValueError as e:
         raise SystemExit(f"error: invalid auth {ns.auth!r} (from {config_path})") from e
+    if ns.layout not in LAYOUTS:  # argparse checks the CLI flag, not the config file
+        raise SystemExit(f"error: invalid layout {ns.layout!r} (from {config_path}); choose {' or '.join(LAYOUTS)}")
 
     return Config(
         account=account,
@@ -226,6 +240,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         verify_ssl=not ns.no_verify_ssl,
         page_size=ns.page_size,
         refresh_interval=ns.refresh_interval,
+        layout=ns.layout,
         demo=ns.demo,
         debug=ns.debug,
         priority_file=ns.priority_file,

@@ -88,7 +88,7 @@ async def test_ctrl_l_shows_new_mail_and_keeps_cursor(app, mail, notices):
         await refresh(pilot, app)
 
         assert table.row_count == 5
-        assert table.get_row_at(0)[2] == "Fresh news"
+        assert table.get_row_at(0)[3] == "Fresh news"  # columns: flag, received, from, subject
         assert table._current_message_id() == "m2"
         assert mail.get_calls == calls_before  # no preview refetch
         assert "New mail: Inbox (+1)" in notices

@@ -44,6 +44,7 @@ STORED_KEYS = (
     "token_cache",
     "page_size",
     "refresh_interval",
+    "layout",
     "priority_file",
     "attachment_dir",
 )
