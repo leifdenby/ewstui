@@ -241,8 +241,16 @@ thread, and the cursor and open message stay where they were.
 
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
-no prompt), `p` add to priority list with a note, `A` archive, `v`
-view/save/open attachments, `u` undo.
+no prompt), `p` add to priority list with a note, `A` archive, `m`
+move to folder, `v` view/save/open attachments, `u` undo.
+
+**Moving mail** (`m`): opens a folder picker for the message under the
+cursor. Folders you've moved mail to this session are listed first,
+then the rest in folder-pane order. Start typing to fuzzy-filter by
+folder path (e.g. `prew` finds `Projects/EWS`); `↓`/`↑` or
+`Ctrl+n`/`Ctrl+p` choose, Enter moves, Esc cancels. After a move,
+delete or archive the cursor stays on the next message, and `u` puts
+the message back.
 
 **Reading pane** (after `l`/`Enter` moves focus into it): `j`/`k`
 scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
@@ -250,7 +258,7 @@ scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
 
 **Deleting and undo**: `d` moves the message to Exchange's **Deleted
 Items** folder (same as Delete in Outlook) — nothing is purged. `u`
-moves the most recently deleted or archived message back to the folder
+moves the most recently deleted, archived or moved message back to the folder
 it came from; press it repeatedly to walk back further. The undo
 history lasts for the session only; after a restart, recover from
 Deleted Items by hand. Pressing `d` *inside* Deleted Items soft-deletes

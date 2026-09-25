@@ -35,6 +35,11 @@ class FolderList(ListView):
             unread = f" ({f.unread_count})" if f.unread_count else ""
             self.append(ListItem(Label(f"{indent}{f.name}{unread}"), name=f.id))
 
+    @property
+    def folders(self) -> list[FolderSummary]:
+        """The listed folders, in pane order (read-only copy)."""
+        return list(self._folders)
+
     def highlighted_folder_id(self) -> str | None:
         if self.index is None or not 0 <= self.index < len(self._folders):
             return None

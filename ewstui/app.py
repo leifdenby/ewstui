@@ -24,6 +24,7 @@ from .screens import (
     HelpScreen,
     NewEventScreen,
 )
+from .folder_picker import MoveToFolderScreen
 from .room_grid import FindRoomScreen
 from .widgets.calendar_view import CalendarView
 from .widgets.folder_list import FolderList
@@ -54,6 +55,9 @@ class EwstuiApp(App):
     """Terminal Exchange mail + calendar client, vim-ish bindings."""
 
     TITLE = "ewstui"
+    # Textual's command palette isn't used, and its app-level Ctrl+p would
+    # beat Ctrl+p (previous) in pickers like the move-to-folder screen.
+    ENABLE_COMMAND_PALETTE = False
 
     CSS = """
     #modes {
@@ -132,6 +136,9 @@ class EwstuiApp(App):
         self.priority_store = PriorityStore(config.priority_file)
         # Session-only; most recent last. Not persisted across restarts.
         self.undo_stack: list[UndoEntry] = []
+        # Folders mail was moved to with `m` this session, most recent first
+        # (shown first in the picker).
+        self._recent_move_targets: list[str] = []
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
@@ -379,7 +386,7 @@ class EwstuiApp(App):
         else:
             self.undo_stack.append(UndoEntry("deleted", subject, folder_id, moved))
             self.notify("Moved to Deleted Items — press u to undo")
-        self.select_folder(folder_id)  # refresh list
+        self._refresh_keeping_row(folder_id)
 
     def on_message_table_toggle_read_requested(self, event: MessageTable.ToggleReadRequested) -> None:
         if not self.current_folder_id:
@@ -435,7 +442,44 @@ class EwstuiApp(App):
             return
         self.undo_stack.append(UndoEntry("archived", subject, folder_id, moved))
         self.notify("Message archived — press u to undo")
-        self.select_folder(folder_id)  # refresh list
+        self._refresh_keeping_row(folder_id)
+
+    def on_message_table_move_requested(self, event: MessageTable.MoveRequested) -> None:
+        if not self.current_folder_id:
+            return
+        folder_id = self.current_folder_id
+        try:
+            subject = self.mail_client.get_message(folder_id, event.message_id).subject
+        except Exception as e:  # noqa: BLE001
+            self.notify(f"Couldn't load the message: {e}", severity="error", timeout=10)
+            return
+        folders = self.query_one("#folders", FolderList).folders
+
+        def _move(dest_id: str | None) -> None:
+            if dest_id is None:
+                return
+            dest_name = next((f.name for f in folders if f.id == dest_id), "folder")
+            try:
+                moved = self.mail_client.move_message(folder_id, event.message_id, dest_id)
+            except Exception as e:  # noqa: BLE001 - surface any EWS error
+                self.notify(f"Move failed: {e}", severity="error", timeout=10)
+                return
+            self.undo_stack.append(UndoEntry("moved", subject, folder_id, moved))
+            self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
+            self.notify(f"Moved to {dest_name} — press u to undo")
+            self._refresh_keeping_row(folder_id)
+
+        self.push_screen(MoveToFolderScreen(subject, folders, self._recent_move_targets, folder_id), _move)
+
+    def _refresh_keeping_row(self, folder_id: str) -> None:
+        """Reload the folder after a message left it (delete/archive/move),
+        leaving the cursor on the same row — i.e. the next message — rather
+        than jumping back to the top."""
+        table = self.query_one("#messages", MessageTable)
+        row = table.cursor_row
+        self.select_folder(folder_id)
+        if table.row_count:
+            table.move_cursor(row=min(row, table.row_count - 1))
 
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
         if not self.current_folder_id:

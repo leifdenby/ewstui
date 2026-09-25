@@ -39,6 +39,7 @@ class MessageTable(DataTable):
         Binding("P", "add_to_priority", "Add to priority (unset)"),
         Binding("p", "add_to_priority_with_note", "Add to priority + note"),
         Binding("A", "archive", "Archive"),
+        Binding("m", "move", "Move"),
         Binding("v", "view_attachments", "Attachments"),
     ]
 
@@ -80,6 +81,11 @@ class MessageTable(DataTable):
             super().__init__()
 
     class ArchiveRequested(Message):
+        def __init__(self, message_id: str) -> None:
+            self.message_id = message_id
+            super().__init__()
+
+    class MoveRequested(Message):
         def __init__(self, message_id: str) -> None:
             self.message_id = message_id
             super().__init__()
@@ -175,6 +181,11 @@ class MessageTable(DataTable):
         mid = self._current_message_id()
         if mid:
             self.post_message(self.ArchiveRequested(mid))
+
+    def action_move(self) -> None:
+        mid = self._current_message_id()
+        if mid:
+            self.post_message(self.MoveRequested(mid))
 
     def action_view_attachments(self) -> None:
         mid = self._current_message_id()
