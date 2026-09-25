@@ -742,7 +742,11 @@ class EwstuiApp(App):
         mode = status.mode.lower()
         focused = self.focused
         pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)
-        status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, ""))
+        # The message list opens into the pane to its right ("l") in the
+        # columns layout, but into the one below it ("o") when stacked; the
+        # folder pane always opens rightwards.
+        open_key = "o" if pane == "messages" and self.config.layout == "stacked" else "l"
+        status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, "")).format(open=open_key)
         if mode == "mail":
             table = self.query_one("#messages", MessageTable)
             messages = table._messages

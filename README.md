@@ -228,17 +228,18 @@ scroll it, `Esc`/`?`/`q` close it). The status bar at the bottom always
 shows the current mode and the most useful keys for the pane you're in.
 Summary:
 
-Pane navigation follows vim's `h`/`l` (plus `Tab`/`Shift+Tab`):
-`l`/`Enter` opens whatever's under the cursor *and* moves focus into
-the next pane over (folders → messages → preview); `h` moves focus
-back one pane without changing what's displayed. Plain `j`/`k`
+`o` (or `Enter`) opens whatever's under the cursor *and* moves focus
+into the next pane over (folders → messages → reading pane). `l`/`h`
+do the same moving right/left, vim-style (as do `Tab`/`Shift+Tab`);
+`h` moves back without changing what's displayed. The status bar
+suggests whichever fits the layout: `l` when the email is to the right
+of the list (`columns`), `o` when it's below it (`stacked`). Plain `j`/`k`
 navigation never steals focus on its own — moving through the message
-list with `j`/`k` just live-updates the preview pane's content, the
-same as mutt/aerc; only an explicit open (`l`/`Enter`) shifts focus.
+list with `j`/`k` just live-updates the reading pane, the same as
+mutt/aerc; only an explicit open shifts focus there.
 
-**Global**: `j`/`k` move, `g`/`G` top/bottom, `Tab`/`l` next pane
-(`l` also opens the item under the cursor), `Shift+Tab`/`h` previous
-pane, `Enter`/`l` open, `1`/`2`/`3` switch to mail/priority/calendar
+**Global**: `j`/`k` move, `g`/`G` top/bottom, `o`/`Enter` open, `l`/`h`
+(or `Tab`/`Shift+Tab`) next/previous pane, `1`/`2`/`3` switch to mail/priority/calendar
 view (also shown as clickable mode tabs under the header, with the
 active one highlighted), `Ctrl+l` refresh, `q` quit, `?` help.
 
@@ -273,7 +274,7 @@ folder path (e.g. `prew` finds `Projects/EWS`); `↓`/`↑` or
 delete or archive the cursor stays on the next message, and `u` puts
 the message back.
 
-**Reading pane** (after `l`/`Enter` moves focus into it): `j`/`k`
+**Reading pane** (after `o`/`Enter` moves focus into it): `j`/`k`
 scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
 `Space`) a full page, `g`/`G` top/bottom, `h` back to the list.
 

@@ -16,6 +16,7 @@ class FolderList(ListView):
         Binding("g", "cursor_first", "Top", show=False),
         Binding("G", "cursor_last", "Bottom", show=False),
         Binding("l", "select_cursor", "Open", show=False),
+        Binding("o", "select_cursor", "Open", show=False),
     ]
 
     class FolderSelected(Message):

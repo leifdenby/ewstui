@@ -32,6 +32,7 @@ class MessageTable(DataTable):
         Binding("g", "cursor_top", "Top", show=False),
         Binding("G", "cursor_bottom", "Bottom", show=False),
         Binding("l", "select_cursor", "Open", show=False),
+        Binding("o", "select_cursor", "Open", show=False),
         Binding("h", "focus_folders", "Focus folders", show=False),
         Binding("r", "reply", "Reply"),
         Binding("R", "reply_all", "Reply all"),

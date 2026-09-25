@@ -9,8 +9,8 @@ dispatch table.
 GLOBAL_KEYS = [
     ("j / k", "move down / up"),
     ("g / G", "top / bottom"),
-    ("l / Enter", "open (moves into the next pane)"),
-    ("h", "back to the previous pane"),
+    ("o / Enter", "open folder / email"),
+    ("l / h", "next / previous pane"),
     ("Tab / S-Tab", "next / previous pane"),
     ("1 / 2 / 3", "mail / priority / calendar"),
     ("Ctrl+l", "refresh (also every few minutes)"),
@@ -81,8 +81,10 @@ HELP_COLUMNS = [
 
 # Short hints for the status bar, by what has focus.
 STATUS_HINTS = {
-    "folders": "j/k folder · l open · Tab next pane · ? help",
-    "messages": "l open · r reply · d delete · m move · A archive · t threads · ? help",
+    # {open}: the key the layout makes natural — "l" (right) when the next
+    # pane is to the right, "o" when the email sits below the list.
+    "folders": "j/k folder · {open} open · Tab next pane · ? help",
+    "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",
