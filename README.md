@@ -176,7 +176,20 @@ any Exchange folder, stored only on your machine at
 `~/.local/share/ewstui/priorities.todo.txt` (override with
 `--priority-file`). It's a plain [todo.txt](https://github.com/todotxt/todo.txt)
 file, so any other todo.txt tool can read/edit it too (they'll just
-see the `+email`, `id:`, `folder:`, `from:` fields as ordinary text).
+see the `@email` context and the `id:`, `folder:`, `from:` fields as
+ordinary text).
+
+You can point it at the todo.txt you already use (`priority_file =
+"..."` in your account): ewstui only shows and changes the entries it
+created — those in the `@email` context (entries with the older
+`+email` project tag still count, and switch to `@email` when ewstui
+next changes them) — and leaves every other line exactly as it was. It re-reads the file whenever it changed on disk, so edits
+from another todo.txt app or a sync client show up straight away and
+are never overwritten. The priority view's header names the file in
+use, and the "Added to priority list" notice shows its full path.
+
+**In the mail list**, the **P** column shows each email's priority
+letter, `-` if it's on the list without one yet.
 
 **Add a message to the list**: from the mail view, select a message
 and press `P` (shift+p) to add it straight to the priority list with
@@ -200,11 +213,13 @@ unprioritized, then by the date added.
 - `d` — remove from the priority list (does not touch the actual
   email or Exchange).
 - `Enter`/`o` — jump straight to that email (switches to the mail
-  view, opens its folder, opens the message).
+  view, opens its folder, puts the cursor on it and shows it in the
+  reading pane). If it has since been moved or deleted — Exchange gives
+  a moved email a new id — you get a notice instead.
 
 Example line this produces:
 ```
-(A) 2026-09-24 Q3 budget review +email id:AAMkAD...== folder:inbox from:finance@corp.example
+(A) 2026-09-24 Q3 budget review @email id:AAMkAD...== folder:inbox from:finance@corp.example
 ```
 
 ## Attachments (`v`)

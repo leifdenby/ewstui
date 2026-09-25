@@ -136,7 +136,7 @@ def rows(app) -> list[tuple]:
 
 
 def subjects(app) -> list[str]:
-    return [r[3] for r in rows(app)]
+    return [r[4] for r in rows(app)]  # columns: flag, P, received, from, subject
 
 
 def ids(app) -> list[str]:
@@ -159,7 +159,7 @@ async def test_thread_is_a_tree_placed_by_its_newest_message(tmp_path):
             "Re: EWS bridge project (sent)",  # your reply, from Sent Items, starts the tree here
             "└─ ",  # their answer: same topic, so just the tree guide (mutt-style)
         ]
-        assert rows(app)[2][0] == "●" and rows(app)[2][2] == "colleague@corp.example"
+        assert rows(app)[2][0] == "●" and rows(app)[2][3] == "colleague@corp.example"
 
 
 async def test_every_row_is_a_message_you_can_open_and_act_on(tmp_path):

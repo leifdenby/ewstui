@@ -100,9 +100,9 @@ async def test_date_column_comes_before_from_and_subject(tmp_path, layout):
         await pilot.pause()
         table = app.query_one("#messages", MessageTable)
         columns = list(table.columns.values())
-        assert [str(c.label) for c in columns] == [" ", "Received", "From", "Subject"]
+        assert [str(c.label) for c in columns] == [" ", "P", "Received", "From", "Subject"]
         m1 = app.mail_client.get_message("inbox", "m1")
-        assert table.get_row_at(0)[1] == _fmt_when(m1.received)
+        assert table.get_row_at(0)[2] == _fmt_when(m1.received)
         # flag + date fit inside the pane even at this narrow size, so the
         # date is never scrolled out of view
-        assert columns[0].get_render_width(table) + columns[1].get_render_width(table) <= table.region.width
+        assert sum(c.get_render_width(table) for c in columns[:3]) <= table.region.width

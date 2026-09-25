@@ -114,12 +114,31 @@ class MessageTable(DataTable):
         super().__init__(*args, **kwargs)
         self.threaded = threaded
         self._messages, self._by_id = [], {}
+        self._priorities: dict[str, str | None] = {}  # message id -> priority letter (see _pri_cell)
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
         # Date before From/Subject, so it isn't pushed off the pane by a
-        # long subject.
-        self.add_columns(" ", "Received", "From", "Subject")
+        # long subject. P: the email's priority on the todo.txt list.
+        self.add_column(" ")
+        self.add_column("P", key="pri")
+        self.add_columns("Received", "From", "Subject")
+
+    def _pri_cell(self, message_id: str) -> str:
+        """'A'-'Z' for a prioritized email, '-' for one on the list without
+        a priority yet, blank if it isn't on the list."""
+        if message_id not in self._priorities:
+            return ""
+        return self._priorities[message_id] or "-"
+
+    def set_priorities(self, priorities: dict[str, str | None]) -> None:
+        """Update just the P column (cursor and everything else untouched)."""
+        self._priorities = dict(priorities)
+        for m in self._messages:
+            try:
+                self.update_cell(m.id, "pri", self._pri_cell(m.id))
+            except (RowDoesNotExist, KeyError):
+                pass
 
     # -- rows: flat list, or threads ------------------------------------------
     #
@@ -139,15 +158,20 @@ class MessageTable(DataTable):
         messages: list[MessageSummary],
         keep_cursor_on: str | None = None,
         home_folder_id: str | None = None,
+        priorities: dict[str, str | None] | None = None,
     ) -> None:
         """Replace the rows. With `keep_cursor_on` (a message id), the
         cursor stays on that message (if still listed) and no MessageOpened
         is posted, so a background refresh doesn't refetch/reset the preview.
+        `priorities` (message id -> letter) fills the P column; omitted, the
+        last one given is kept.
         """
         self._messages = list(messages)
         self._by_id = {m.id: m for m in messages}
         if home_folder_id is not None:
             self._home_folder = home_folder_id
+        if priorities is not None:
+            self._priorities = dict(priorities)
         self._render(keep_cursor_on)
 
     def _render(self, keep: str | None = None) -> None:
@@ -180,7 +204,7 @@ class MessageTable(DataTable):
             # A thread reply from Sent Items; after a bare tree guide ("└─ ")
             # no extra space is needed.
             subject += "(sent)" if subject.endswith(" ") else " (sent)"
-        self.add_row(flag, _fmt_when(m.received), m.sender, subject, key=m.id)
+        self.add_row(flag, self._pri_cell(m.id), _fmt_when(m.received), m.sender, subject, key=m.id)
 
     def _current_message_id(self) -> str | None:
         if self.row_count == 0:

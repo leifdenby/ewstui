@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -155,6 +156,9 @@ class EwstuiApp(App):
         # Folders mail was moved to with `m` this session, most recent first
         # (shown first in the picker).
         self._recent_move_targets: list[str] = []
+        # (folder id, message id) to show once the Mail tab is active; see
+        # on_priority_view_entry_opened.
+        self._pending_jump: tuple[str, str] | None = None
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
@@ -230,7 +234,7 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
             return
-        self.query_one("#messages", MessageTable).set_messages(messages, home_folder_id=folder_id)
+        self.query_one("#messages", MessageTable).set_messages(messages, home_folder_id=folder_id, priorities=self.priority_store.priorities_by_message())
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
         self._update_status()
         self.query_one("#preview", PreviewPane).clear()
@@ -278,7 +282,7 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
             return
-        table.set_messages(messages, keep_cursor_on=event.message_id, home_folder_id=self.current_folder_id)
+        table.set_messages(messages, keep_cursor_on=event.message_id, home_folder_id=self.current_folder_id, priorities=self.priority_store.priorities_by_message())
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
         self._update_status()
         self.notify("Thread view on (t to switch off)" if event.threaded else "Thread view off (t to switch on)")
@@ -351,7 +355,7 @@ class EwstuiApp(App):
             return
         table = self.query_one("#messages", MessageTable)
         # Nothing selected yet (e.g. folder was empty): a normal fill is fine.
-        table.set_messages(messages, keep_cursor_on=table._current_message_id(), home_folder_id=folder_id)
+        table.set_messages(messages, keep_cursor_on=table._current_message_id(), home_folder_id=folder_id, priorities=self.priority_store.priorities_by_message())
         self._message_snapshot = snapshot
         self._update_status()
 
@@ -387,7 +391,7 @@ class EwstuiApp(App):
             self.notify(f"Failed to load message: {error}", severity="error", timeout=10)
 
     def load_priority_list(self) -> None:
-        self.query_one("#priority", PriorityView).set_entries(self.priority_store.list_entries())
+        self.query_one("#priority", PriorityView).set_entries(self.priority_store.list_entries(email_only=True))
         self._update_status()
 
     def load_calendar_range(self) -> None:
@@ -503,7 +507,8 @@ class EwstuiApp(App):
             sender=detail.sender,
             priority=None,
         )
-        self.notify("Added to priority list (no priority set)")
+        self.notify(f"Added to priority list, no priority set ({self._priority_path()})")
+        self._priorities_changed()
 
     def on_message_table_add_to_priority_with_note_requested(
         self, event: MessageTable.AddToPriorityWithNoteRequested
@@ -524,7 +529,8 @@ class EwstuiApp(App):
                 priority=None,
                 note=note,
             )
-            self.notify("Added to priority list with note")
+            self.notify(f"Added to priority list with note ({self._priority_path()})")
+            self._priorities_changed()
 
         self.push_screen(AddNoteScreen(label=f"Note for: {detail.subject}"), _on_result)
 
@@ -617,28 +623,78 @@ class EwstuiApp(App):
 
     # -- priority pane events ---------------------------------------------
 
+    def _priority_path(self) -> str:
+        """The todo.txt in use, ~-shortened, so it's clear which file changes."""
+        path = self.config.priority_file
+        try:
+            return "~/" + str(path.relative_to(Path.home()))
+        except ValueError:
+            return str(path)
+
+    def _priority_file_changed(self) -> None:
+        """A key no longer matched: the file changed on disk under us."""
+        self.notify(f"{self.config.priority_file.name} changed on disk — reloaded, nothing was changed", severity="warning")
+        self.load_priority_list()
+
+    def _priorities_changed(self) -> None:
+        self.load_priority_list()
+        self.query_one("#messages", MessageTable).set_priorities(self.priority_store.priorities_by_message())
+
     def on_priority_view_priority_changed(self, event: PriorityView.PriorityChanged) -> None:
-        self.priority_store.set_priority_many(event.entry_keys, event.priority)
+        if not self.priority_store.set_priority_many(event.entry_keys, event.priority):
+            self._priority_file_changed()
+            return
         n = len(event.entry_keys)
         self.notify(f"Set {n} item{'s' if n != 1 else ''} to ({event.priority})")
-        self.load_priority_list()
+        self._priorities_changed()
 
     def on_priority_view_complete_toggled(self, event: PriorityView.CompleteToggled) -> None:
-        self.priority_store.toggle_complete(event.entry_key)
-        self.load_priority_list()
+        if not self.priority_store.toggle_complete(event.entry_key):
+            self._priority_file_changed()
+            return
+        self._priorities_changed()
 
     def on_priority_view_remove_requested(self, event: PriorityView.RemoveRequested) -> None:
-        self.priority_store.remove(event.entry_key)
+        if not self.priority_store.remove(event.entry_key):
+            self._priority_file_changed()
+            return
         self.notify("Removed from priority list")
-        self.load_priority_list()
+        self._priorities_changed()
 
     def on_priority_view_entry_opened(self, event: PriorityView.EntryOpened) -> None:
         entry = next((e for e in self.priority_store.list_entries(include_completed=True) if e.key == event.entry_key), None)
-        if entry is None or not entry.message_id or not entry.folder_id:
+        if entry is None:
             return
+        if not entry.message_id or not entry.folder_id:
+            self.notify("This item isn't linked to an email", severity="warning")
+            return
+        # The tab switch is asynchronous and its handler focuses the message
+        # list, so do the jump from there (on_tabs_tab_activated), after it.
+        self._pending_jump = (entry.folder_id, entry.message_id)
         self.action_show_mail()
-        self.select_folder(entry.folder_id)
-        self.open_message(entry.message_id)
+
+    def _jump_to_message(self, folder_id: str, message_id: str) -> None:
+        """Show a message in the mail view as if navigated to by hand:
+        folder highlighted and loaded, cursor on the message (which loads the
+        reading pane), focus in the reading pane."""
+        folder_list = self.query_one("#folders", FolderList)
+        folders = {f.id: f.name for f in folder_list.folders}
+        if folder_id not in folders:
+            self.notify("That email's folder no longer exists", severity="warning")
+            return
+        folder_list.highlight_folder(folder_id)
+        self.select_folder(folder_id)
+        table = self.query_one("#messages", MessageTable)
+        try:
+            row = table.get_row_index(message_id)
+        except RowDoesNotExist:
+            # Moved or deleted since it was prioritised (EWS gives moved
+            # messages a new id), or older than the loaded page.
+            self.notify(f"That email is no longer in {folders[folder_id]} (moved or deleted?)", severity="warning")
+            table.focus()
+            return
+        table.move_cursor(row=row)
+        self.query_one("#preview", PreviewPane).focus()
 
     # -- calendar pane events ---------------------------------------------
 
@@ -782,8 +838,14 @@ class EwstuiApp(App):
             top.items = tuple(items)
             status.info = f"{len(messages)} messages"
         elif mode == "priority":
-            n = len(self.priority_store.list_entries())
-            top.items = (("Priority list", "normal"), (f"{n} items", "dim"))
+            n = len(self.priority_store.list_entries(email_only=True))
+            # Name the file, so it's obvious which todo.txt ewstui writes (the
+            # full path is in the add/remove notices; it'd crowd the header).
+            top.items = (
+                ("Priority list", "normal"),
+                (self.config.priority_file.name, "dim"),
+                (f"{n} items", "dim"),
+            )
             status.info = f"{n} items"
         else:
             end = self.calendar_range_start + timedelta(days=self.calendar_range_days - 1)
@@ -798,6 +860,10 @@ class EwstuiApp(App):
         self._set_mode_status(mode)
         if mode == "mail":
             self.query_one("#messages", MessageTable).focus()
+            if self._pending_jump is not None:  # from the priority view (Enter/o)
+                folder_id, message_id = self._pending_jump
+                self._pending_jump = None
+                self._jump_to_message(folder_id, message_id)
         elif mode == "priority":
             self.load_priority_list()
             self.query_one("#priority", PriorityView).focus()

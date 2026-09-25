@@ -82,7 +82,8 @@ async def test_header_follows_the_mode(tmp_path):
         assert "Calendar  •  " in top(app)
         await pilot.press("2")
         await pilot.pause()
-        assert "Priority list  •  0 items" in top(app)
+        text = top(app)
+        assert "Priority list  •  " in text and "p.todo.txt" in text and "•  0 items" in text
 
 
 async def test_header_truncates_on_a_narrow_terminal(tmp_path):
