@@ -66,6 +66,40 @@ class MovedMessage:
 
 
 @dataclass
+class Room:
+    """A bookable meeting room: a display name and its mailbox address."""
+    name: str
+    email: str
+
+
+@dataclass
+class RoomAvailability:
+    room: Room
+    free: bool
+    busy: list[tuple[datetime, datetime, str]] = field(default_factory=list)  # (start, end, busy_type)
+    error: str | None = None  # e.g. unknown address; the room is then neither free nor busy
+
+
+# Free/busy states that block a booking. "Free" doesn't; "NoData" means
+# the server has no information, which we don't treat as busy either.
+BLOCKING_BUSY_TYPES = {"Busy", "Tentative", "OOF", "WorkingElsewhere"}
+
+
+def availability_from_view(room: Room, view, start: datetime, end: datetime) -> RoomAvailability:
+    """Turn one exchangelib FreeBusyView (or the exception EWS returned
+    for that mailbox) into a RoomAvailability for [start, end).
+    """
+    if isinstance(view, Exception):
+        return RoomAvailability(room=room, free=False, error=f"{type(view).__name__}: {view}")
+    busy = [
+        (ev.start, ev.end, ev.busy_type)
+        for ev in (view.calendar_events or [])
+        if ev.busy_type in BLOCKING_BUSY_TYPES and ev.start < end and ev.end > start
+    ]
+    return RoomAvailability(room=room, free=not busy, busy=busy)
+
+
+@dataclass
 class EventSummary:
     id: str
     changekey: str
@@ -381,8 +415,40 @@ class CalendarClient:
             )
         return out
 
-    def create_event(self, subject: str, start: datetime, end: datetime, location: str = "", body: str = "") -> None:
-        from exchangelib import CalendarItem
+    def room_availability(self, rooms: list[Room], start: datetime, end: datetime) -> list[RoomAvailability]:
+        """Free/busy for every room over [start, end), in one EWS
+        GetUserAvailability call. Needs no access to the rooms' calendars.
+        """
+        if not rooms:
+            return []
+        start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
+        end_ews = EWSDateTime.from_datetime(end).astimezone(self.tz)
+        views = self.account.protocol.get_free_busy_info(
+            accounts=[(room.email, "Room", False) for room in rooms],
+            start=start_ews,
+            end=end_ews,
+            requested_view="Detailed",
+        )
+        # EWS answers in request order, with an exception in place of a
+        # view for a mailbox it couldn't look up.
+        return [availability_from_view(room, view, start_ews, end_ews) for room, view in zip(rooms, views)]
+
+    def create_event(
+        self,
+        subject: str,
+        start: datetime,
+        end: datetime,
+        location: str = "",
+        body: str = "",
+        resources: list[str] | None = None,
+    ) -> None:
+        """With `resources` (room addresses), the rooms are invited as
+        resource attendees and invitations are sent, which is what
+        actually books them (the room's booking assistant accepts or
+        declines). Without, it's a plain appointment in your calendar.
+        """
+        from exchangelib import Attendee, CalendarItem, Mailbox
+        from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
 
         item = CalendarItem(
             account=self.account,
@@ -393,7 +459,13 @@ class CalendarClient:
             location=location,
             body=body,
         )
-        item.save()
+        if resources:
+            item.resources = [
+                Attendee(mailbox=Mailbox(email_address=email), response_type="Unknown") for email in resources
+            ]
+            item.save(send_meeting_invitations=SEND_TO_ALL_AND_SAVE_COPY)
+        else:
+            item.save()
 
     def delete_event(self, event_id: str) -> None:
         item = self.account.calendar.get(id=event_id)

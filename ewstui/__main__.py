@@ -24,10 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if cfg.demo:
-        from .demo_backend import DemoCalendarClient, DemoMailClient
+        from .demo_backend import DEMO_ROOMS, DemoCalendarClient, DemoMailClient
 
         mail_client = DemoMailClient(page_size=cfg.page_size)
         calendar_client = DemoCalendarClient()
+        cfg.rooms = cfg.rooms or list(DEMO_ROOMS)  # so "find a room" (f) has something to show
     else:
         from . import auth
         from .ews_client import CalendarClient, MailClient

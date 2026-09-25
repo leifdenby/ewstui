@@ -17,6 +17,7 @@ class CalendarView(DataTable):
         Binding("G", "cursor_bottom", "Bottom", show=False),
         Binding("l", "select_cursor", "Open", show=False),
         Binding("n", "new_event", "New event"),
+        Binding("f", "find_room", "Find room"),
         Binding("d", "delete_event", "Delete"),
         Binding("[", "prev_range", "Earlier", show=False),
         Binding("]", "next_range", "Later", show=False),
@@ -29,6 +30,9 @@ class CalendarView(DataTable):
 
     class NewEventRequested(Message):
         pass
+
+    class FindRoomRequested(Message):
+        """f: check which meeting rooms are free, then book one."""
 
     class DeleteEventRequested(Message):
         def __init__(self, event_id: str) -> None:
@@ -75,6 +79,9 @@ class CalendarView(DataTable):
 
     def action_new_event(self) -> None:
         self.post_message(self.NewEventRequested())
+
+    def action_find_room(self) -> None:
+        self.post_message(self.FindRoomRequested())
 
     def action_delete_event(self) -> None:
         eid = self._current_event_id()

@@ -48,6 +48,7 @@ PREVIEW_KEYS = [
 
 CALENDAR_KEYS = [
     ("n", "new event"),
+    ("f", "find a free meeting room (then book it)"),
     ("d", "delete selected event"),
     ("[ / ]", "previous / next day"),
 ]

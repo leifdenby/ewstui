@@ -16,7 +16,14 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore
-from .screens import AddNoteScreen, AttachmentListScreen, ComposeScreen, HelpScreen, NewEventScreen
+from .screens import (
+    AddNoteScreen,
+    AttachmentListScreen,
+    ComposeScreen,
+    FindRoomScreen,
+    HelpScreen,
+    NewEventScreen,
+)
 from .widgets.calendar_view import CalendarView
 from .widgets.folder_list import FolderList
 from .widgets.message_table import MessageTable
@@ -495,6 +502,46 @@ class EwstuiApp(App):
             self.load_calendar_range()
 
         self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
+
+    def on_calendar_view_find_room_requested(self, event: CalendarView.FindRoomRequested) -> None:
+        if not self.config.rooms:
+            where = f"[accounts.{self.config.account or 'NAME'}.rooms] in {self.config.config_path or 'the config file'}"
+            self.notify(f"No meeting rooms configured — add them under {where}", severity="warning", timeout=10)
+            return
+
+        def _book(result: dict | None) -> None:
+            if result is None:
+                return
+            room = result["room"]
+
+            def _on_event(details: dict | None) -> None:
+                if details is None:
+                    return
+                try:
+                    self.calendar_client.create_event(
+                        subject=details["subject"],
+                        start=details["start"],
+                        end=details["end"],
+                        location=details["location"],
+                        resources=[room.email],
+                    )
+                except Exception as e:  # noqa: BLE001 - surface any EWS error
+                    self.notify(f"Booking failed: {e}", severity="error", timeout=10)
+                    return
+                self.notify(f"Invite sent to {room.name} — it will accept or decline shortly")
+                self.load_calendar_range()
+
+            self.push_screen(
+                NewEventScreen(
+                    default_start=result["start"],
+                    default_end=result["end"],
+                    default_location=room.name,
+                    title=f"New event in {room.name}",
+                ),
+                _on_event,
+            )
+
+        self.push_screen(FindRoomScreen(self.config.rooms, self.calendar_client.room_availability), _book)
 
     def on_calendar_view_delete_event_requested(self, event: CalendarView.DeleteEventRequested) -> None:
         self.calendar_client.delete_event(event.event_id)

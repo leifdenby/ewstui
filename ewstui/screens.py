@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static, TextArea
+from textual.widgets import Button, Input, Label, ListItem, ListView, Static, TextArea
+from textual.worker import get_current_worker
 
 from . import keymap
 
@@ -90,19 +92,31 @@ class NewEventScreen(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, default_start: datetime | None = None) -> None:
+    def __init__(
+        self,
+        default_start: datetime | None = None,
+        default_end: datetime | None = None,
+        default_location: str = "",
+        title: str = "New event",
+    ) -> None:
         super().__init__()
         start = default_start or datetime.now()
+        end = default_end or start + timedelta(hours=1)
         self._start_default = start.strftime("%Y-%m-%d %H:%M")
-        self._end_default = (start + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+        self._end_default = end.strftime("%Y-%m-%d %H:%M")
+        self._location_default = default_location
+        self._title = title
 
     def compose(self) -> ComposeResult:
         with Vertical(id="event-box"):
-            yield Label("New event  (Ctrl+S to save, Esc to cancel)")
+            yield Label(f"{self._title}  (Ctrl+S to save, Esc to cancel)", markup=False)
             yield Input(placeholder="Subject", id="event-subject")
             yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="event-start")
             yield Input(value=self._end_default, placeholder="End (YYYY-MM-DD HH:MM)", id="event-end")
-            yield Input(placeholder="Location", id="event-location")
+            yield Input(value=self._location_default, placeholder="Location", id="event-location")
+
+    def on_mount(self) -> None:
+        self.query_one("#event-subject", Input).focus()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -123,6 +137,151 @@ class NewEventScreen(ModalScreen[dict | None]):
                 "location": self.query_one("#event-location", Input).value,
             }
         )
+
+
+class _RoomList(ListView):
+    # j/k live on the list (not the screen) so they don't swallow
+    # typing in the time/duration inputs.
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+    ]
+
+
+def _next_half_hour(now: datetime) -> datetime:
+    base = now.replace(second=0, microsecond=0)
+    return base + timedelta(minutes=30 - base.minute % 30)
+
+
+class FindRoomScreen(ModalScreen[dict | None]):
+    """Check which configured rooms are free for a time slot. Enter on a
+    free room dismisses with {"room", "start", "end"}; Esc with None.
+
+    `check(rooms, start, end) -> list[RoomAvailability]` does the EWS
+    call; it runs in a thread so a slow server doesn't freeze the UI.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "check", "Check"),
+    ]
+
+    DEFAULT_CSS = """
+    FindRoomScreen {
+        align: center middle;
+    }
+    #room-box {
+        width: 70%;
+        height: auto;
+        max-height: 85%;
+        border: round $accent;
+        padding: 1 2;
+        background: $surface;
+    }
+    #room-box Input {
+        margin-bottom: 1;
+    }
+    #room-results {
+        height: auto;
+        max-height: 20;
+    }
+    """
+
+    def __init__(self, rooms: list, check, now: datetime | None = None) -> None:
+        super().__init__()
+        self._rooms = rooms
+        self._check = check
+        self._start_default = _next_half_hour(now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+        self._results: list = []
+        self._slot: tuple[datetime, datetime] | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="room-box"):
+            yield Label("Find a free room  (Enter to check, then Enter on a free room to book; Esc to cancel)")
+            yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="room-start")
+            yield Input(value="60", placeholder="Duration (minutes)", id="room-duration")
+            yield Label("", id="room-status")
+            yield _RoomList(id="room-results")
+
+    def on_mount(self) -> None:
+        self.query_one("#room-start", Input).focus()
+
+    def _parse_slot(self) -> tuple[datetime, datetime] | None:
+        try:
+            start = datetime.strptime(self.query_one("#room-start", Input).value.strip(), "%Y-%m-%d %H:%M")
+            minutes = int(self.query_one("#room-duration", Input).value.strip())
+        except ValueError:
+            return None
+        if minutes <= 0:
+            return None
+        return start, start + timedelta(minutes=minutes)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_check()
+
+    def action_check(self) -> None:
+        slot = self._parse_slot()
+        if slot is None:
+            self._set_status("Start must be YYYY-MM-DD HH:MM and duration a positive number of minutes")
+            self.app.bell()
+            return
+        self._slot = slot
+        self._set_status(f"Checking {len(self._rooms)} room{'s' if len(self._rooms) != 1 else ''} …")
+        self.query_one("#room-results", ListView).clear()
+        self._run_check(slot)
+
+    @work(thread=True, exclusive=True, group="room-check")
+    def _run_check(self, slot: tuple[datetime, datetime]) -> None:
+        worker = get_current_worker()
+        try:
+            results = self._check(self._rooms, *slot)
+        except Exception as e:  # noqa: BLE001 - show any EWS error in the screen
+            if not worker.is_cancelled:
+                self.app.call_from_thread(self._set_status, f"Check failed: {e}")
+            return
+        if not worker.is_cancelled:
+            self.app.call_from_thread(self._show_results, slot, results)
+
+    def _set_status(self, text: str) -> None:
+        self.query_one("#room-status", Label).update(text)
+
+    def _show_results(self, slot: tuple[datetime, datetime], results: list) -> None:
+        if slot != self._slot:
+            return  # a newer check was started meanwhile
+        self._results = results
+        start, end = slot
+        free = sum(r.free for r in results)
+        self._set_status(f"{start:%a %d %b %H:%M}–{end:%H:%M}: {free} of {len(results)} free")
+        results_list = self.query_one("#room-results", ListView)
+        for r in results:
+            results_list.append(ListItem(Label(_room_line(r), markup=False)))
+        if results:
+            results_list.index = next((i for i, r in enumerate(results) if r.free), 0)
+            results_list.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        index = self.query_one("#room-results", ListView).index
+        if index is None or not self._results or self._slot is None:
+            return
+        result = self._results[index]
+        if not result.free:
+            self.app.bell()
+            return
+        start, end = self._slot
+        self.dismiss({"room": result.room, "start": start, "end": end})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def _room_line(result) -> str:
+    if result.error:
+        return f"?  {result.room.name}  — couldn't check: {result.error}"
+    if result.free:
+        return f"✓  {result.room.name}  — free"
+    first_start, first_end, _ = result.busy[0]
+    more = f" (+{len(result.busy) - 1} more)" if len(result.busy) > 1 else ""
+    return f"✗  {result.room.name}  — busy {first_start:%H:%M}–{first_end:%H:%M}{more}"
 
 
 class PickPriorityScreen(ModalScreen[str | None]):

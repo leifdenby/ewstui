@@ -23,6 +23,8 @@ from pathlib import Path
 import tomlkit
 from tomlkit import TOMLDocument
 
+from .ews_client import Room
+
 # CLI options that can be stored in a profile (argparse dest names).
 # Never: password (Keychain/env/prompt only), debug, demo,
 # forget_password, account, config.
@@ -46,6 +48,9 @@ STORED_KEYS = (
     "attachment_dir",
 )
 PATH_KEYS = {"token_cache", "priority_file", "attachment_dir"}
+# Profile keys that aren't CLI options: only ever set by editing the file,
+# and read separately (see account_rooms).
+FILE_ONLY_KEYS = ("rooms",)
 
 
 class ConfigFileError(ValueError):
@@ -78,16 +83,40 @@ def account_settings(doc: TOMLDocument, name: str) -> dict:
     table = doc.get("accounts", {}).get(name)
     if table is None:
         return {}
-    unknown = set(table) - set(STORED_KEYS)
+    unknown = set(table) - set(STORED_KEYS) - set(FILE_ONLY_KEYS)
     if unknown:
         raise ConfigFileError(
             f"Unknown setting(s) in [accounts.{name}]: {', '.join(sorted(unknown))}. "
-            f"Allowed: {', '.join(STORED_KEYS)}"
+            f"Allowed: {', '.join(STORED_KEYS + FILE_ONLY_KEYS)}"
         )
     out = {}
     for key, value in table.unwrap().items():
+        if key in FILE_ONLY_KEYS:
+            continue
         out[key] = Path(value).expanduser() if key in PATH_KEYS else value
     return out
+
+
+def account_rooms(doc: TOMLDocument, name: str) -> list[Room]:
+    """Meeting rooms for the account, in file order. Either
+
+        [accounts.NAME.rooms]
+        "Room 4B (8 pers)" = "room-4b@corp.example"
+
+    or a plain list of addresses: rooms = ["room-4b@corp.example", ...].
+    """
+    table = doc.get("accounts", {}).get(name)
+    if table is None or "rooms" not in table:
+        return []
+    rooms = table["rooms"].unwrap()
+    if isinstance(rooms, dict) and all(isinstance(v, str) for v in rooms.values()):
+        return [Room(name=display, email=email) for display, email in rooms.items()]
+    if isinstance(rooms, list) and all(isinstance(v, str) for v in rooms):
+        return [Room(name=email, email=email) for email in rooms]
+    raise ConfigFileError(
+        f"[accounts.{name}] rooms must be a table of \"Room name\" = \"address\" "
+        "or a list of addresses"
+    )
 
 
 def has_account(doc: TOMLDocument, name: str) -> bool:

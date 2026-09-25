@@ -254,8 +254,24 @@ Deleted Items by hand. Pressing `d` *inside* Deleted Items soft-deletes
 the message (only recoverable via Outlook/OWA's "Recover deleted
 items") and can't be undone with `u`.
 
-**Calendar**: `n` new event, `d` delete event, `[`/`]` shift the
-visible date range.
+**Calendar**: `n` new event, `f` find a free meeting room, `d` delete
+event, `[`/`]` shift the visible date range.
+
+**Finding a room** (`f` in the Calendar tab): enter a start time and
+duration, and ewstui asks Exchange for the free/busy of every room in
+your account's config (one EWS GetUserAvailability call — no access to
+the rooms' calendars needed). Enter on a free room opens a new event
+prefilled with that slot and room; saving it invites the room as a
+resource, and the room's booking assistant accepts or declines it
+(check your calendar/inbox for its reply). List the rooms in the config
+file, by name or as plain addresses:
+
+```toml
+[accounts.work.rooms]
+"G-5222 Havgus (8 pers)" = "room-g5222@corp.example"
+"Stormen"                = "room-stormen@corp.example"
+# or: rooms = ["room-g5222@corp.example", "room-stormen@corp.example"]
+```
 
 **Priority list**: `A`-`Z` set priority, `V` visual-select, `x` toggle
 complete, `d` remove, `Enter`/`o` jump to email.

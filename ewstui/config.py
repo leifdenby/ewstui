@@ -67,6 +67,8 @@ class Config:
     # Explicit CLI args to save into the profile once login succeeds
     # (only when --account was given explicitly).
     pending_account_updates: dict = field(default_factory=dict)
+    # Meeting rooms for "find a room" (config file only, see config_file.account_rooms)
+    rooms: list = field(default_factory=list)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -179,6 +181,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         doc = config_file.load(config_path)
         account = config_file.resolve_account_name(doc, ns.account)
         profile = config_file.account_settings(doc, account) if account else {}
+        rooms = config_file.account_rooms(doc, account) if account else []
     except config_file.ConfigFileError as e:
         raise SystemExit(f"error: {e}") from e
     if account and not config_file.has_account(doc, account):
@@ -205,6 +208,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         account=account,
         config_path=config_path,
         pending_account_updates=explicit if ns.account else {},
+        rooms=rooms,
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime

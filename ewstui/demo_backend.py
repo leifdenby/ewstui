@@ -14,9 +14,18 @@ from .ews_client import (
     FolderSummary,
     MessageDetail,
     MessageSummary,
+    BLOCKING_BUSY_TYPES,
     MovedMessage,
+    Room,
+    RoomAvailability,
     _unique_path,
 )
+
+DEMO_ROOMS = [
+    Room("Room 4B (8 pers)", "room-4b@corp.example"),
+    Room("Aquarium (4 pers)", "aquarium@corp.example"),
+    Room("Boardroom (16 pers)", "boardroom@corp.example"),
+]
 
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
@@ -201,16 +210,34 @@ class DemoCalendarClient:
             ),
         ]
 
+        # Room bookings, keyed by room address: (start, end, busy_type).
+        # Room 4B is taken during the 1:1 above.
+        self.room_bookings: dict[str, list[tuple[datetime, datetime, str]]] = {
+            "room-4b@corp.example": [(today.replace(hour=14), today.replace(hour=14, minute=30), "Busy")],
+        }
+
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         return [e for e in self._events if e.start < end and e.end > start]
 
-    def create_event(self, subject, start, end, location="", body="") -> None:
+    def room_availability(self, rooms: list[Room], start: datetime, end: datetime) -> list[RoomAvailability]:
+        out = []
+        for room in rooms:
+            busy = [
+                (s, e, t) for s, e, t in self.room_bookings.get(room.email, [])
+                if t in BLOCKING_BUSY_TYPES and s < end and e > start
+            ]
+            out.append(RoomAvailability(room=room, free=not busy, busy=busy))
+        return out
+
+    def create_event(self, subject, start, end, location="", body="", resources=None) -> None:
         self._events.append(
             EventSummary(
                 id=f"e{len(self._events) + 1}", changekey="c1", subject=subject,
                 start=start, end=end, location=location, organizer="you@corp.example", is_all_day=False,
             )
         )
+        for email in resources or []:  # the demo rooms always accept
+            self.room_bookings.setdefault(email, []).append((start, end, "Busy"))
 
     def delete_event(self, event_id: str) -> None:
         self._events = [e for e in self._events if e.id != event_id]
