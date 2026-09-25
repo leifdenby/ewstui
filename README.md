@@ -287,6 +287,14 @@ no prompt), `p` add to priority list with a note, `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
 undo.
 
+**Several at once** (`V`): starts a selection at the current email;
+`j`/`k` grow or shrink it (selected rows are highlighted, and the
+status bar shows how many). Then `d` delete, `A` archive, `m` move
+(one folder pick for all), `Space` mark read — or unread, if they're
+all read already — or `P` add them all to the priority list. The work
+runs in the background, one failure doesn't stop the rest, and a single
+`u` undoes the whole batch. `Esc` (or `V` again) cancels the selection.
+
 **Thread view** (`t`, or start in it with `threads = true` in your
 account / `--threads`): messages in the same conversation are shown
 together as a tree, mutt-style — the first message, with each reply

@@ -30,6 +30,8 @@ MAIL_KEYS = [
     ("t", "thread view on / off"),
     ("v", "attachments: save + open"),
     ("p / P", "add to priority list (+ note / none)"),
+    ("V", "select several (j/k), then d/A/m/Space/P"),
+    ("Esc", "cancel the selection"),
 ]
 
 PREVIEW_KEYS = [
@@ -101,4 +103,5 @@ STATUS_HINTS = {
     "preview": "j/k scroll · Ctrl+d/u half page · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",
+    "visual": "{count} selected · j/k extend · d delete · A archive · m move · Space read · P priority · Esc cancel",
 }

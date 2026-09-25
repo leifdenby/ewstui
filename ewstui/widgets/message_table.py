@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from rich.text import Text
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
@@ -44,6 +45,8 @@ class MessageTable(DataTable):
         Binding("m", "move", "Move"),
         Binding("t", "toggle_threads", "Threads"),
         Binding("v", "view_attachments", "Attachments"),
+        Binding("V", "toggle_visual", "Select", show=False),
+        Binding("escape", "cancel_visual", "Cancel selection", show=False),
     ]
 
     class MessageOpened(Message):
@@ -110,11 +113,32 @@ class MessageTable(DataTable):
     class FocusFoldersRequested(Message):
         """h: move keyboard focus back to the folder pane."""
 
+    class BulkRequested(Message):
+        """An action on every message of a visual selection (V): `action`
+        is "delete", "archive", "move", "toggle_read" or "add_to_priority"."""
+
+        def __init__(self, action: str, message_ids: list[str]) -> None:
+            self.action = action
+            self.message_ids = message_ids
+            super().__init__()
+
+    class VisualChanged(Message):
+        """Visual selection started, changed size or ended (status bar)."""
+
+        def __init__(self, count: int) -> None:
+            self.count = count  # selected messages; 0 = not in visual mode
+            super().__init__()
+
     def __init__(self, *args, threaded: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.threaded = threaded
         self._messages, self._by_id = [], {}
         self._priorities: dict[str, str | None] = {}  # message id -> priority letter (see _pri_cell)
+        # Visual selection (V): the row where it started; the selection is
+        # every row between it and the cursor.
+        self._anchor: int | None = None
+        self._row_cells: dict[str, tuple] = {}  # message id -> cells as added (to un-highlight)
+        self._painted: set[str] = set()  # rows currently drawn as selected
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
@@ -135,6 +159,10 @@ class MessageTable(DataTable):
         """Update just the P column (cursor and everything else untouched)."""
         self._priorities = dict(priorities)
         for m in self._messages:
+            if m.id in self._row_cells:
+                cells = list(self._row_cells[m.id])
+                cells[1] = self._pri_cell(m.id)
+                self._row_cells[m.id] = tuple(cells)
             try:
                 self.update_cell(m.id, "pri", self._pri_cell(m.id))
             except (RowDoesNotExist, KeyError):
@@ -187,6 +215,10 @@ class MessageTable(DataTable):
 
     def _fill(self) -> None:
         self.clear()
+        self._row_cells, self._painted = {}, set()
+        if self._anchor is not None:  # the rows changed under the selection: drop it
+            self._anchor = None
+            self.post_message(self.VisualChanged(0))
         if not self.threaded:
             for m in self._messages:
                 self._add_message_row(m, m.subject)
@@ -204,7 +236,65 @@ class MessageTable(DataTable):
             # A thread reply from Sent Items; after a bare tree guide ("└─ ")
             # no extra space is needed.
             subject += "(sent)" if subject.endswith(" ") else " (sent)"
-        self.add_row(flag, self._pri_cell(m.id), _fmt_when(m.received), m.sender, subject, key=m.id)
+        cells = (flag, self._pri_cell(m.id), _fmt_when(m.received), m.sender, subject)
+        self._row_cells[m.id] = cells
+        self.add_row(*cells, key=m.id)
+
+    # -- visual selection (V) ---------------------------------------------------
+
+    @property
+    def in_visual_mode(self) -> bool:
+        return self._anchor is not None
+
+    def selected_ids(self) -> list[str]:
+        """Message ids of the selected rows, top to bottom (empty if not in
+        visual mode)."""
+        if self._anchor is None or not self.row_count:
+            return []
+        lo, hi = sorted((self._anchor, self.cursor_row))
+        return [self.coordinate_to_cell_key((row, 0)).row_key.value for row in range(lo, min(hi, self.row_count - 1) + 1)]
+
+    def action_toggle_visual(self) -> None:
+        if self._anchor is None and self.row_count:
+            self._anchor = self.cursor_row
+        else:
+            self._anchor = None
+        self._paint()
+
+    def action_cancel_visual(self) -> None:
+        if self._anchor is not None:
+            self._anchor = None
+            self._paint()
+
+    def _paint(self) -> None:
+        """Draw the selected rows highlighted; restore rows that left the
+        selection. Tells the app how many are selected (status bar)."""
+        wanted = set(self.selected_ids())
+        colour = self.app.get_css_variables().get("input-selection-background", "blue")
+        for message_id in wanted ^ self._painted:
+            cells = self._row_cells.get(message_id)
+            if cells is None:
+                continue
+            for column_key, value in zip(list(self.columns), cells):
+                shown = Text(str(value), style=f"bold on {colour}") if message_id in wanted else value
+                try:
+                    self.update_cell(message_id, column_key, shown)
+                except (RowDoesNotExist, KeyError):
+                    pass
+        self._painted = wanted
+        self.post_message(self.VisualChanged(len(wanted)))
+
+    def _bulk(self, action: str) -> bool:
+        """In visual mode: end the selection and ask the app to apply
+        `action` to all of it. False when not selecting (single-row action)."""
+        if self._anchor is None:
+            return False
+        ids = self.selected_ids()
+        self._anchor = None
+        self._paint()
+        if ids:
+            self.post_message(self.BulkRequested(action, ids))
+        return True
 
     def _current_message_id(self) -> str | None:
         if self.row_count == 0:
@@ -247,31 +337,44 @@ class MessageTable(DataTable):
             self.post_message(self.ReplyRequested(mid, reply_all=True))
 
     def action_delete(self) -> None:
+        if self._bulk("delete"):
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.DeleteRequested(mid))
 
     def action_toggle_read(self) -> None:
+        if self._bulk("toggle_read"):
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.ToggleReadRequested(mid))
 
     def action_add_to_priority(self) -> None:
+        if self._bulk("add_to_priority"):
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.AddToPriorityRequested(mid))
 
     def action_add_to_priority_with_note(self) -> None:
+        if self.in_visual_mode:  # one note for many emails doesn't make sense; P adds them all
+            self.app.bell()
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.AddToPriorityWithNoteRequested(mid))
 
     def action_archive(self) -> None:
+        if self._bulk("archive"):
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.ArchiveRequested(mid))
 
     def action_move(self) -> None:
+        if self._bulk("move"):
+            return
         mid = self._current_message_id()
         if mid:
             self.post_message(self.MoveRequested(mid))
@@ -289,3 +392,5 @@ class MessageTable(DataTable):
         # through the list (mutt/aerc-style live preview).
         if event.row_key is not None and event.row_key.value:
             self.post_message(self.MessageOpened(event.row_key.value))
+        if self._anchor is not None:  # j/k grow or shrink the selection
+            self._paint()

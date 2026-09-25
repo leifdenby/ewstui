@@ -154,8 +154,9 @@ class EwstuiApp(App):
         self.calendar_range_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         self.calendar_range_days = 7
         self.priority_store = PriorityStore(config.priority_file)
-        # Session-only; most recent last. Not persisted across restarts.
-        self.undo_stack: list[UndoEntry] = []
+        # Session-only; most recent last. Not persisted across restarts. A
+        # list entry is a visual-selection batch, undone as one.
+        self.undo_stack: list[UndoEntry | list[UndoEntry]] = []
         # Folders mail was moved to with `m` this session, most recent first
         # (shown first in the picker).
         self._recent_move_targets: list[str] = []
@@ -601,15 +602,139 @@ class EwstuiApp(App):
 
         self.push_screen(MoveToFolderScreen(subject, folders, self._recent_move_targets, folder_id), _move)
 
-    def _refresh_keeping_row(self) -> None:
+    def _refresh_keeping_row(self, row: int | None = None) -> None:
         """Reload the current folder after a message left it (delete/
         archive/move), leaving the cursor on the same row — i.e. the next
         message — rather than jumping back to the top."""
         table = self.query_one("#messages", MessageTable)
-        row = table.cursor_row
+        row = table.cursor_row if row is None else row
         self.select_folder(self.current_folder_id)
         if table.row_count:
             table.move_cursor(row=min(row, table.row_count - 1))
+
+    # -- visual selection: one action on many messages --------------------------
+
+    BULK_VERBS = {
+        "delete": ("Deleting", "deleted"),
+        "archive": ("Archiving", "archived"),
+        "move": ("Moving", "moved"),
+        "toggle_read": ("Updating", "updated"),
+        "add_to_priority": ("Adding", "added"),
+    }
+
+    def on_message_table_visual_changed(self, event: MessageTable.VisualChanged) -> None:
+        self._update_status()
+
+    def on_message_table_bulk_requested(self, event: MessageTable.BulkRequested) -> None:
+        table = self.query_one("#messages", MessageTable)
+        # (message id, its folder, subject) — subject from the list, so no fetch per message
+        items = [(mid, self._folder_of(mid), table._by_id[mid].subject) for mid in event.message_ids if mid in table._by_id]
+        if not items:
+            return
+        top_row = table.get_row_index(items[0][0])
+        if event.action == "move":
+            folders = self.query_one("#folders", FolderList).folders
+
+            def _picked(dest_id: str | None) -> None:
+                if dest_id is not None:
+                    self._start_bulk("move", items, top_row, dest_id=dest_id)
+
+            self.push_screen(
+                MoveToFolderScreen(f"{len(items)} messages", folders, self._recent_move_targets, self.current_folder_id),
+                _picked,
+            )
+            return
+        extra = None
+        if event.action == "toggle_read":
+            # Like most mail clients: any unread in the selection -> mark all read.
+            extra = any(not table._by_id[mid].is_read for mid, _, _ in items)
+        self._start_bulk(event.action, items, top_row, extra=extra)
+
+    def _start_bulk(self, action: str, items: list, top_row: int, dest_id: str | None = None, extra=None) -> None:
+        self.notify(f"{self.BULK_VERBS[action][0]} {len(items)} messages…", timeout=3)
+        if action == "move":
+            self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
+        self._bulk_worker(action, items, top_row, dest_id, extra)
+
+    @work(thread=True, group="bulk")
+    def _bulk_worker(self, action: str, items: list, top_row: int, dest_id: str | None, extra) -> None:
+        """One EWS call per message, off the UI thread; results applied by
+        _bulk_done. A failure on one message doesn't stop the rest."""
+        done, errors = [], []
+        for message_id, folder_id, subject in items:
+            try:
+                if action == "delete":
+                    result = self.mail_client.delete_message(folder_id, message_id)
+                elif action == "archive":
+                    result = self.mail_client.archive_message(folder_id, message_id)
+                elif action == "move":
+                    result = self.mail_client.move_message(folder_id, message_id, dest_id)
+                elif action == "toggle_read":
+                    result = self.mail_client.mark_read(folder_id, message_id, read=extra)
+                else:  # add_to_priority: needs sender and Message-ID
+                    result = self.mail_client.get_message(folder_id, message_id)
+            except Exception as e:  # noqa: BLE001 - report, carry on with the rest
+                log.warning("bulk %s failed for one message", action, exc_info=True)
+                errors.append(e)
+                continue
+            done.append((message_id, folder_id, subject, result))
+        self.call_from_thread(self._bulk_done, action, done, errors, top_row, dest_id, extra)
+
+    def _bulk_done(self, action: str, done: list, errors: list, top_row: int, dest_id, extra) -> None:
+        verb = self.BULK_VERBS[action][1]
+        if action in ("delete", "archive", "move"):
+            undo = []
+            for message_id, folder_id, subject, moved in done:
+                if moved is None:  # permanently deleted (was in Deleted Items)
+                    continue
+                undo.append(UndoEntry(verb, subject, folder_id, moved))
+                self.priority_store.relocate(message_id, moved.folder_id, moved.message_id)
+            if undo:
+                self.undo_stack.append(undo)  # one u undoes the whole batch
+            where = ""
+            if action == "move":
+                where = " to " + next((f.name for f in self.query_one("#folders", FolderList).folders if f.id == dest_id), "folder")
+            message = f"{verb.capitalize()} {len(done)} messages{where}"
+            self.notify(message + (" — press u to undo" if undo else ""))
+            self._refresh_keeping_row(top_row)
+        elif action == "toggle_read":
+            self.notify(f"Marked {len(done)} messages as {'read' if extra else 'unread'}")
+            self._refresh_keeping_row(top_row)
+        else:
+            for message_id, folder_id, _subject, detail in done:
+                self.priority_store.add_email(
+                    message_id=message_id,
+                    folder_id=folder_id,
+                    subject=detail.subject,
+                    sender=detail.sender,
+                    priority=None,
+                    internet_id=detail.internet_message_id,
+                )
+            self.notify(f"Added {len(done)} messages to the priority list ({self._priority_path()})")
+            self._priorities_changed()
+        if errors:
+            self.notify(f"{len(errors)} message(s) failed: {errors[0]}", severity="error", timeout=10)
+
+    @work(thread=True, group="bulk")
+    def _undo_batch(self, entries: list) -> None:
+        restored, errors = [], []
+        for entry in entries:
+            try:
+                new = self.mail_client.move_message(entry.moved.folder_id, entry.moved.message_id, entry.original_folder_id)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+                continue
+            restored.append((entry, new))
+        self.call_from_thread(self._undo_batch_done, restored, errors)
+
+    def _undo_batch_done(self, restored: list, errors: list) -> None:
+        for entry, new in restored:
+            self.priority_store.relocate(entry.moved.message_id, new.folder_id, new.message_id)
+        if restored:
+            self.notify(f"Restored {len(restored)} {restored[0][0].verb} messages")
+        if errors:
+            self.notify(f"{len(errors)} message(s) couldn't be restored: {errors[0]}", severity="error", timeout=10)
+        self.select_folder(self.current_folder_id)
 
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
         if not self.current_folder_id:
@@ -878,6 +1003,9 @@ class EwstuiApp(App):
         # folder pane always opens rightwards.
         open_key = "o" if pane == "messages" and self.config.layout == "stacked" else "l"
         status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, "")).format(open=open_key)
+        table = self.query_one("#messages", MessageTable)
+        if mode == "mail" and table.in_visual_mode:
+            status.hints = STATUS_HINTS["visual"].format(count=len(table.selected_ids()))
         if mode == "mail":
             table = self.query_one("#messages", MessageTable)
             messages = table._messages
@@ -930,6 +1058,10 @@ class EwstuiApp(App):
             self.notify("Nothing to undo")
             return
         entry = self.undo_stack.pop()
+        if isinstance(entry, list):  # a whole visual-selection batch
+            self.notify(f"Restoring {len(entry)} messages…", timeout=3)
+            self._undo_batch(entry)
+            return
         try:
             restored = self.mail_client.move_message(
                 entry.moved.folder_id, entry.moved.message_id, entry.original_folder_id
