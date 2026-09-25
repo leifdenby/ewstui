@@ -194,11 +194,16 @@ Example line this produces:
 
 From the mail view, press `v` on a message to list its attachments
 (no-op with a "No attachments" notice if there are none). `j`/`k` to
-move, `Enter`/`l` to pick one — it's saved to `--attachment-dir`
-(default `~/Downloads/ewstui-attachments`) and then opened with the
-system's default handler via `xdg-open`. If `xdg-open` isn't
-installed, or can't find an app for that file type, you still get
+move, `Enter`/`l` to pick one — it's saved and then opened with the
+system's default app (`open` on macOS, the file association on
+Windows, `xdg-open` on Linux). If that isn't possible, you still get
 the saved path in the notification so you can open it yourself.
+
+Where it's saved: `--attachment-dir` (or `attachment_dir` in the
+account's config) if set; otherwise on macOS
+`~/Downloads/Attachments/<account>` — the `--account`/default account
+name, or your email address when no account profile is in use — and
+`~/Downloads/ewstui-attachments` elsewhere.
 Re-downloading the same file never overwrites a previous copy — it's
 suffixed `(1)`, `(2)`, etc.
 

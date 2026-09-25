@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -16,6 +14,7 @@ from textual.widgets import Footer, Header, Tab, Tabs
 
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
+from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore
 from .screens import AddNoteScreen, AttachmentListScreen, ComposeScreen, HelpScreen, NewEventScreen
 from .widgets.calendar_view import CalendarView
@@ -443,17 +442,12 @@ class EwstuiApp(App):
         self.push_screen(AttachmentListScreen(detail.subject, attachments), _on_result)
 
     def _open_with_system_default(self, path) -> None:
-        opener = shutil.which("xdg-open")
-        if opener is None:
-            self.notify(f"Saved to {path} (xdg-open not found — open it manually)", timeout=10)
-            return
         try:
-            subprocess.Popen(
-                [opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
-            )
-            self.notify(f"Saved to {path} and opening it")
-        except OSError as e:
+            open_with_default_app(path)
+        except OpenError as e:
             self.notify(f"Saved to {path}, but couldn't open it automatically: {e}", severity="warning", timeout=10)
+            return
+        self.notify(f"Saved to {path} and opening it")
 
     # -- priority pane events ---------------------------------------------
 

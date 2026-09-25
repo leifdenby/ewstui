@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from . import config_file
+from .opener import default_attachment_dir
 from .priority_store import DEFAULT_PATH as DEFAULT_PRIORITY_PATH
 
 
@@ -58,7 +59,7 @@ class Config:
     demo: bool = False                    # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
-    attachment_dir: Path = field(default_factory=lambda: Path.home() / "Downloads" / "ewstui-attachments")
+    attachment_dir: Path = field(default_factory=lambda: default_attachment_dir(None, None))
 
     # Config file profile (see config_file.py)
     account: str | None = None            # profile in use, if any
@@ -151,8 +152,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--attachment-dir",
         type=Path,
-        default=Path.home() / "Downloads" / "ewstui-attachments",
-        help="Where attachments are saved before being opened (default: ~/Downloads/ewstui-attachments)",
+        default=None,  # resolved per account in config_from_args
+        help="Where attachments are saved before being opened (default on macOS: "
+        "~/Downloads/Attachments/<account, or email if no --account>; elsewhere ~/Downloads/ewstui-attachments)",
     )
 
     return p
@@ -223,5 +225,5 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         demo=ns.demo,
         debug=ns.debug,
         priority_file=ns.priority_file,
-        attachment_dir=ns.attachment_dir,
+        attachment_dir=ns.attachment_dir or default_attachment_dir(account, ns.email),
     )
