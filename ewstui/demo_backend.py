@@ -15,9 +15,12 @@ from .ews_client import (
     MessageDetail,
     MessageSummary,
     BLOCKING_BUSY_TYPES,
+    BusySlot,
     MovedMessage,
     Room,
     RoomAvailability,
+    RoomMatch,
+    RoomsDay,
     _unique_path,
 )
 
@@ -26,6 +29,13 @@ DEMO_ROOMS = [
     Room("Aquarium (4 pers)", "aquarium@corp.example"),
     Room("Boardroom (16 pers)", "boardroom@corp.example"),
 ]
+# What / search can find beyond DEMO_ROOMS: the org's room lists, plus a
+# person the directory search also turns up (as ResolveNames would).
+DEMO_ROOM_LISTS = DEMO_ROOMS + [
+    Room("Havgus (8 pers)", "havgus@corp.example"),
+    Room("Stormvejr (12 pers)", "stormvejr@corp.example"),
+]
+DEMO_PEOPLE = [Room("Havgus Hansen", "hh@corp.example")]
 
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
@@ -210,24 +220,37 @@ class DemoCalendarClient:
             ),
         ]
 
-        # Room bookings, keyed by room address: (start, end, busy_type).
-        # Room 4B is taken during the 1:1 above.
-        self.room_bookings: dict[str, list[tuple[datetime, datetime, str]]] = {
-            "room-4b@corp.example": [(today.replace(hour=14), today.replace(hour=14, minute=30), "Busy")],
+        # Room bookings, keyed by room address. Room 4B is taken during the
+        # 1:1 above; like real Exchange rooms, the subject shown is the
+        # organizer's name.
+        self.room_bookings: dict[str, list[BusySlot]] = {
+            "room-4b@corp.example": [
+                BusySlot(today.replace(hour=14), today.replace(hour=14, minute=30), "Busy", "Boss Person")
+            ],
         }
 
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         return [e for e in self._events if e.start < end and e.end > start]
 
-    def room_availability(self, rooms: list[Room], start: datetime, end: datetime) -> list[RoomAvailability]:
+    def search_rooms(self, query: str) -> list[RoomMatch]:
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+        hits = [RoomMatch(r, "room list") for r in DEMO_ROOM_LISTS if needle in r.name.casefold()]
+        hits += [RoomMatch(r, "directory") for r in DEMO_PEOPLE if needle in r.name.casefold()]
+        return hits
+
+    def rooms_day(self, rooms: list[Room], day) -> RoomsDay:
+        start = datetime.combine(day, datetime.min.time())
+        end = start + timedelta(days=1)
         out = []
         for room in rooms:
             busy = [
-                (s, e, t) for s, e, t in self.room_bookings.get(room.email, [])
-                if t in BLOCKING_BUSY_TYPES and s < end and e > start
+                b for b in self.room_bookings.get(room.email, [])
+                if b.busy_type in BLOCKING_BUSY_TYPES and b.start < end and b.end > start
             ]
             out.append(RoomAvailability(room=room, free=not busy, busy=busy))
-        return out
+        return RoomsDay(day=day, work_hours=None, rooms=out)  # None: UI falls back to 08:00-17:00
 
     def create_event(self, subject, start, end, location="", body="", resources=None) -> None:
         self._events.append(
@@ -237,7 +260,7 @@ class DemoCalendarClient:
             )
         )
         for email in resources or []:  # the demo rooms always accept
-            self.room_bookings.setdefault(email, []).append((start, end, "Busy"))
+            self.room_bookings.setdefault(email, []).append(BusySlot(start, end, "Busy", "Demo User"))
 
     def delete_event(self, event_id: str) -> None:
         self._events = [e for e in self._events if e.id != event_id]

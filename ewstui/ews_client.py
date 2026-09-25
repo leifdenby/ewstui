@@ -13,11 +13,15 @@ backend in `demo_backend.py` can stand in for this module exactly.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from exchangelib import Account, EWSDateTime, EWSTimeZone, Message
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,17 +76,61 @@ class Room:
     email: str
 
 
+class RoomMatch(NamedTuple):
+    """A room search result; `source` is "room list" or "directory" (the
+    latter can also be a person, so the UI shows where it came from)."""
+    room: Room
+    source: str
+
+
+class BusySlot(NamedTuple):
+    start: datetime
+    end: datetime
+    busy_type: str
+    # What the free/busy "Detailed" view says about the booking, if the
+    # room shares details. Exchange rooms by default replace the subject
+    # with the organizer's name (AddOrganizerToSubject/DeleteSubject), so
+    # this is often who booked it; None when the room only shares busy/free.
+    subject: str | None = None
+
+
 @dataclass
 class RoomAvailability:
     room: Room
     free: bool
-    busy: list[tuple[datetime, datetime, str]] = field(default_factory=list)  # (start, end, busy_type)
+    busy: list[BusySlot] = field(default_factory=list)
     error: str | None = None  # e.g. unknown address; the room is then neither free nor busy
 
 
 # Free/busy states that block a booking. "Free" doesn't; "NoData" means
 # the server has no information, which we don't treat as busy either.
 BLOCKING_BUSY_TYPES = {"Busy", "Tentative", "OOF", "WorkingElsewhere"}
+
+
+@dataclass
+class RoomsDay:
+    """All rooms' free/busy for one day. `busy` times are naive local.
+    `work_hours` is your Outlook working day for that weekday, or None
+    if the server didn't say (the UI then uses DEFAULT_WORK_HOURS).
+    """
+    day: date
+    work_hours: tuple[time, time] | None
+    rooms: list[RoomAvailability]
+
+
+DEFAULT_WORK_HOURS = (time(8, 0), time(17, 0))
+
+
+def _working_hours(view, day: date) -> tuple[time, time] | None:
+    """Working hours from a FreeBusyView for `day`'s weekday. Assumes the
+    mailbox's working-hours time zone is the local one (the usual case).
+    """
+    if view is None or isinstance(view, Exception):
+        return None
+    for period in getattr(view, "working_hours", None) or []:
+        if day.isoweekday() in (period.weekdays or []) and period.start and period.end and period.start < period.end:
+            return period.start, period.end
+    return None
 
 
 def availability_from_view(room: Room, view, start: datetime, end: datetime) -> RoomAvailability:
@@ -92,11 +140,20 @@ def availability_from_view(room: Room, view, start: datetime, end: datetime) -> 
     if isinstance(view, Exception):
         return RoomAvailability(room=room, free=False, error=f"{type(view).__name__}: {view}")
     busy = [
-        (ev.start, ev.end, ev.busy_type)
+        BusySlot(ev.start, ev.end, ev.busy_type, _booking_subject(ev.details))
         for ev in (view.calendar_events or [])
         if ev.busy_type in BLOCKING_BUSY_TYPES and ev.start < end and ev.end > start
     ]
     return RoomAvailability(room=room, free=not busy, busy=busy)
+
+
+def _booking_subject(details) -> str | None:
+    """CalendarEventDetails -> text to show, or None if the room shares none."""
+    if details is None:
+        return None
+    if details.is_private:
+        return "private"
+    return (details.subject or "").strip() or None
 
 
 @dataclass
@@ -392,6 +449,44 @@ class CalendarClient:
     def __init__(self, account: Account):
         self.account = account
         self.tz = EWSTimeZone.localzone()
+        self._room_directory: list[Room] | None = None  # all rooms in the org's room lists, fetched once
+
+    def search_rooms(self, query: str) -> list[RoomMatch]:
+        """Rooms matching `query` (case-insensitive, name or address):
+        first from the organisation's room lists (GetRoomLists/GetRooms,
+        if the admins set any up), then a directory name search
+        (ResolveNames), which can also return people.
+        """
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+        matches: dict[str, RoomMatch] = {}
+        for room in self._room_list_rooms():
+            if needle in room.name.casefold() or needle in room.email.casefold():
+                matches.setdefault(room.email.casefold(), RoomMatch(room, "room list"))
+        try:
+            found = list(self.account.protocol.resolve_names(names=[query.strip()], search_scope="ActiveDirectory"))
+        except Exception:  # noqa: BLE001 - no directory hits is not an error for the user
+            log.info("directory search for %r failed", query, exc_info=True)
+            found = []
+        for mailbox in found:
+            email = getattr(mailbox, "email_address", None)  # errors (no results) come back as exceptions
+            if email:
+                room = Room(name=mailbox.name or email, email=email)
+                matches.setdefault(email.casefold(), RoomMatch(room, "directory"))
+        return list(matches.values())
+
+    def _room_list_rooms(self) -> list[Room]:
+        if self._room_directory is None:
+            rooms: list[Room] = []
+            try:
+                for room_list in self.account.protocol.get_roomlists():
+                    for r in self.account.protocol.get_rooms(room_list.email_address):
+                        rooms.append(Room(name=r.name or r.email_address, email=r.email_address))
+            except Exception:  # noqa: BLE001 - many orgs have no room lists; fall back to the directory
+                log.info("room lists unavailable", exc_info=True)
+            self._room_directory = rooms
+        return self._room_directory
 
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
@@ -415,23 +510,33 @@ class CalendarClient:
             )
         return out
 
-    def room_availability(self, rooms: list[Room], start: datetime, end: datetime) -> list[RoomAvailability]:
-        """Free/busy for every room over [start, end), in one EWS
+    def rooms_day(self, rooms: list[Room], day: date) -> RoomsDay:
+        """Free/busy for every room over the whole of `day`, plus your own
+        Outlook working hours for that weekday, in one EWS
         GetUserAvailability call. Needs no access to the rooms' calendars.
         """
-        if not rooms:
-            return []
+        start = datetime.combine(day, time.min)
         start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
-        end_ews = EWSDateTime.from_datetime(end).astimezone(self.tz)
-        views = self.account.protocol.get_free_busy_info(
-            accounts=[(room.email, "Room", False) for room in rooms],
-            start=start_ews,
-            end=end_ews,
-            requested_view="Detailed",
+        end_ews = EWSDateTime.from_datetime(start + timedelta(days=1)).astimezone(self.tz)
+        # Your own mailbox goes first: only for its working hours.
+        views = list(
+            self.account.protocol.get_free_busy_info(
+                accounts=[(self.account.primary_smtp_address, "Required", False)]
+                + [(room.email, "Room", False) for room in rooms],
+                start=start_ews,
+                end=end_ews,
+                requested_view="Detailed",
+            )
         )
+        own, room_views = views[0], views[1:]
         # EWS answers in request order, with an exception in place of a
         # view for a mailbox it couldn't look up.
-        return [availability_from_view(room, view, start_ews, end_ews) for room, view in zip(rooms, views)]
+        results = []
+        for room, view in zip(rooms, room_views):
+            r = availability_from_view(room, view, start_ews, end_ews)
+            r.busy = [b._replace(start=_to_local(b.start, self.tz), end=_to_local(b.end, self.tz)) for b in r.busy]
+            results.append(r)
+        return RoomsDay(day=day, work_hours=_working_hours(own, day), rooms=results)
 
     def create_event(
         self,

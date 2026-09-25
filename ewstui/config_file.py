@@ -119,6 +119,31 @@ def account_rooms(doc: TOMLDocument, name: str) -> list[Room]:
     )
 
 
+def add_room(path: Path, name: str, room: Room) -> bool:
+    """Append `room` to [accounts.NAME] rooms, in whichever of the two
+    shapes the file already uses. False if it's already listed.
+    """
+    doc = load(path)
+    table = doc.get("accounts", {}).get(name)
+    if table is None:
+        raise ConfigFileError(f"no [accounts.{name}] in {path}")
+    rooms = table.get("rooms")
+    if rooms is None:
+        rooms = table["rooms"] = tomlkit.table()
+    if isinstance(rooms, list):
+        if any(str(v).casefold() == room.email.casefold() for v in rooms):
+            return False
+        rooms.append(room.email)
+    else:
+        if any(str(v).casefold() == room.email.casefold() for v in rooms.values()):
+            return False
+        key = room.name if room.name not in rooms else f"{room.name} ({room.email})"
+        rooms[key] = room.email
+    path.write_text(tomlkit.dumps(doc))
+    path.chmod(0o600)
+    return True
+
+
 def has_account(doc: TOMLDocument, name: str) -> bool:
     return name in doc.get("accounts", {})
 

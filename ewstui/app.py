@@ -12,6 +12,7 @@ from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets import Footer, Header, Tab, Tabs
 
+from . import config_file
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
@@ -20,10 +21,10 @@ from .screens import (
     AddNoteScreen,
     AttachmentListScreen,
     ComposeScreen,
-    FindRoomScreen,
     HelpScreen,
     NewEventScreen,
 )
+from .room_grid import FindRoomScreen
 from .widgets.calendar_view import CalendarView
 from .widgets.folder_list import FolderList
 from .widgets.message_table import MessageTable
@@ -503,16 +504,29 @@ class EwstuiApp(App):
 
         self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
 
-    def on_calendar_view_find_room_requested(self, event: CalendarView.FindRoomRequested) -> None:
-        if not self.config.rooms:
-            where = f"[accounts.{self.config.account or 'NAME'}.rooms] in {self.config.config_path or 'the config file'}"
-            self.notify(f"No meeting rooms configured — add them under {where}", severity="warning", timeout=10)
+    def _save_found_room(self, room) -> None:
+        """A room picked with / in the room grid: remember it for next time."""
+        self.config.rooms.append(room)
+        if not (self.config.account and self.config.config_path):
+            self.notify(
+                f"Added {room.name} for this session — start with --account NAME to keep found rooms",
+                severity="warning",
+                timeout=10,
+            )
             return
+        try:
+            config_file.add_room(self.config.config_path, self.config.account, room)
+        except (OSError, config_file.ConfigFileError) as e:
+            self.notify(f"Added {room.name}, but couldn't save it: {e}", severity="warning", timeout=10)
+            return
+        self.notify(f"Added {room.name} to your room list ({self.config.config_path})")
 
+    def on_calendar_view_find_room_requested(self, event: CalendarView.FindRoomRequested) -> None:
         def _book(result: dict | None) -> None:
             if result is None:
                 return
-            room = result["room"]
+            rooms = result["rooms"]  # one room, or several from a visual selection
+            names = ", ".join(r.name for r in rooms)
 
             def _on_event(details: dict | None) -> None:
                 if details is None:
@@ -523,25 +537,34 @@ class EwstuiApp(App):
                         start=details["start"],
                         end=details["end"],
                         location=details["location"],
-                        resources=[room.email],
+                        resources=[r.email for r in rooms],
                     )
                 except Exception as e:  # noqa: BLE001 - surface any EWS error
                     self.notify(f"Booking failed: {e}", severity="error", timeout=10)
                     return
-                self.notify(f"Invite sent to {room.name} — it will accept or decline shortly")
+                them = "it" if len(rooms) == 1 else "each room"
+                self.notify(f"Invite sent to {names} — {them} will accept or decline shortly")
                 self.load_calendar_range()
 
             self.push_screen(
                 NewEventScreen(
                     default_start=result["start"],
                     default_end=result["end"],
-                    default_location=room.name,
-                    title=f"New event in {room.name}",
+                    default_location=names,
+                    title=f"New event in {names}",
                 ),
                 _on_event,
             )
 
-        self.push_screen(FindRoomScreen(self.config.rooms, self.calendar_client.room_availability), _book)
+        self.push_screen(
+            FindRoomScreen(
+                self.config.rooms,
+                self.calendar_client.rooms_day,
+                search=self.calendar_client.search_rooms,
+                on_room_added=self._save_found_room,
+            ),
+            _book,
+        )
 
     def on_calendar_view_delete_event_requested(self, event: CalendarView.DeleteEventRequested) -> None:
         self.calendar_client.delete_event(event.event_id)

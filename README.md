@@ -257,12 +257,21 @@ items") and can't be undone with `u`.
 **Calendar**: `n` new event, `f` find a free meeting room, `d` delete
 event, `[`/`]` shift the visible date range.
 
-**Finding a room** (`f` in the Calendar tab): enter a start time and
-duration, and ewstui asks Exchange for the free/busy of every room in
-your account's config (one EWS GetUserAvailability call — no access to
-the rooms' calendars needed). Enter on a free room opens a new event
-prefilled with that slot and room; saving it invites the room as a
-resource, and the room's booking assistant accepts or declines it
+**Finding a room** (`f` in the Calendar tab): shows one day as a grid —
+a row per room in your account's config, a column per half hour of your
+working day (taken from your Outlook working hours if the server
+provides them, else 08:00–17:00), `███` busy and `·` free. It's one EWS
+GetUserAvailability call per day, with no access to the rooms' calendars
+needed. `[`/`]` go to the previous/next day (`t` back to today), or Tab
+to the date field, type a date and Enter; `j`/`k` pick the room and
+`h`/`l` (or `w`/`b`, `←`/`→`) the time. The status line says whether the
+room is free for the chosen duration from that slot; Enter opens a new
+event prefilled with that slot and room. Or press `v` to start a visual
+selection and move to cover the rooms and times you want: Enter books
+all selected rooms for that span in one invite (it refuses if any
+selected cell is busy, and says which), `v`/`Esc` cancels the
+selection. Saving the event invites the room(s) as resources, and each
+room's booking assistant accepts or declines it
 (check your calendar/inbox for its reply). List the rooms in the config
 file, by name or as plain addresses:
 
@@ -272,6 +281,18 @@ file, by name or as plain addresses:
 "Stormen"                = "room-stormen@corp.example"
 # or: rooms = ["room-g5222@corp.example", "room-stormen@corp.example"]
 ```
+
+Or find them from the grid: press `/`, type part of a room's name and
+Enter. ewstui searches your organisation's room lists (if your admins
+set any up) and the directory; directory hits can also be people, so
+each result says where it came from. Pick one with `j`/`k` and Enter:
+it's added to the grid and saved to the account's `rooms` in the config
+file (needs `--account`/`default_account`; otherwise it's only added
+for this session). With no rooms configured, the grid opens empty so
+you can start with `/`.
+
+The grid caches each day it has loaded, so paging between days is
+instant; press `r` to throw that away and fetch fresh availability.
 
 **Priority list**: `A`-`Z` set priority, `V` visual-select, `x` toggle
 complete, `d` remove, `Enter`/`o` jump to email.
