@@ -14,7 +14,7 @@ backend in `demo_backend.py` can stand in for this module exactly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from exchangelib import Account, EWSDateTime, EWSTimeZone, Message
@@ -109,6 +109,20 @@ def _addresses(item, *attrs: str) -> list[str]:
         if hasattr(item, attr):
             return [a for a in (_email(r) for r in (getattr(item, attr) or [])) if a]
     return []
+
+
+def _to_local(value, tz) -> datetime:
+    """EWS returns timed events as tz-aware EWSDateTime (usually UTC) and
+    all-day events as EWSDate. The UI works in naive local time, so
+    convert both: datetimes to local wall-clock time, dates to midnight.
+    """
+    if isinstance(value, datetime):  # check first: datetime is a subclass of date
+        if value.tzinfo is not None:
+            value = value.astimezone(tz)
+        return datetime.combine(value.date(), value.time())  # plain, naive datetime
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    raise TypeError(f"expected a date or datetime, got {value!r}")
 
 
 def _unique_path(path: Path) -> Path:
@@ -358,8 +372,8 @@ class CalendarClient:
                     id=item.id,
                     changekey=item.changekey,
                     subject=item.subject or "(no subject)",
-                    start=item.start,
-                    end=item.end,
+                    start=_to_local(item.start, self.tz),
+                    end=_to_local(item.end, self.tz),
                     location=item.location or "",
                     organizer=str(item.organizer.email_address) if item.organizer else "",
                     is_all_day=bool(item.is_all_day),
