@@ -39,6 +39,9 @@ from .widgets.priority_view import PriorityView
 
 log = logging.getLogger(__name__)
 
+# How often the open priority view checks todo.txt for outside edits (a stat).
+PRIORITY_WATCH_SECONDS = 1.0
+
 
 def _split_addresses(field: str) -> list[str]:
     """'a@x, b@y; c@z' -> ['a@x', 'b@y', 'c@z'] (the To field is free text)."""
@@ -200,6 +203,7 @@ class EwstuiApp(App):
         self.load_folders()
         if self.config.refresh_interval > 0:
             self.set_interval(self.config.refresh_interval * 60, self._background_refresh)
+        self.set_interval(PRIORITY_WATCH_SECONDS, self._watch_priority_file)
 
     # -- data loading ---------------------------------------------------
 
@@ -395,8 +399,21 @@ class EwstuiApp(App):
             self.notify(f"Failed to load message: {error}", severity="error", timeout=10)
 
     def load_priority_list(self) -> None:
-        self.query_one("#priority", PriorityView).set_entries(self.priority_store.list_entries(email_only=True))
+        view = self.query_one("#priority", PriorityView)
+        current = view.current_entry()
+        view.set_entries(self.priority_store.list_entries(email_only=True))
+        if current is not None:
+            view.select_matching(current)  # keep the cursor on the same item
         self._update_status()
+
+    def _watch_priority_file(self) -> None:
+        """Every PRIORITY_WATCH_SECONDS while the priority view is open:
+        pick up edits made to todo.txt in another application."""
+        if self.query_one(StatusBar).mode != "PRIORITY" or not self.priority_store.changed_on_disk():
+            return
+        if self.query_one("#priority", PriorityView).in_visual_mode:
+            return  # don't cancel a selection in progress; picked up on a later tick
+        self._priorities_changed()  # reload the list, and the mail list's P column
 
     def load_calendar_range(self) -> None:
         start = self.calendar_range_start

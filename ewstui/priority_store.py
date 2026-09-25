@@ -224,8 +224,13 @@ class PriorityStore:
 
     def _refresh(self) -> None:
         """Re-read the file if it changed on disk since we last saw it."""
-        if self._file_stat() != self._stat:
+        if self.changed_on_disk():
             self.load()
+
+    def changed_on_disk(self) -> bool:
+        """Has the file changed (edited elsewhere) since we last read or
+        wrote it? Just a stat — cheap enough to poll every second."""
+        return self._file_stat() != self._stat
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

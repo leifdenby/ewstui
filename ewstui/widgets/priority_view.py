@@ -70,6 +70,27 @@ class PriorityView(DataTable):
         self._visual_anchor = None
         self._redraw()
 
+    def current_entry(self) -> PriorityEntry | None:
+        key = self._current_key()
+        return next((e for e in self._entries if e.key == key), None)
+
+    def select_matching(self, entry: PriorityEntry) -> None:
+        """Put the cursor on the same item after a reload. Keys change when
+        a line is edited, so match on the email (Message-ID, then EWS id),
+        falling back to the description; stay put if it's gone."""
+
+        def same(e: PriorityEntry) -> bool:
+            if entry.internet_id and e.internet_id:
+                return e.internet_id == entry.internet_id
+            if entry.message_id and e.message_id:
+                return e.message_id == entry.message_id
+            return e.description == entry.description
+
+        for row, e in enumerate(self._entries):
+            if same(e):
+                self.move_cursor(row=row)
+                return
+
     def _redraw(self) -> None:
         # Capture cursor position and selection *before* clear(), since
         # DataTable.clear() resets the cursor coordinate as a side effect
