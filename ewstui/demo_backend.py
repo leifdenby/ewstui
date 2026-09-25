@@ -43,6 +43,15 @@ _EWS_THREAD = bytes(range(22))
 _EWS_S1 = _EWS_THREAD + b"\x01" * 5
 _EWS_M2 = _EWS_S1 + b"\x02" * 5
 
+# A demo body with links, for trying U (links in an email).
+_MAINTENANCE = (
+    "Hi all,\n\n"
+    "Email will be unavailable Saturday 02:00-06:00. Details on the status page <https://status.corp.example/maintenance>.\n"
+    "Questions? Join the drop-in call: https://meet.corp.example/j/123456 or write to mailto:it-support@corp.example.\n"
+    "Background reading (see www.corp.example/it/faq).\n\n"
+    "Unsubscribe <https://lists.corp.example/unsubscribe?id=42>\n"
+)
+
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
     "(plus auth flags) to talk to a real Exchange mailbox over EWS.\n\n"
@@ -90,7 +99,7 @@ class DemoMailClient:
                     id="m3", changekey="c3", subject="IT maintenance window this weekend",
                     sender="it-notifications@corp.example", received=now - timedelta(days=1),
                     is_read=True, has_attachments=False,
-                    to=["all-staff@corp.example"], cc=[], body_text=_LOREM,
+                    to=["all-staff@corp.example"], cc=[], body_text=_MAINTENANCE,
                 ),
                 MessageDetail(
                     id="m4", changekey="c4", subject="Lunch Friday?",

@@ -287,6 +287,12 @@ no prompt), `p` add to priority list with a note, `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
 undo.
 
+**Links** (`U`): lists the links in the email shown in the reading
+pane (web and `mailto:` links, with the text just before each so you
+can tell them apart). `j`/`k` and Enter — or just `1`–`9` — open one in
+your default browser; `Esc` cancels. Only `http(s)` and `mailto` links
+are ever opened.
+
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the
 status bar shows how many). Then `d` delete, `A` archive, `m` move

@@ -30,6 +30,7 @@ from .screens import (
     NewEventScreen,
 )
 from .folder_picker import MoveToFolderScreen
+from .links import LinkPickerScreen, extract_links, open_link
 from .room_grid import FindRoomScreen
 from .theme import MUTED_SLATE, THEMES
 from .keymap import STATUS_HINTS
@@ -162,6 +163,7 @@ class EwstuiApp(App):
         Binding("3", "show_calendar", "Calendar"),
         Binding("w", "compose_new", "Compose"),
         Binding("u", "undo", "Undo"),
+        Binding("U", "show_links", "Links", show=False),
         Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -1170,6 +1172,47 @@ class EwstuiApp(App):
             )
 
         self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent")
+
+    # -- links in the current email (U) ----------------------------------------
+
+    def action_show_links(self) -> None:
+        """List the links in the email shown in the reading pane; the chosen
+        one opens in the default browser."""
+        if self.query_one(StatusBar).mode != "MAIL" or not self.current_message_id:
+            return
+        message_id = self.current_message_id
+        detail = self._previewed(message_id)
+        if detail is not None:
+            self._pick_link(detail)
+            return
+        self._fetch_for_links(self._folder_of(message_id), message_id)
+
+    @work(thread=True, exclusive=True, group="links")
+    def _fetch_for_links(self, folder_id: str, message_id: str) -> None:
+        try:
+            detail = self.mail_client.get_message(folder_id, message_id)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"Couldn't load the message: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._pick_link, detail)
+
+    def _pick_link(self, detail) -> None:
+        links = extract_links(detail.body_text or "")
+        if not links:
+            self.notify("No links in this email")
+            return
+
+        def _open(url: str | None) -> None:
+            if url is None:
+                return
+            try:
+                open_link(url)
+            except Exception as e:  # noqa: BLE001
+                self.notify(f"Couldn't open the link: {e}", severity="error", timeout=10)
+                return
+            self.notify(f"Opening {url}", timeout=3)
+
+        self.push_screen(LinkPickerScreen(detail.subject, links), _open)
 
     def action_show_help(self) -> None:
         # Help for the view you're in (the status bar's mode chip).

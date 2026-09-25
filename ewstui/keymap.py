@@ -29,6 +29,7 @@ MAIL_KEYS = [
     ("Space", "toggle read / unread"),
     ("t", "thread view on / off"),
     ("v", "attachments: save + open"),
+    ("U", "links in the email: pick one to open in the browser"),
     ("p / P", "add to priority list (+ note / none)"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
@@ -40,6 +41,7 @@ PREVIEW_KEYS = [
     ("Ctrl+f / b", "page down / up (Space too)"),
     ("g / G", "top / bottom of the message"),
     ("h", "back to the message list"),
+    ("U", "links in this email"),
 ]
 
 CALENDAR_KEYS = [
