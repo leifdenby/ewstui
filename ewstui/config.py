@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from . import config_file
+from .theme import ALIASES, DEFAULT_THEME, THEMES
 from .opener import default_attachment_dir
 from .priority_store import DEFAULT_PATH as DEFAULT_PRIORITY_PATH
 
@@ -61,6 +62,7 @@ class Config:
     refresh_interval: float = DEFAULT_REFRESH_MINUTES  # minutes between background mail checks; 0 = off
     layout: str = DEFAULT_LAYOUT          # "columns" or "stacked" (see LAYOUTS)
     threads: bool = False                 # start the message list in thread view (t toggles)
+    theme: str = DEFAULT_THEME            # "muted-slate" (tuxedo's default) or "nord"
     demo: bool = False                   # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
@@ -144,6 +146,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "Ctrl+l refreshes on demand",
     )
     ui.add_argument(
+        "--theme",
+        default=DEFAULT_THEME,
+        metavar="NAME",
+        help=f"Colour theme: {', '.join(THEMES)} (default {DEFAULT_THEME}; 'muted'/'slate' also work). "
+        "Save it with --account, or set theme = \"nord\" in the config file",
+    )
+    ui.add_argument(
         "--threads",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -223,6 +232,9 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         auth_method = AuthMethod(ns.auth)
     except ValueError as e:
         raise SystemExit(f"error: invalid auth {ns.auth!r} (from {config_path})") from e
+    theme = ALIASES.get(str(ns.theme).strip().lower())
+    if theme is None:
+        raise SystemExit(f"error: unknown theme {ns.theme!r} (from {config_path}); choose {' or '.join(THEMES)}")
     if ns.layout not in LAYOUTS:  # argparse checks the CLI flag, not the config file
         raise SystemExit(f"error: invalid layout {ns.layout!r} (from {config_path}); choose {' or '.join(LAYOUTS)}")
 
@@ -250,6 +262,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         refresh_interval=ns.refresh_interval,
         layout=ns.layout,
         threads=bool(ns.threads),
+        theme=theme,
         demo=ns.demo,
         debug=ns.debug,
         priority_file=ns.priority_file,

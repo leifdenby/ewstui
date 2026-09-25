@@ -132,6 +132,11 @@ ntlm_no_cbt = true
 - `layout = "stacked"` (or `--layout stacked`) puts the message list
   above the email, both to the right of the folders; the default
   `"columns"` has all three side by side.
+- `theme = "nord"` (or `--theme nord`) picks the colour theme. The
+  look — palette, header, status bar and help overlay — follows the
+  [tuxedo](https://github.com/webstonehq/tuxedo) todo.txt TUI; its
+  default **Muted Slate** palette is ewstui's default, and its **Nord**
+  palette is the alternative.
 - On/off flags like `--ntlm-no-cbt` can only be switched on from the
   command line; edit the file to turn one off. Comments you add to the
   file are kept when ewstui updates it.
@@ -217,7 +222,11 @@ differently and this doesn't handle that case yet.
 
 ## Keybindings
 
-Press `?` inside the app for the full list. Summary:
+Press `?` inside the app for the full list: a panel with every section
+side by side (stacked on narrow terminals; `j`/`k` or `Ctrl+d`/`Ctrl+u`
+scroll it, `Esc`/`?`/`q` close it). The status bar at the bottom always
+shows the current mode and the most useful keys for the pane you're in.
+Summary:
 
 Pane navigation follows vim's `h`/`l` (plus `Tab`/`Shift+Tab`):
 `l`/`Enter` opens whatever's under the cursor *and* moves focus into

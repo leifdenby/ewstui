@@ -10,7 +10,8 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
-from textual.widgets import Footer, Header, Tab, Tabs
+from textual import events
+from textual.widgets import Tab, Tabs
 
 from . import config_file
 from .config import Config
@@ -26,7 +27,10 @@ from .screens import (
 )
 from .folder_picker import MoveToFolderScreen
 from .room_grid import FindRoomScreen
+from .theme import MUTED_SLATE, THEMES
+from .keymap import STATUS_HINTS
 from .widgets.calendar_view import CalendarView
+from .widgets.chrome import StatusBar, TopBar
 from .widgets.folder_list import FolderList
 from .widgets.message_table import MessageTable
 from .widgets.preview import PreviewPane
@@ -59,16 +63,24 @@ class EwstuiApp(App):
     # beat Ctrl+p (previous) in pickers like the move-to-folder screen.
     ENABLE_COMMAND_PALETTE = False
 
+    # Colours all come from the theme (ewstui/theme.py: tuxedo's Muted
+    # Slate / Nord): subdued $border lines between panes, panes on
+    # $background, bars on $panel / $tux-statusbar.
     CSS = """
+    Screen {
+        background: $background;
+    }
     #modes {
         background: $panel;
+        height: 2;
     }
     #modes Tab {
         padding: 0 2;
+        color: $tux-dim;
     }
     #modes Tab.-active {
-        background: $accent;
-        color: $text;
+        background: $tux-mode-bg;
+        color: $tux-mode-fg;
         text-style: bold;
     }
     #main {
@@ -76,7 +88,11 @@ class EwstuiApp(App):
     }
     #folders {
         width: 22%;
-        border-right: solid $accent;
+        border-right: solid $border;
+        background: $background;
+    }
+    #messages, #preview, #calendar, #priority {
+        background: $background;
     }
     /* Message list + reading pane, right of the folders. "columns": side
        by side; "stacked": list on top, email below (config `layout`). */
@@ -89,11 +105,11 @@ class EwstuiApp(App):
     }
     #reading.columns #messages {
         width: 45%;
-        border-right: solid $accent;
+        border-right: solid $border;
     }
     #reading.stacked #messages {
         height: 40%;
-        border-bottom: solid $accent;
+        border-bottom: solid $border;
     }
     #preview {
         width: 1fr;
@@ -147,7 +163,7 @@ class EwstuiApp(App):
     # -- layout -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield TopBar(id="topbar")
         modes = Tabs(
             Tab("1 Mail", id="mode-mail"),
             Tab("2 Priority", id="mode-priority"),
@@ -165,10 +181,18 @@ class EwstuiApp(App):
                 yield PreviewPane(id="preview")
         yield CalendarView(id="calendar", classes="hidden")
         yield PriorityView(id="priority", classes="hidden")
-        yield Footer()
+        yield StatusBar(id="statusbar")
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        # Declare the custom $tux-* variables so the CSS parses under any theme.
+        return {k: v for k, v in MUTED_SLATE.variables.items() if k.startswith("tux-")}
 
     def on_mount(self) -> None:
-        self.sub_title = self.config.email or "(demo)"
+        for theme in THEMES.values():
+            self.register_theme(theme)
+        self.theme = self.config.theme
+        self.query_one(TopBar).account = self.config.email or "demo"
+        self._set_mode_status("mail")
         self.load_folders()
         if self.config.refresh_interval > 0:
             self.set_interval(self.config.refresh_interval * 60, self._background_refresh)
@@ -208,6 +232,7 @@ class EwstuiApp(App):
             return
         self.query_one("#messages", MessageTable).set_messages(messages, home_folder_id=folder_id)
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
+        self._update_status()
         self.query_one("#preview", PreviewPane).clear()
         self.current_message_id = None
 
@@ -255,6 +280,7 @@ class EwstuiApp(App):
             return
         table.set_messages(messages, keep_cursor_on=event.message_id, home_folder_id=self.current_folder_id)
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
+        self._update_status()
         self.notify("Thread view on (t to switch off)" if event.threaded else "Thread view off (t to switch on)")
 
     # -- refresh (Ctrl+l, and every --refresh-interval minutes) ------------
@@ -327,6 +353,7 @@ class EwstuiApp(App):
         # Nothing selected yet (e.g. folder was empty): a normal fill is fine.
         table.set_messages(messages, keep_cursor_on=table._current_message_id(), home_folder_id=folder_id)
         self._message_snapshot = snapshot
+        self._update_status()
 
     def open_message(self, message_id: str) -> None:
         if not self.current_folder_id:
@@ -341,6 +368,7 @@ class EwstuiApp(App):
 
     def load_priority_list(self) -> None:
         self.query_one("#priority", PriorityView).set_entries(self.priority_store.list_entries())
+        self._update_status()
 
     def load_calendar_range(self) -> None:
         start = self.calendar_range_start
@@ -351,6 +379,7 @@ class EwstuiApp(App):
             self.notify(f"Failed to load calendar: {e}", severity="error", timeout=10)
             return
         self.query_one("#calendar", CalendarView).set_events(events)
+        self._update_status()
 
     # -- mail pane events -------------------------------------------------
 
@@ -698,11 +727,51 @@ class EwstuiApp(App):
     def action_show_calendar(self) -> None:
         self.query_one("#modes", Tabs).active = "mode-calendar"
 
+    # -- header + status bar -------------------------------------------------
+
+    def _set_mode_status(self, mode: str) -> None:
+        self.query_one(StatusBar).mode = mode.upper()
+        self._update_status()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        self._update_status()
+
+    def _update_status(self) -> None:
+        """Hints for the focused pane; counts for the visible view."""
+        status, top = self.query_one(StatusBar), self.query_one(TopBar)
+        mode = status.mode.lower()
+        focused = self.focused
+        pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)
+        status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, ""))
+        if mode == "mail":
+            table = self.query_one("#messages", MessageTable)
+            messages = table._messages
+            unread = sum(not m.is_read for m in messages)
+            folder = next(
+                (f.name for f in self.query_one("#folders", FolderList).folders if f.id == self.current_folder_id), ""
+            )
+            items = [(folder, "normal"), (f"{len(messages)} messages", "dim")]
+            if unread:
+                items.append((f"{unread} unread", "accent"))
+            if table.threaded:
+                items.append(("threads", "dim"))
+            top.items = tuple(items)
+            status.info = f"{len(messages)} messages"
+        elif mode == "priority":
+            n = len(self.priority_store.list_entries())
+            top.items = (("Priority list", "normal"), (f"{n} items", "dim"))
+            status.info = f"{n} items"
+        else:
+            end = self.calendar_range_start + timedelta(days=self.calendar_range_days - 1)
+            top.items = (("Calendar", "normal"), (f"{self.calendar_range_start:%d %b} – {end:%d %b}", "dim"))
+            status.info = ""
+
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         mode = event.tab.id.removeprefix("mode-")
         views = {"mail": "#main", "priority": "#priority", "calendar": "#calendar"}
         for name, selector in views.items():
             self.query_one(selector).set_class(name != mode, "hidden")
+        self._set_mode_status(mode)
         if mode == "mail":
             self.query_one("#messages", MessageTable).focus()
         elif mode == "priority":

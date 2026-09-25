@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static, TextArea
 
@@ -308,29 +309,95 @@ def _human_size(n: int) -> str:
     return f"{size:.1f} GB"
 
 
+KEY_WIDTH = 14  # key column, like tuxedo's padded key chips
+TWO_COLUMN_MIN_WIDTH = 100  # below this the sections stack in one column
+
+
+def help_column(sections, v: dict[str, str]) -> Text:
+    """One column of the help overlay: bold accent section titles, keys
+    padded in the key colour, descriptions in the normal text colour."""
+    out = Text()
+    for i, (title, keys) in enumerate(sections):
+        if i:
+            out.append("\n")
+        out.append(f"{title}\n", style=f"bold {v['accent']}")
+        for key, desc in keys:
+            out.append(f"  {key:<{KEY_WIDTH}}", style=f"bold {v['tux-key']}")
+            out.append(f"{desc}\n", style=v["foreground"])
+    return out
+
+
 class HelpScreen(ModalScreen[None]):
-    BINDINGS = [Binding("escape", "dismiss_help", "Close"), Binding("question_mark", "dismiss_help", "Close")]
+    """`?`: every keybinding, tuxedo-style — a titled panel with sections in
+    two columns (one column on narrow terminals), scrollable if it doesn't
+    fit. j/k, Ctrl+d/u and arrows scroll; Esc, ? or q close.
+    """
+
+    BINDINGS = [
+        Binding("escape,question_mark,q", "dismiss_help", "Close"),
+        Binding("j,down", "scroll(1)", show=False),
+        Binding("k,up", "scroll(-1)", show=False),
+        Binding("ctrl+d,space", "scroll(10)", show=False),
+        Binding("ctrl+u", "scroll(-10)", show=False),
+    ]
 
     DEFAULT_CSS = """
     HelpScreen {
         align: center middle;
     }
     #help-box {
-        width: auto;
+        width: 90%;
+        max-width: 120;
         height: auto;
-        border: round $accent;
-        padding: 1 3;
-        background: $surface;
+        max-height: 90%;
+        border: round $border;
+        border-title-align: left;
+        border-subtitle-align: right;
+        border-subtitle-color: $tux-dim;
+        background: $panel;
+        padding: 0 1;
+    }
+    #help-scroll {
+        height: auto;
+        max-height: 100%;
+    }
+    #help-columns {
+        height: auto;
+    }
+    #help-columns Static {
+        width: 1fr;
+        height: auto;
+    }
+    #help-columns.narrow {
+        layout: vertical;
     }
     """
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-box"):
-            yield Static(keymap.HELP_TEXT)
+            with VerticalScroll(id="help-scroll"):
+                with Horizontal(id="help-columns"):
+                    yield Static(id="help-left")
+                    yield Static(id="help-right")
+
+    def on_mount(self) -> None:
+        v = self.app.get_css_variables()
+        box = self.query_one("#help-box")
+        box.border_title = Text.assemble((" ewstui", f"bold {v['accent']}"), (" · help ", v["tux-dim"]))
+        box.border_subtitle = " Esc close · j/k scroll "
+        left, right = keymap.HELP_COLUMNS
+        self.query_one("#help-left", Static).update(help_column(left, v))
+        self.query_one("#help-right", Static).update(help_column(right, v))
+        self._fit(self.app.size.width)
+
+    def on_resize(self, event) -> None:
+        self._fit(event.size.width)
+
+    def _fit(self, width: int) -> None:
+        self.query_one("#help-columns").set_class(width < TWO_COLUMN_MIN_WIDTH, "narrow")
+
+    def action_scroll(self, lines: int) -> None:
+        self.query_one("#help-scroll", VerticalScroll).scroll_relative(y=lines, animate=False)
 
     def action_dismiss_help(self) -> None:
-        self.dismiss(None)
-
-    def on_key(self, event) -> None:
-        # Any key closes the help overlay, not just Esc/?.
         self.dismiss(None)

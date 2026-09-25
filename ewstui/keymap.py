@@ -1,81 +1,89 @@
 """
 Single source of truth for the vim-ish bindings, used by the help
-screen (press `?`). The actual key -> action wiring lives on each
-widget/screen (Textual's BINDINGS), since that's how Textual scopes
-key handling — this module is documentation + a couple of shared
-constants, not a dispatch table.
+overlay (press `?`) and the status bar hints. The actual key -> action
+wiring lives on each widget/screen (Textual's BINDINGS), since that's how
+Textual scopes key handling — this module is documentation, not a
+dispatch table.
 """
 
 GLOBAL_KEYS = [
-    ("j / down", "move down"),
-    ("k / up", "move up"),
-    ("g", "jump to top"),
-    ("G", "jump to bottom"),
-    ("Tab / l", "next pane (l also opens the item under the cursor)"),
-    ("Shift+Tab / h", "previous pane"),
-    ("Enter / l", "open / select"),
-    ("Esc", "cancel / close modal"),
-    ("/", "search current list"),
-    ("1", "mail view"),
-    ("2", "priority list view"),
-    ("3", "calendar view"),
-    ("Ctrl+l", "refresh (check for new mail; also automatic, see --refresh-interval)"),
+    ("j / k", "move down / up"),
+    ("g / G", "top / bottom"),
+    ("l / Enter", "open (moves into the next pane)"),
+    ("h", "back to the previous pane"),
+    ("Tab / S-Tab", "next / previous pane"),
+    ("1 / 2 / 3", "mail / priority / calendar"),
+    ("Ctrl+l", "refresh (also every few minutes)"),
+    ("w", "compose a new message"),
+    ("u", "undo delete / archive / move"),
+    ("Esc", "cancel / close"),
+    ("?", "this help"),
     ("q", "quit"),
-    ("?", "toggle this help"),
 ]
 
 MAIL_KEYS = [
-    ("Enter / l", "open message"),
-    ("r", "reply"),
-    ("R", "reply all"),
-    ("w", "compose new message"),
-    ("d", "delete message"),
-    ("Space", "toggle read/unread"),
-    ("P", "add to priority list (no priority, no prompt)"),
-    ("p", "add to priority list with a note"),
-    ("A", "archive message"),
-    ("m", "move to folder (type to filter, ↓/↑ or Ctrl+n/p, Enter)"),
-    ("t", "toggle thread view (conversations as nested trees, incl. your sent replies)"),
-    ("u", "undo last delete/archive (repeatable)"),
-    ("v", "view/save/open attachments"),
+    ("r / R", "reply / reply all"),
+    ("d", "delete (to Deleted Items)"),
+    ("A", "archive"),
+    ("m", "move to folder (type to filter)"),
+    ("Space", "toggle read / unread"),
+    ("t", "thread view on / off"),
+    ("v", "attachments: save + open"),
+    ("p / P", "add to priority list (+ note / none)"),
 ]
 
 PREVIEW_KEYS = [
-    ("j / k", "scroll down / up one line"),
-    ("Ctrl+d / Ctrl+u", "scroll half a page down / up"),
-    ("Ctrl+f / Ctrl+b", "scroll a page down / up (Space also pages down)"),
+    ("j / k", "scroll a line"),
+    ("Ctrl+d / u", "half a page down / up"),
+    ("Ctrl+f / b", "page down / up (Space too)"),
     ("g / G", "top / bottom of the message"),
     ("h", "back to the message list"),
 ]
 
 CALENDAR_KEYS = [
     ("n", "new event"),
-    ("f", "find a free meeting room: day grid, [ / ] day, h/l time, v select rooms × times, Enter book, "
-          "/ find more rooms, r refresh"),
-    ("d", "delete selected event"),
+    ("d", "delete event"),
+    ("[ / ]", "earlier / later"),
+    ("f", "find a free meeting room"),
+]
+
+ROOM_KEYS = [
     ("[ / ]", "previous / next day"),
+    ("h / l", "earlier / later slot"),
+    ("j / k", "room"),
+    ("v", "select rooms × times"),
+    ("Enter", "book cell or selection"),
+    ("/", "find more rooms"),
+    ("r", "refresh availability"),
+    ("t", "today"),
 ]
 
 PRIORITY_KEYS = [
-    ("A-Z", "set priority of current (or selected) item(s)"),
-    ("V", "start/apply visual selection (then press a letter)"),
-    ("Esc", "cancel visual selection"),
+    ("A-Z", "set priority (current or selection)"),
+    ("V", "visual selection, then a letter"),
     ("x", "toggle complete"),
-    ("d", "remove from priority list"),
+    ("d", "remove from the list"),
     ("Enter / o", "jump to the email"),
 ]
 
 COMPOSE_KEYS = [
     ("Tab", "next field"),
-    ("Ctrl+s / Cmd+Enter", "send (Cmd+Enter needs a terminal that reports Cmd)"),
+    ("Ctrl+s", "send / save"),
+    ("Cmd+Enter", "send (if the terminal passes Cmd)"),
     ("Esc", "discard and close"),
 ]
 
-HELP_TEXT = "\n".join(
-    ["Global", *(f"  {k:<12} {d}" for k, d in GLOBAL_KEYS), ""]
-    + ["Mail screen", *(f"  {k:<12} {d}" for k, d in MAIL_KEYS), ""]
-    + ["Reading pane (focused)", *(f"  {k:<16} {d}" for k, d in PREVIEW_KEYS), ""]
-    + ["Calendar screen", *(f"  {k:<12} {d}" for k, d in CALENDAR_KEYS), ""]
-    + ["Priority screen", *(f"  {k:<12} {d}" for k, d in PRIORITY_KEYS), ""]
-    + ["Compose screen", *(f"  {k:<20} {d}" for k, d in COMPOSE_KEYS)]
-)
+# The help overlay's two columns (tuxedo-style), top to bottom.
+HELP_COLUMNS = [
+    [("GLOBAL", GLOBAL_KEYS), ("READING PANE", PREVIEW_KEYS), ("COMPOSE", COMPOSE_KEYS)],
+    [("MAIL", MAIL_KEYS), ("CALENDAR", CALENDAR_KEYS), ("FIND A ROOM", ROOM_KEYS), ("PRIORITY", PRIORITY_KEYS)],
+]
+
+# Short hints for the status bar, by what has focus.
+STATUS_HINTS = {
+    "folders": "j/k folder · l open · Tab next pane · ? help",
+    "messages": "l open · r reply · d delete · m move · A archive · t threads · ? help",
+    "preview": "j/k scroll · Ctrl+d/u half page · h back · ? help",
+    "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
+    "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",
+}
