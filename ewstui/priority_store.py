@@ -72,6 +72,12 @@ class PriorityEntry:
     def folder_id(self) -> str | None:
         return self.kv.get("folder")
 
+    @property
+    def internet_id(self) -> str | None:
+        """Internet Message-ID (`msgid:<...>`): the message's lasting
+        identity; `id:`/`folder:` are just where it was last seen."""
+        return self.kv.get("msgid")
+
     def to_line(self) -> str:
         tokens: list[str] = []
         if self.completed:
@@ -273,10 +279,13 @@ class PriorityStore:
         sender: str,
         priority: str | None,
         note: str | None = None,
+        internet_id: str | None = None,
     ) -> PriorityEntry:
         existing = self.find_by_message_id(message_id)  # also refreshes from disk
         if existing is not None:
             existing.priority = priority
+            if internet_id and not existing.internet_id:
+                existing.kv["msgid"] = internet_id
             existing.dirty = True
             self.save()
             return existing
@@ -291,7 +300,7 @@ class PriorityStore:
             description=_sanitize_description(description),
             projects=[],
             contexts=[EMAIL_TAG],
-            kv={"id": message_id, "folder": folder_id, "from": sender},
+            kv={"id": message_id, "folder": folder_id, "from": sender, **({"msgid": internet_id} if internet_id else {})},
         )
         self._lines.append(entry)
         self.save()
@@ -316,6 +325,39 @@ class PriorityStore:
         self._lines.append(entry)
         self.save()
         return entry
+
+    def relocate(self, old_message_id: str, folder_id: str, message_id: str) -> bool:
+        """The message moved (EWS gave it a new id): point its open entry at
+        the new location. False if it has no entry."""
+        entry = self.find_by_message_id(old_message_id)
+        if entry is None:
+            return False
+        entry.kv["id"], entry.kv["folder"] = message_id, folder_id
+        entry.dirty = True
+        self.save()
+        return True
+
+    def relocate_key(self, key: str, folder_id: str, message_id: str) -> bool:
+        """Same, for the entry with this key (after finding it by Message-ID)."""
+        self._refresh()
+        entry = self._find(key)
+        if entry is None:
+            return False
+        entry.kv["id"], entry.kv["folder"] = message_id, folder_id
+        entry.dirty = True
+        self.save()
+        return True
+
+    def remember_internet_id(self, message_id: str, internet_id: str) -> bool:
+        """Fill in a missing Message-ID for an entry added before ewstui
+        stored them (done when the message is opened). False if no change."""
+        entry = self.find_by_message_id(message_id)
+        if entry is None or entry.internet_id:
+            return False
+        entry.kv["msgid"] = internet_id
+        entry.dirty = True
+        self.save()
+        return True
 
     def set_priority(self, key: str, priority: str | None) -> bool:
         return self.set_priority_many({key}, priority)

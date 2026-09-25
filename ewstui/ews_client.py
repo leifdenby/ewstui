@@ -86,6 +86,10 @@ class MessageDetail(MessageSummary):
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     body_text: str = ""
+    # The Internet Message-ID header (<...@host>): unlike the EWS item id it
+    # stays the same when the message is moved, so the priority list uses
+    # it to find a message again.
+    internet_message_id: str | None = None
 
 
 @dataclass
@@ -222,6 +226,11 @@ def _sender(item) -> str:
         if address:
             return address
     return "(unknown)"
+
+
+def _is_mail_folder(folder) -> bool:
+    folder_class = getattr(folder, "folder_class", None)
+    return folder_class is None or folder_class.startswith("IPF.Note")
 
 
 def _reply_depth(conversation_index: bytes | None) -> int:
@@ -379,7 +388,38 @@ class MailClient:
             to=_addresses(item, "to_recipients", "required_attendees"),
             cc=_addresses(item, "cc_recipients", "optional_attendees"),
             body_text=getattr(item, "text_body", None) or "",
+            internet_message_id=getattr(item, "message_id", None),
         )
+
+    @retry_on_dead_connection
+    def find_message(self, internet_message_id: str, hint_folder_id: str | None = None) -> MovedMessage | None:
+        """Where a message is now, by its Internet Message-ID (which, unlike
+        the EWS id, survives moves). Looks in `hint_folder_id` first, then
+        all mail folders in one FindItem request. None if it's nowhere.
+        """
+        from exchangelib.folders import FolderCollection
+
+        def first(queryset):
+            item = next(iter(queryset.only("parent_folder_id")[:1]), None)
+            return MovedMessage(folder_id=item.parent_folder_id.id, message_id=item.id) if item else None
+
+        if hint_folder_id:
+            try:
+                found = first(self._folder_by_id(hint_folder_id).filter(message_id=internet_message_id))
+            except KeyError:
+                found = None
+            if found:
+                return found
+        folders = [f for f in self._all_folders() if _is_mail_folder(f)]
+        return first(FolderCollection(account=self.account, folders=folders).filter(message_id=internet_message_id))
+
+    def _all_folders(self) -> list:
+        out, stack = [], list(self.account.msg_folder_root.children)
+        while stack:
+            f = stack.pop()
+            out.append(f)
+            stack.extend(f.children)
+        return out
 
     def mark_read(self, folder_id: str, message_id: str, read: bool = True) -> None:
         folder = self._folder_by_id(folder_id)

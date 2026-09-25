@@ -59,4 +59,4 @@ async def test_jump_to_email_that_is_gone(tmp_path):
         original = app.notify
         app.notify = lambda msg, **kw: (seen.append(msg), original(msg, **kw))
         await jump(app, pilot)
-    assert any("no longer in" in m for m in seen)
+    assert any("moved or been deleted" in m and "predates Message-ID tracking" in m for m in seen)

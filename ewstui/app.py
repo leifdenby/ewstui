@@ -156,9 +156,9 @@ class EwstuiApp(App):
         # Folders mail was moved to with `m` this session, most recent first
         # (shown first in the picker).
         self._recent_move_targets: list[str] = []
-        # (folder id, message id) to show once the Mail tab is active; see
-        # on_priority_view_entry_opened.
-        self._pending_jump: tuple[str, str] | None = None
+        # (entry key, folder id, message id, Message-ID) to show once the Mail
+        # tab is active; see on_priority_view_entry_opened.
+        self._pending_jump: tuple | None = None
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
@@ -384,6 +384,10 @@ class EwstuiApp(App):
     def _show_preview(self, message_id: str, detail) -> None:
         if message_id == self.current_message_id:  # ignore a message the cursor already left
             self.query_one("#preview", PreviewPane).show_message(detail)
+        # Priority entries added before ewstui stored Message-IDs get theirs
+        # the first time the message is opened (no extra request needed).
+        if getattr(detail, "internet_message_id", None):
+            self.priority_store.remember_internet_id(message_id, detail.internet_message_id)
 
     def _preview_failed(self, message_id: str, error: Exception) -> None:
         if message_id == self.current_message_id:
@@ -484,6 +488,7 @@ class EwstuiApp(App):
             self.notify("Message permanently deleted (can't be undone)", severity="warning")
         else:
             self.undo_stack.append(UndoEntry("deleted", subject, folder_id, moved))
+            self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
             self.notify("Moved to Deleted Items — press u to undo")
         self._refresh_keeping_row()
 
@@ -506,6 +511,7 @@ class EwstuiApp(App):
             subject=detail.subject,
             sender=detail.sender,
             priority=None,
+            internet_id=detail.internet_message_id,
         )
         self.notify(f"Added to priority list, no priority set ({self._priority_path()})")
         self._priorities_changed()
@@ -528,6 +534,7 @@ class EwstuiApp(App):
                 sender=detail.sender,
                 priority=None,
                 note=note,
+                internet_id=detail.internet_message_id,
             )
             self.notify(f"Added to priority list with note ({self._priority_path()})")
             self._priorities_changed()
@@ -545,6 +552,7 @@ class EwstuiApp(App):
             self.notify(f"Archive failed: {e}", severity="error", timeout=10)
             return
         self.undo_stack.append(UndoEntry("archived", subject, folder_id, moved))
+        self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
         self.notify("Message archived — press u to undo")
         self._refresh_keeping_row()
 
@@ -569,6 +577,7 @@ class EwstuiApp(App):
                 self.notify(f"Move failed: {e}", severity="error", timeout=10)
                 return
             self.undo_stack.append(UndoEntry("moved", subject, folder_id, moved))
+            self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
             self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
             self.notify(f"Moved to {dest_name} — press u to undo")
             self._refresh_keeping_row()
@@ -670,31 +679,60 @@ class EwstuiApp(App):
             return
         # The tab switch is asynchronous and its handler focuses the message
         # list, so do the jump from there (on_tabs_tab_activated), after it.
-        self._pending_jump = (entry.folder_id, entry.message_id)
+        self._pending_jump = (entry.key, entry.folder_id, entry.message_id, entry.internet_id)
         self.action_show_mail()
 
-    def _jump_to_message(self, folder_id: str, message_id: str) -> None:
-        """Show a message in the mail view as if navigated to by hand:
-        folder highlighted and loaded, cursor on the message (which loads the
-        reading pane), focus in the reading pane."""
-        folder_list = self.query_one("#folders", FolderList)
-        folders = {f.id: f.name for f in folder_list.folders}
-        if folder_id not in folders:
-            self.notify("That email's folder no longer exists", severity="warning")
+    def _jump_to_entry(self, key: str, folder_id: str, message_id: str, internet_id: str | None) -> None:
+        """Open a prioritised email: where it was last seen if it's still
+        there (no search needed), otherwise find it by its Message-ID — it
+        may have been moved, in ewstui or elsewhere — and update the entry."""
+        if self._show_if_listed(folder_id, message_id):
             return
+        if not internet_id:
+            self.notify(
+                "That email has moved or been deleted, and this entry predates Message-ID tracking",
+                severity="warning",
+            )
+            return
+        self.notify("Looking for the email…", timeout=3)
+        self._find_and_jump(key, internet_id, folder_id)
+
+    @work(thread=True, exclusive=True, group="find-message")
+    def _find_and_jump(self, key: str, internet_id: str, hint_folder_id: str) -> None:
+        try:
+            found = self.mail_client.find_message(internet_id, hint_folder_id)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"Search failed: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._found_message, key, found)
+
+    def _found_message(self, key: str, found) -> None:
+        if found is None:
+            self.notify("That email wasn't found in any folder (deleted?)", severity="warning")
+            return
+        self.priority_store.relocate_key(key, found.folder_id, found.message_id)
+        if not self._show_if_listed(found.folder_id, found.message_id):
+            # Found, but older than the loaded page of its folder: show it anyway.
+            self.open_message(found.message_id)
+            self.query_one("#preview", PreviewPane).focus()
+
+    def _show_if_listed(self, folder_id: str, message_id: str) -> bool:
+        """Show a message in the mail view as if navigated to by hand —
+        folder highlighted and loaded, cursor on it (which loads the reading
+        pane), focus in the reading pane. False if it isn't listed there."""
+        folder_list = self.query_one("#folders", FolderList)
+        if folder_id not in {f.id for f in folder_list.folders}:
+            return False
         folder_list.highlight_folder(folder_id)
         self.select_folder(folder_id)
         table = self.query_one("#messages", MessageTable)
         try:
             row = table.get_row_index(message_id)
         except RowDoesNotExist:
-            # Moved or deleted since it was prioritised (EWS gives moved
-            # messages a new id), or older than the loaded page.
-            self.notify(f"That email is no longer in {folders[folder_id]} (moved or deleted?)", severity="warning")
-            table.focus()
-            return
+            return False
         table.move_cursor(row=row)
         self.query_one("#preview", PreviewPane).focus()
+        return True
 
     # -- calendar pane events ---------------------------------------------
 
@@ -861,9 +899,8 @@ class EwstuiApp(App):
         if mode == "mail":
             self.query_one("#messages", MessageTable).focus()
             if self._pending_jump is not None:  # from the priority view (Enter/o)
-                folder_id, message_id = self._pending_jump
-                self._pending_jump = None
-                self._jump_to_message(folder_id, message_id)
+                pending, self._pending_jump = self._pending_jump, None
+                self._jump_to_entry(*pending)
         elif mode == "priority":
             self.load_priority_list()
             self.query_one("#priority", PriorityView).focus()
@@ -883,6 +920,7 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001 - e.g. already purged from Deleted Items
             self.notify(f"Undo failed: {e}", severity="error", timeout=10)
             return
+        self.priority_store.relocate(entry.moved.message_id, restored.folder_id, restored.message_id)
         self.notify(f"Restored {entry.verb} message: {entry.subject}")
         table = self.query_one("#messages", MessageTable)
         # In thread view a restored Sent Items reply shows up in this folder's

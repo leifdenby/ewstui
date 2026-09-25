@@ -127,9 +127,20 @@ class DemoMailClient:
                 ),
             ],
         }
+        for msgs in self._messages.values():  # every demo message gets an Internet Message-ID
+            for m in msgs:
+                m.internet_message_id = m.internet_message_id or f"<{m.id}@demo.corp.example>"
 
     def list_folders(self) -> list[FolderSummary]:
         return list(self._folders)
+
+    def find_message(self, internet_message_id: str, hint_folder_id: str | None = None) -> MovedMessage | None:
+        order = ([hint_folder_id] if hint_folder_id else []) + [f for f in self._messages if f != hint_folder_id]
+        for folder_id in order:
+            for m in self._messages.get(folder_id, []):
+                if m.internet_message_id == internet_message_id:
+                    return MovedMessage(folder_id=folder_id, message_id=m.id)
+        return None
 
     def default_folder_id(self) -> str:
         return "inbox"

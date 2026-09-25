@@ -214,12 +214,20 @@ unprioritized, then by the date added.
   email or Exchange).
 - `Enter`/`o` — jump straight to that email (switches to the mail
   view, opens its folder, puts the cursor on it and shows it in the
-  reading pane). If it has since been moved or deleted — Exchange gives
-  a moved email a new id — you get a notice instead.
+  reading pane).
+
+**Emails that move**: each entry stores the email's Internet
+Message-ID (`msgid:<…>`), which — unlike Exchange's own item id —
+never changes. Moving an email with `m`, `A`, `d` (or undoing with
+`u`) updates its entry right away. If it was moved elsewhere (Outlook,
+a rule), jumping to it searches your mail folders for the Message-ID
+(one request), opens it wherever it is now and updates the entry.
+Entries made before Message-IDs were stored get theirs the first time
+you open the email.
 
 Example line this produces:
 ```
-(A) 2026-09-24 Q3 budget review @email id:AAMkAD...== folder:inbox from:finance@corp.example
+(A) 2026-09-24 Q3 budget review @email id:AAMkAD...== folder:AAMkAD... from:finance@corp.example msgid:<0978d17921ac@corp.example>
 ```
 
 ## Attachments (`v`)
