@@ -88,23 +88,25 @@ class Pool:
         )
 
 
-def test_idle_session_is_replaced_but_a_recent_one_is_reused():
-    now = [1000.0]
+def test_idle_sessions_are_kept_but_replaced_after_sleep():
+    wall, mono = [1000.0], [500.0]
     pool = Pool()
     protocol = pool.protocol()
-    connection.harden(protocol, clock=lambda: now[0])
+    connection.harden(protocol, clock=lambda: wall[0], mono=lambda: mono[0])
     assert protocol.TIMEOUT == connection.REQUEST_TIMEOUT
 
     s = protocol.get_session()  # never used before: trusted
     assert s.name == "s1"
     protocol.release_session(s)
 
-    now[0] += 60  # recently used
+    wall[0] += 3600
+    mono[0] += 3600  # an hour idle but awake: keepalive held it — keep it (no new NTLM login)
     s = protocol.get_session()
     assert s.name == "s1" and pool.closed == []
     protocol.release_session(s)
 
-    now[0] += connection.IDLE_RESET + 1  # e.g. lunch, or the Mac slept
+    wall[0] += 3600
+    mono[0] += 60  # wall clock ran on while monotonic stopped: the Mac slept ~59 min
     s = protocol.get_session()
     assert s.name == "new1" and pool.closed == ["s1"] and s.usage_count == 1
 
@@ -202,6 +204,84 @@ async def test_slow_message_fetch_keeps_the_ui_responsive(tmp_path, monkeypatch)
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert "IT maintenance window" in preview_text(app)  # ...and is ignored
+
+
+def _timeout(*args, **kwargs):
+    raise ErrorTimeoutExpired("Reraised from ReadTimeout(read timeout=30)")
+
+
+async def test_reply_timeout_is_a_notice_not_a_crash(tmp_path, monkeypatch):
+    """The reported crash: r -> get_message timed out on the UI thread."""
+    app = make_app(tmp_path)
+    seen = []
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        app._preview_cache = None  # not loaded in the reading pane: must fetch
+        monkeypatch.setattr(app.mail_client, "get_message", _timeout)
+        original = app.notify
+        app.notify = lambda msg, **kw: (seen.append(msg), original(msg, **kw))
+        await pilot.press("r")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+    assert any("Reply failed" in m for m in seen)
+
+
+async def test_reply_and_priority_reuse_the_loaded_message(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()  # m1 loaded in the reading pane
+        await pilot.pause()
+        monkeypatch.setattr(app.mail_client, "get_message", _timeout)  # any fetch would fail
+        await pilot.press("P")
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        from ewstui.screens import ComposeScreen
+
+        assert isinstance(app.screen, ComposeScreen)  # opened without a request
+    from ewstui.priority_store import PriorityStore
+
+    (entry,) = PriorityStore(tmp_path / "p.todo.txt").list_entries(email_only=True)
+    assert entry.message_id == "m1" and entry.internet_id == "<m1@demo.corp.example>"
+
+
+async def test_toggle_read_uses_the_list_and_keeps_the_cursor(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("j")  # m2 (unread)
+        await app.workers.wait_for_complete()
+        inbox = app.mail_client._messages["inbox"]
+
+        def mark_read(folder_id, message_id, read=True):  # like the live client: no lookup
+            next(m for m in inbox if m.id == message_id).is_read = read
+
+        calls = []
+        monkeypatch.setattr(app.mail_client, "mark_read", mark_read)
+        monkeypatch.setattr(app.mail_client, "get_message", lambda *a: calls.append(a) or _timeout())
+        monkeypatch.setattr(app, "_load_preview", lambda *a: None)  # the reload's preview fetch isn't the toggle's
+        await pilot.press("space")
+        await pilot.pause()
+        assert calls == []  # read state came from the list
+        assert next(m for m in app.mail_client._messages["inbox"] if m.id == "m2").is_read
+        assert app.query_one("#messages", MessageTable)._current_message_id() == "m2"
+
+
+async def test_ui_thread_errors_are_notices(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    seen = []
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app.mail_client, "mark_read", _timeout)
+        original = app.notify
+        app.notify = lambda msg, **kw: (seen.append(msg), original(msg, **kw))
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.is_running
+    assert any("Marking read/unread failed" in m for m in seen)
 
 
 async def test_failed_fetch_clears_loading_and_reports(tmp_path, monkeypatch):

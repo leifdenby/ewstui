@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -9,6 +11,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
+from textual.css.query import NoMatches
 from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
 from textual import events
@@ -41,6 +44,26 @@ log = logging.getLogger(__name__)
 
 # How often the open priority view checks todo.txt for outside edits (a stat).
 PRIORITY_WATCH_SECONDS = 1.0
+
+
+def ews_guard(what: str):
+    """For handlers that talk to Exchange on the UI thread: any error (a
+    timeout through the gateway, a rejected request, ...) becomes a notice
+    instead of an unhandled exception, which would crash the app."""
+
+    def decorate(handler):
+        @functools.wraps(handler)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return handler(self, *args, **kwargs)
+            except Exception as e:  # noqa: BLE001 - surface anything, never crash
+                log.warning("%s failed", what, exc_info=True)
+                self.notify(f"{what} failed: {e}", severity="error", timeout=10)
+                return None
+
+        return wrapper
+
+    return decorate
 
 
 def _split_addresses(field: str) -> list[str]:
@@ -163,6 +186,7 @@ class EwstuiApp(App):
         # (entry key, folder id, message id, Message-ID) to show once the Mail
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
+        self._preview_cache: tuple | None = None  # (message id, MessageDetail) shown in the reading pane
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
@@ -389,10 +413,18 @@ class EwstuiApp(App):
     def _show_preview(self, message_id: str, detail) -> None:
         if message_id == self.current_message_id:  # ignore a message the cursor already left
             self.query_one("#preview", PreviewPane).show_message(detail)
+            # Reused by reply / add-to-priority, so they need no request of their own.
+            self._preview_cache = (message_id, detail)
         # Priority entries added before ewstui stored Message-IDs get theirs
         # the first time the message is opened (no extra request needed).
         if getattr(detail, "internet_message_id", None):
             self.priority_store.remember_internet_id(message_id, detail.internet_message_id)
+
+    def _previewed(self, message_id: str):
+        """The full message if it's the one loaded in the reading pane."""
+        if self._preview_cache is not None and self._preview_cache[0] == message_id:
+            return self._preview_cache[1]
+        return None
 
     def _preview_failed(self, message_id: str, error: Exception) -> None:
         if message_id == self.current_message_id:
@@ -410,7 +442,11 @@ class EwstuiApp(App):
     def _watch_priority_file(self) -> None:
         """Every PRIORITY_WATCH_SECONDS while the priority view is open:
         pick up edits made to todo.txt in another application."""
-        if self.query_one(StatusBar).mode != "PRIORITY" or not self.priority_store.changed_on_disk():
+        try:
+            mode = self.query_one(StatusBar).mode
+        except NoMatches:  # the timer can fire while the app is shutting down
+            return
+        if mode != "PRIORITY" or not self.priority_store.changed_on_disk():
             return
         if self.query_one("#priority", PriorityView).in_visual_mode:
             return  # don't cancel a selection in progress; picked up on a later tick
@@ -448,7 +484,25 @@ class EwstuiApp(App):
         if not self.current_folder_id:
             return
         folder_id = self._folder_of(event.message_id)
-        detail = self.mail_client.get_message(folder_id, event.message_id)
+        cached = self._previewed(event.message_id)
+        if cached is not None:
+            # Already loaded in the reading pane: no server round trip.
+            self._open_reply(folder_id, event.message_id, event.reply_all, cached)
+            return
+        self.notify("Loading the message…", timeout=3)
+        self._fetch_for_reply(folder_id, event.message_id, event.reply_all)
+
+    @work(thread=True, exclusive=True, group="reply")
+    def _fetch_for_reply(self, folder_id: str, message_id: str, reply_all: bool) -> None:
+        try:
+            detail = self.mail_client.get_message(folder_id, message_id)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"Reply failed: couldn't load the message: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._open_reply, folder_id, message_id, reply_all, detail)
+
+    def _open_reply(self, folder_id: str, message_id: str, reply_all: bool, detail) -> None:
+        event = SimpleNamespace(message_id=message_id, reply_all=reply_all)
         quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
         prefill_body = f"\n\n-- original message --\n{quoted}"
 
@@ -510,37 +564,54 @@ class EwstuiApp(App):
             self.notify("Moved to Deleted Items — press u to undo")
         self._refresh_keeping_row()
 
+    @ews_guard("Marking read/unread")
     def on_message_table_toggle_read_requested(self, event: MessageTable.ToggleReadRequested) -> None:
         if not self.current_folder_id:
             return
         folder_id = self._folder_of(event.message_id)
-        detail = self.mail_client.get_message(folder_id, event.message_id)
-        self.mail_client.mark_read(folder_id, event.message_id, read=not detail.is_read)
-        self.select_folder(self.current_folder_id)  # refresh list + unread counts
+        summary = self.query_one("#messages", MessageTable)._by_id.get(event.message_id)
+        is_read = summary.is_read if summary else self.mail_client.get_message(folder_id, event.message_id).is_read
+        self.mail_client.mark_read(folder_id, event.message_id, read=not is_read)
+        self._refresh_keeping_row()  # list + unread counts, cursor stays put
 
+    def _priority_fields(self, folder_id: str, message_id: str) -> tuple[str, str, str | None]:
+        """(subject, sender, Message-ID) for a new priority entry, from what's
+        already loaded when possible: the reading pane has the Message-ID, the
+        list has subject and sender. Fetches only if neither has it."""
+        detail = self._previewed(message_id)
+        if detail is not None:
+            return detail.subject, detail.sender, detail.internet_message_id
+        summary = self.query_one("#messages", MessageTable)._by_id.get(message_id)
+        if summary is not None:
+            return summary.subject, summary.sender, None  # Message-ID filled in when it's opened
+        detail = self.mail_client.get_message(folder_id, message_id)
+        return detail.subject, detail.sender, detail.internet_message_id
+
+    @ews_guard("Adding to the priority list")
     def on_message_table_add_to_priority_requested(self, event: MessageTable.AddToPriorityRequested) -> None:
         if not self.current_folder_id:
             return
         folder_id = self._folder_of(event.message_id)
-        detail = self.mail_client.get_message(folder_id, event.message_id)
+        subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
         self.priority_store.add_email(
             message_id=event.message_id,
             folder_id=folder_id,
-            subject=detail.subject,
-            sender=detail.sender,
+            subject=subject,
+            sender=sender,
             priority=None,
-            internet_id=detail.internet_message_id,
+            internet_id=internet_id,
         )
         self.notify(f"Added to priority list, no priority set ({self._priority_path()})")
         self._priorities_changed()
 
+    @ews_guard("Adding to the priority list")
     def on_message_table_add_to_priority_with_note_requested(
         self, event: MessageTable.AddToPriorityWithNoteRequested
     ) -> None:
         if not self.current_folder_id:
             return
         folder_id = self._folder_of(event.message_id)
-        detail = self.mail_client.get_message(folder_id, event.message_id)
+        subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
 
         def _on_result(note: str | None) -> None:
             if note is None:
@@ -548,16 +619,16 @@ class EwstuiApp(App):
             self.priority_store.add_email(
                 message_id=event.message_id,
                 folder_id=folder_id,
-                subject=detail.subject,
-                sender=detail.sender,
+                subject=subject,
+                sender=sender,
                 priority=None,
                 note=note,
-                internet_id=detail.internet_message_id,
+                internet_id=internet_id,
             )
             self.notify(f"Added to priority list with note ({self._priority_path()})")
             self._priorities_changed()
 
-        self.push_screen(AddNoteScreen(label=f"Note for: {detail.subject}"), _on_result)
+        self.push_screen(AddNoteScreen(label=f"Note for: {subject}"), _on_result)
 
     def on_message_table_archive_requested(self, event: MessageTable.ArchiveRequested) -> None:
         if not self.current_folder_id:
@@ -736,6 +807,7 @@ class EwstuiApp(App):
             self.notify(f"{len(errors)} message(s) couldn't be restored: {errors[0]}", severity="error", timeout=10)
         self.select_folder(self.current_folder_id)
 
+    @ews_guard("Opening attachments")
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
         if not self.current_folder_id:
             return
@@ -878,6 +950,7 @@ class EwstuiApp(App):
 
     # -- calendar pane events ---------------------------------------------
 
+    @ews_guard("Opening the event")
     def on_calendar_view_event_opened(self, event: CalendarView.EventOpened) -> None:
         events = self.calendar_client.list_events(
             self.calendar_range_start, self.calendar_range_start + timedelta(days=self.calendar_range_days)
@@ -890,9 +963,14 @@ class EwstuiApp(App):
         def _on_result(result: dict | None) -> None:
             if result is None:
                 return
-            self.calendar_client.create_event(
-                subject=result["subject"], start=result["start"], end=result["end"], location=result["location"]
-            )
+            try:
+                self.calendar_client.create_event(
+                    subject=result["subject"], start=result["start"], end=result["end"], location=result["location"]
+                )
+            except Exception as e:  # noqa: BLE001 - surface any EWS error, never crash
+                log.warning("creating event failed", exc_info=True)
+                self.notify(f"Creating the event failed: {e}", severity="error", timeout=10)
+                return
             self.notify("Event created")
             self.load_calendar_range()
 
@@ -960,6 +1038,7 @@ class EwstuiApp(App):
             _book,
         )
 
+    @ews_guard("Deleting the event")
     def on_calendar_view_delete_event_requested(self, event: CalendarView.DeleteEventRequested) -> None:
         self.calendar_client.delete_event(event.event_id)
         self.notify("Event deleted")
@@ -994,7 +1073,10 @@ class EwstuiApp(App):
 
     def _update_status(self) -> None:
         """Hints for the focused pane; counts for the visible view."""
-        status, top = self.query_one(StatusBar), self.query_one(TopBar)
+        try:
+            status, top = self.query_one(StatusBar), self.query_one(TopBar)
+        except NoMatches:  # focus events can arrive while the app is shutting down
+            return
         mode = status.mode.lower()
         focused = self.focused
         pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)

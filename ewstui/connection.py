@@ -13,11 +13,16 @@ The fix, in layers:
      every KEEPALIVE_IDLE seconds, so middleboxes don't consider it idle,
      and a connection that did die is detected and closed by the OS
      (urllib3 then reconnects instead of hanging).
-  2. Sessions idle for longer than IDLE_RESET seconds (wall clock, so time
-     asleep counts) are replaced with fresh ones before use.
-  3. A shorter request timeout (REQUEST_TIMEOUT) so a dead connection costs
-     seconds, not minutes; read-only client calls retry once on a fresh
-     connection (see ews_client.retry_on_dead_connection).
+  2. Sessions are replaced before use only if the Mac *slept* since they
+     were last used (keepalive can't survive that). Otherwise they're kept:
+     with NTLM every new connection needs a fresh login handshake, and the
+     F5 in front of Exchange intermittently stalls on that handshake's last
+     leg — so fewer new connections means fewer stalls. (An earlier version
+     replaced any session idle for 2 minutes, which forced exactly those
+     handshakes.)
+  3. A shorter request timeout (REQUEST_TIMEOUT) so a stall costs seconds,
+     not minutes; read-only client calls retry once on a fresh connection
+     (see ews_client.retry_on_dead_connection).
 """
 from __future__ import annotations
 
@@ -34,7 +39,9 @@ log = logging.getLogger(__name__)
 KEEPALIVE_IDLE = 30  # seconds of silence before the first keepalive probe
 KEEPALIVE_INTERVAL = 10  # seconds between probes
 KEEPALIVE_COUNT = 3  # unanswered probes before the OS declares the connection dead
-IDLE_RESET = 120  # seconds; a pooled session unused for longer is replaced before use
+# If wall-clock time since a session was last used exceeds monotonic time
+# (which stops while the Mac sleeps) by more than this, the Mac slept.
+SLEEP_DETECT = 30  # seconds
 REQUEST_TIMEOUT = 30  # seconds per EWS request (exchangelib default: 120)
 
 
@@ -72,15 +79,16 @@ def install_keepalive_adapter(verify_ssl: bool = True) -> None:
     BaseProtocol.HTTP_ADAPTER_CLS = KeepAliveHTTPAdapter if verify_ssl else KeepAliveNoVerifyHTTPAdapter
 
 
-def harden(protocol, clock=time.time) -> None:
-    """Shorter timeout, and replace pooled sessions that sat idle too long.
+def harden(protocol, clock=time.time, mono=time.monotonic) -> None:
+    """Shorter timeout, and replace pooled sessions after the Mac slept.
 
     Wraps this protocol instance's get_session/release_session: each
-    session is stamped when released; one handed out after more than
-    IDLE_RESET seconds is closed and replaced with a fresh one (a new TCP +
-    TLS connection and NTLM handshake, well under a second) instead of
-    being trusted. `clock` is wall-clock time so a sleeping Mac counts as
-    idle (time.monotonic doesn't advance during sleep on macOS).
+    session is stamped (wall clock and monotonic clock) when released. When
+    it's handed out again, wall-clock time elapsed minus monotonic time
+    elapsed is the time spent asleep (on macOS time.monotonic stops during
+    sleep); if that's over SLEEP_DETECT the session's connection can't have
+    survived, so it's closed and replaced. Idle-but-awake sessions are kept:
+    keepalive holds their connection (and its NTLM login) open.
     """
     if getattr(protocol, "_ewstui_hardened", False):
         return
@@ -89,16 +97,18 @@ def harden(protocol, clock=time.time) -> None:
 
     def fresh_get_session():
         session = get_session()
-        last = getattr(session, "ewstui_last_used", None)
-        if last is not None and clock() - last > IDLE_RESET:
-            log.info("session idle for %.0fs; reconnecting", clock() - last)
-            protocol.close_session(session)
-            session = protocol.create_session()
-            session.usage_count = 1
+        stamp = getattr(session, "ewstui_last_used", None)
+        if stamp is not None:
+            asleep = (clock() - stamp[0]) - (mono() - stamp[1])
+            if asleep > SLEEP_DETECT:
+                log.info("slept for %.0fs since this session was used; reconnecting", asleep)
+                protocol.close_session(session)
+                session = protocol.create_session()
+                session.usage_count = 1
         return session
 
     def stamped_release_session(session):
-        session.ewstui_last_used = clock()
+        session.ewstui_last_used = (clock(), mono())
         release_session(session)
 
     protocol.get_session = fresh_get_session
