@@ -159,6 +159,12 @@ of opening an empty UI.
   `--ntlm-no-cbt --domain PROD --username jdoe`.
 - In zsh/bash, quote `DOMAIN\user` (`--username 'PROD\jdoe'`) or the
   backslash is eaten — or use `--domain` instead.
+- **NTLM logins stall or time out** behind a gateway (the connection
+  indicator sits on `◐ waiting for server`, or requests keep timing
+  out): gateways such as F5 can hang on NTLM's multi-step login. Try
+  Basic with your *plain* user id — `--auth basic --username B123456`
+  (still encrypted over HTTPS, and no handshake to stall on) — and save
+  it once with `--account NAME --auth basic --username B123456`.
 - **Connection indicator**: the right of the status bar shows
   `● connected`, `● working` (a request is running),
   `◐ waiting for server 12s` (a slow or stalled request — the seconds

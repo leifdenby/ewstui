@@ -121,6 +121,30 @@ def test_ntlm_timeout_hint_suggests_disabling_cbt():
     assert "--ntlm-no-cbt" not in auth.explain_error(err, "basic")
 
 
+def test_timeout_hint_leads_with_basic_and_the_plain_user_id():
+    """What fixed the stalling F5: Basic with the plain user id."""
+    hint = auth.explain_error(ErrorTimeoutExpired("Reraised from ReadTimeout()"), "NTLM")
+    first_tip = hint.split("   - ")[1]
+    assert "--auth basic --username <your plain user id>" in first_tip
+
+
+def test_basic_401_hint_suggests_the_plain_user_id_first():
+    hint = auth.explain_error(UnauthorizedError("Invalid credentials"), "basic")
+    forms = hint.split("a different username form:")[1]
+    assert forms.index("plain user id") < forms.index("DOMAIN") < forms.index("UPN")
+
+
+@pytest.mark.parametrize(("method", "shown"), [("basic", False), ("ntlm", True), ("auto", True)])
+def test_channel_binding_notice_only_when_ntlm_can_be_used(monkeypatch, capsys, method, shown):
+    from exchangelib import NTLM, transport
+
+    monkeypatch.setitem(transport.AUTH_TYPE_MAP, NTLM, transport.AUTH_TYPE_MAP[NTLM])
+    monkeypatch.setattr(auth, "_password_account", lambda cfg, auth_type: SimpleNamespace(protocol=fake_protocol()))
+    cfg = entry.config_from_args(["--email", "me@example.test", "--auth", method, "--ntlm-no-cbt"])
+    auth.get_account(cfg)
+    assert ("NTLM channel binding disabled" in capsys.readouterr().err) is shown
+
+
 def test_ntlm_no_cbt_flag_disables_channel_binding(monkeypatch):
     from exchangelib import NTLM, transport
 

@@ -298,7 +298,8 @@ def _get_account(cfg: Config) -> Account:
         from exchangelib import transport
 
         transport.AUTH_TYPE_MAP[NTLM] = functools.partial(requests_ntlm.HttpNtlmAuth, send_cbt=False)
-        _status("NTLM channel binding disabled (--ntlm-no-cbt)")
+        if cfg.auth_method in (AuthMethod.NTLM, AuthMethod.AUTO):  # irrelevant (and confusing) otherwise
+            _status("NTLM channel binding disabled (--ntlm-no-cbt)")
 
     method = cfg.auth_method
 
@@ -419,9 +420,12 @@ def explain_error(e: Exception, auth_type: str | None = None) -> str:
     msg = f"{type(e).__name__}: {e}"
     # exchangelib re-raises requests' connection/read timeouts as ErrorTimeoutExpired
     if isinstance(e, (ErrorTimeoutExpired, requests.exceptions.Timeout)):
-        tips = ["--auth basic (if the server offers Basic; it's still encrypted over HTTPS)"]
+        tips = [
+            "--auth basic --username <your plain user id> (if the server offers Basic; still encrypted "
+            "over HTTPS). Gateways such as F5 that stall on NTLM logins usually accept it"
+        ]
         if auth_type == NTLM:
-            tips.insert(0, "--ntlm-no-cbt (NTLM behind a TLS-terminating proxy often hangs on channel binding)")
+            tips.append("--ntlm-no-cbt (NTLM behind a TLS-terminating proxy often hangs on channel binding)")
         return (
             f"{msg}\n"
             "  The server accepted the connection but never answered the login. Things to try:\n"
@@ -435,8 +439,9 @@ def explain_error(e: Exception, auth_type: str | None = None) -> str:
             f"  The server rejected the credentials (HTTP 401{f', {auth_type} auth' if auth_type else ''}). "
             "Things to try:\n"
             "   - check the password\n"
-            "   - a different username form: 'DOMAIN\\user' (quote it in the shell), your email,\n"
-            "     plain user id, or your UPN (user@domain) if it differs from your email\n"
+            "   - a different username form: your plain user id (e.g. B123456 — often what Basic\n"
+            "     wants behind a gateway), 'DOMAIN\\user' (quote it in the shell), your email,\n"
+            "     or your UPN (user@domain)\n"
             f"   - a different auth method: {other} (or oauth2 if the server only offers Bearer)"
         )
     if isinstance(e, ErrorNonExistentMailbox):
