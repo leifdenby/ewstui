@@ -162,9 +162,9 @@ async def test_selection_works_in_thread_view(tmp_path):
         await pilot.pause()
         await pilot.press("t")
         await pilot.pause()
-        await pilot.press("j", "V", "j")  # s1 (sent reply) + m2 in the thread
+        await pilot.press("j", "V", "j")  # m2 (newest, on top) + s1 (your sent message) in the thread
         await pilot.pause()
-        assert app.query_one("#messages", MessageTable).selected_ids() == ["s1", "m2"]
+        assert app.query_one("#messages", MessageTable).selected_ids() == ["m2", "s1"]
         await pilot.press("A")
         await settle(app, pilot)
         assert {"s1", "m2"} <= set(ids(app, "archive"))  # s1 archived from Sent Items

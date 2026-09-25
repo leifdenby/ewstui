@@ -224,11 +224,13 @@ class MessageTable(DataTable):
                 self._add_message_row(m, m.subject)
             return
         for thread in build_threads(self._messages):
-            for m, prefix in tree_rows(thread):
-                # mutt-style: a reply with the thread's own topic shows only
-                # its tree guide; a changed subject is shown in full.
-                subject = m.subject if not prefix or topic(m.subject) != thread.topic else ""
-                self._add_message_row(m, prefix + subject)
+            # Upside-down tree: newest message on top, the original at the bottom.
+            for i, (m, prefix) in enumerate(tree_rows(thread, newest_on_top=True)):
+                # The top row (newest) and the original show the subject; a
+                # reply in between with the thread's own topic shows only its
+                # tree guide (mutt-style); a changed subject is shown in full.
+                show = i == 0 or not prefix or topic(m.subject) != thread.topic
+                self._add_message_row(m, prefix + (m.subject if show else ""))
 
     def _add_message_row(self, m: MessageSummary, subject: str) -> None:
         flag = "" if m.is_read else "●"

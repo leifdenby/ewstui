@@ -69,11 +69,16 @@ def _parent(m: MessageSummary, by_index: dict[bytes, MessageSummary]) -> Message
     return None
 
 
-def tree_rows(thread: Thread) -> list[tuple[MessageSummary, str]]:
+def tree_rows(thread: Thread, newest_on_top: bool = False) -> list[tuple[MessageSummary, str]]:
     """(message, tree prefix) in display order: the thread's first message
     unprefixed, replies under the message they answer with ├─ / └─ / │
     guides, siblings oldest first. Messages whose parent isn't listed
     (e.g. an original that isn't in this folder) hang under the first one.
+
+    `newest_on_top` flips the tree vertically: replies are ordered by their
+    branch's latest activity and the rows reversed, so the newest message
+    is the top row and the original the bottom one, with ┌─ guides running
+    down from each reply to the message it answers.
     """
     msgs = thread.messages  # oldest first
     by_index = {m.conversation_index: m for m in msgs if m.conversation_index}
@@ -84,6 +89,21 @@ def tree_rows(thread: Thread) -> list[tuple[MessageSummary, str]]:
         # a cycle and every message is reached from the root.
         parent = _parent(m, by_index) or root
         children[parent.id].append(m)
+
+    if newest_on_top:
+        # Order each level by its branch's latest message, oldest first; once
+        # the rows are reversed, the most recently active branch is on top
+        # and, recursively, the newest message is the very first row.
+        latest: dict[str, float] = {}
+
+        def branch_latest(m: MessageSummary) -> float:
+            if m.id not in latest:
+                latest[m.id] = max([_when(m)] + [branch_latest(k) for k in children[m.id]])
+            return latest[m.id]
+
+        for kids in children.values():
+            kids.sort(key=branch_latest)
+
     rows: list[tuple[MessageSummary, str]] = []
 
     def walk(m: MessageSummary, prefix: str, last: bool, top: bool) -> None:
@@ -94,6 +114,10 @@ def tree_rows(thread: Thread) -> list[tuple[MessageSummary, str]]:
             walk(kid, below, i == len(kids) - 1, False)
 
     walk(root, "", True, True)
+    if newest_on_top:
+        # Upside down: a last child's └─ becomes ┌─ (the line now runs down to
+        # its parent); ├─ and │ read the same either way.
+        return [(m, prefix.replace("└─", "┌─")) for m, prefix in reversed(rows)]
     return rows
 
 

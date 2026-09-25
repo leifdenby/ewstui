@@ -80,6 +80,39 @@ def test_tree_nests_replies_under_the_message_they_answer():
     ]
 
 
+def upside_down(messages) -> list[str]:
+    (thread,) = build_threads(messages)
+    return [prefix + m.id for m, prefix in tree_rows(thread, newest_on_top=True)]
+
+
+def test_newest_on_top_flips_the_tree_with_the_newest_message_first():
+    assert upside_down([
+        msg("root", "c", 10, index=idx()),
+        msg("a", "c", 8, index=idx("a")),
+        msg("a1", "c", 7, index=idx("a", "x")),  # reply to a
+        msg("b", "c", 5, index=idx("b")),
+        msg("b1", "c", 1, index=idx("b", "y")),  # reply to b: the newest
+    ]) == [
+        "   ┌─ b1",  # newest on top
+        "┌─ b",
+        "│  ┌─ a1",
+        "├─ a",
+        "root",  # the original at the bottom
+    ]
+
+
+def test_newest_on_top_puts_the_most_recently_active_branch_first():
+    # a's branch has the latest activity (a1, 1h ago) though b itself is newer than a
+    rows = upside_down([
+        msg("root", "c", 10, index=idx()),
+        msg("a", "c", 9, index=idx("a")),
+        msg("b", "c", 5, index=idx("b")),
+        msg("a1", "c", 1, index=idx("a", "x")),
+    ])
+    assert rows[0].endswith("a1") and rows[-1] == "root"
+    assert [r.split()[-1] for r in rows] == ["a1", "a", "b", "root"]
+
+
 def test_missing_parent_attaches_to_nearest_listed_ancestor_or_first_message():
     # The original isn't in this folder: replies hang under the oldest listed one,
     # and a grandchild whose parent is missing goes to its grandparent.
@@ -154,12 +187,13 @@ async def test_thread_is_a_tree_placed_by_its_newest_message(tmp_path):
         await pilot.pause()
         # m1 (1h) is newest; the EWS thread's newest message m2 (3h) places
         # it next, before m3 (1 day) — even though its root s1 is 26h old.
-        assert ids(app) == ["m1", "s1", "m2", "m3", "m4"]
+        # Upside-down tree: the newest reply on top, the original below it.
+        assert ids(app) == ["m1", "m2", "s1", "m3", "m4"]
         assert subjects(app)[1:3] == [
-            "Re: EWS bridge project (sent)",  # your reply, from Sent Items, starts the tree here
-            "└─ ",  # their answer: same topic, so just the tree guide (mutt-style)
+            "┌─ Re: EWS bridge project",  # their answer, newest: top row, subject shown
+            "Re: EWS bridge project (sent)",  # your message it answers (from Sent Items), at the bottom
         ]
-        assert rows(app)[2][0] == "●" and rows(app)[2][3] == "colleague@corp.example"
+        assert rows(app)[1][0] == "●" and rows(app)[1][3] == "colleague@corp.example"
 
 
 async def test_every_row_is_a_message_you_can_open_and_act_on(tmp_path):
@@ -167,11 +201,12 @@ async def test_every_row_is_a_message_you_can_open_and_act_on(tmp_path):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         table = app.query_one("#messages", MessageTable)
-        await pilot.press("j")  # s1, which lives in Sent Items
+        await pilot.press("j", "j")  # s1, which lives in Sent Items
+        await app.workers.wait_for_complete()
         await pilot.pause()
         assert table._current_message_id() == "s1"
         assert "colleague@corp.example" in preview_text(app)  # loaded from the sent folder
-        await pilot.press("j", "d")  # delete m2 itself
+        await pilot.press("k", "d")  # delete m2 itself
         await pilot.pause()
         assert "m2" not in [m.id for m in app.mail_client.list_messages("inbox")]
         assert "s1" in [m.id for m in app.mail_client.list_messages("sent")]
@@ -186,7 +221,7 @@ async def test_t_toggles_and_keeps_the_cursor_on_the_message(tmp_path):
         await pilot.press("j", "t")  # on m2, threads on
         await pilot.pause()
         assert table.threaded and table._current_message_id() == "m2"
-        assert ids(app) == ["m1", "s1", "m2", "m3", "m4"]
+        assert ids(app) == ["m1", "m2", "s1", "m3", "m4"]
         await pilot.press("t")
         await pilot.pause()
         assert not table.threaded and table._current_message_id() == "m2"
@@ -200,7 +235,7 @@ async def test_h_still_moves_to_folders_and_l_opens(tmp_path):
     app = make_app(tmp_path, "--threads")
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("j", "j", "l")  # open m2 (a reply row)
+        await pilot.press("j", "l")  # open m2 (a reply row)
         await pilot.pause()
         assert isinstance(app.focused, PreviewPane)
         await pilot.press("h", "h")
@@ -212,13 +247,13 @@ async def test_deleting_a_sent_reply_uses_sent_items_and_undo_brings_it_back(tmp
     app = make_app(tmp_path, "--threads")
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("j", "d")  # s1
+        await pilot.press("j", "j", "d")  # s1
         await pilot.pause()
         assert "s1" in [m.id for m in app.mail_client.list_messages("trash")]
         assert ids(app) == ["m1", "m2", "m3", "m4"]  # m2 now stands alone
         await pilot.press("u")
         await pilot.pause()
-        assert ids(app) == ["m1", "s1", "m2", "m3", "m4"]
+        assert ids(app) == ["m1", "m2", "s1", "m3", "m4"]
         assert app.query_one("#messages", MessageTable)._current_message_id() == "s1"
 
 
@@ -226,7 +261,7 @@ async def test_refresh_keeps_the_cursor_on_the_same_message(tmp_path):
     app = make_app(tmp_path, "--threads")
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
-        await pilot.press("j", "j")  # m2
+        await pilot.press("j")  # m2
         await pilot.pause()
         app.mail_client.get_message("inbox", "m1").is_read = True  # something changes
         await pilot.press("ctrl+l")

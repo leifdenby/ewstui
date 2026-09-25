@@ -323,10 +323,11 @@ runs in the background, one failure doesn't stop the rest, and a single
 
 **Thread view** (`t`, or start in it with `threads = true` in your
 account / `--threads`): messages in the same conversation are shown
-together as a tree, mutt-style — the first message, with each reply
-nested under the message it answers (`├─`, `└─`, `│`), placed in the
-list by the thread's most recent message. Replies that keep the
-thread's subject show just the tree guide; a changed subject is shown.
+together as an upside-down tree — the newest message on top, the
+original at the bottom, and each reply connected to the message it
+answers (`┌─`, `├─`, `│`) — placed in the list by the thread's most
+recent message. The top row and the original show the subject; replies
+in between that keep the thread's subject show just the tree guide.
 Every row is still one message, so opening and `r`/`d`/`m`/... work on
 exactly the row you're on. Like Outlook, threads include your own
 replies from Sent Items, marked `(sent)` — ewstui fetches one page of
