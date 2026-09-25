@@ -69,5 +69,9 @@ class PreviewPane(VerticalScroll):
         body.update(text)
         self.scroll_home(animate=False)
 
+    def show_loading(self) -> None:
+        self.query_one("#preview-body", Static).update("[dim]Loading…[/dim]")
+        self.scroll_home(animate=False)
+
     def clear(self) -> None:
         self.query_one("#preview-body", Static).update("")

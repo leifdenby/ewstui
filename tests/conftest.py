@@ -38,6 +38,21 @@ class FakePresence:
         return self.allow
 
 
+def fake_protocol(**attrs):
+    """Stand-in for exchangelib's Protocol, with the session-pool methods
+    connection.harden() wraps."""
+    from types import SimpleNamespace
+
+    defaults = dict(
+        TIMEOUT=120,
+        get_session=lambda: SimpleNamespace(usage_count=0),
+        release_session=lambda session: None,
+        close_session=lambda session: None,
+        create_session=lambda: SimpleNamespace(usage_count=0),
+    )
+    return SimpleNamespace(**(defaults | attrs))
+
+
 @pytest.fixture(autouse=True)
 def isolated_config_dir(tmp_path, monkeypatch):
     """Never read or write the user's real ~/.config/ewstui/config.toml."""

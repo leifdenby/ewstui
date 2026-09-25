@@ -43,7 +43,7 @@ from exchangelib import (
 )
 from exchangelib.errors import UnauthorizedError
 
-from . import keychain
+from . import connection, keychain
 from .config import AuthMethod, Config
 
 log = logging.getLogger(__name__)
@@ -278,11 +278,19 @@ def _kerberos_account(cfg: Config) -> Account:
 # --------------------------------------------------------------------------
 
 def get_account(cfg: Config) -> Account:
+    """Log in with the configured method; the returned account's
+    connections use TCP keepalive and are refreshed after idle periods
+    (see connection.py), so a long pause doesn't freeze the next request."""
+    # Before any session exists: every connection gets keepalive sockets.
+    connection.install_keepalive_adapter(verify_ssl=cfg.verify_ssl)
     if not cfg.verify_ssl:
-        from exchangelib.protocol import BaseProtocol, NoVerifyHTTPAdapter
-
-        BaseProtocol.HTTP_ADAPTER_CLS = NoVerifyHTTPAdapter
         _status("WARNING: TLS certificate verification is disabled (--no-verify-ssl)")
+    account = _get_account(cfg)
+    connection.harden(account.protocol)
+    return account
+
+
+def _get_account(cfg: Config) -> Account:
     if not cfg.ntlm_send_cbt:
         import functools
 

@@ -8,6 +8,7 @@ from exchangelib.errors import ErrorTimeoutExpired, UnauthorizedError
 
 from ewstui import __main__ as entry
 from ewstui import auth
+from conftest import fake_protocol
 
 URL = "https://mail.example.test/EWS/Exchange.asmx"
 
@@ -124,7 +125,7 @@ def test_ntlm_no_cbt_flag_disables_channel_binding(monkeypatch):
     from exchangelib import NTLM, transport
 
     monkeypatch.setitem(transport.AUTH_TYPE_MAP, NTLM, transport.AUTH_TYPE_MAP[NTLM])
-    monkeypatch.setattr(auth, "_password_account", lambda cfg, auth_type: None)
+    monkeypatch.setattr(auth, "_password_account", lambda cfg, auth_type: SimpleNamespace(protocol=fake_protocol()))
     cfg = entry.config_from_args(["--email", "me@example.test", "--auth", "ntlm", "--ntlm-no-cbt"])
     auth.get_account(cfg)
     ntlm_auth = transport.get_auth_instance(NTLM, username="u", password="p")

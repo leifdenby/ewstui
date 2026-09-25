@@ -159,6 +159,15 @@ of opening an empty UI.
   `--ntlm-no-cbt --domain PROD --username jdoe`.
 - In zsh/bash, quote `DOMAIN\user` (`--username 'PROD\jdoe'`) or the
   backslash is eaten — or use `--domain` instead.
+- **Freezes after being idle**: gateways, firewalls and sleep can drop
+  idle connections without telling either end. ewstui guards against
+  this: TCP keepalive on every connection (probes after 30 s of
+  silence), connections unused for over 2 minutes are replaced before
+  the next request, requests time out after 30 s (not exchangelib's
+  120 s) with one retry for reads, and emails load in the background so
+  the UI stays usable. A `connection problem ... retrying` line in
+  `ewstui.log` shows a retry; with `--debug` you also see `session idle
+  ... reconnecting` each time a stale connection is replaced.
 
 ## Priority list (`2`)
 

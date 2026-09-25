@@ -8,6 +8,7 @@ from exchangelib.errors import UnauthorizedError
 
 from ewstui import __main__ as entry
 from ewstui import auth, keychain
+from conftest import fake_protocol
 
 URL = "https://mail.example.test/EWS/Exchange.asmx"
 USER = "PROD\\jdoe"
@@ -28,7 +29,7 @@ class Recorder:
         reject = self.reject
 
         class FakeAccount:
-            protocol = SimpleNamespace(TIMEOUT=120, credentials=SimpleNamespace(username=username, password=self.passwords[-1]))
+            protocol = fake_protocol(credentials=SimpleNamespace(username=username, password=self.passwords[-1]))
 
             @property
             def inbox(self):

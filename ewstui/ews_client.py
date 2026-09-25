@@ -13,6 +13,7 @@ backend in `demo_backend.py` can stand in for this module exactly.
 """
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -22,6 +23,33 @@ from typing import NamedTuple
 from exchangelib import Account, EWSDateTime, EWSTimeZone, Message
 
 log = logging.getLogger(__name__)
+
+
+def _is_dead_connection(e: Exception) -> bool:
+    import requests
+    from exchangelib.errors import ErrorTimeoutExpired
+
+    return isinstance(e, (ErrorTimeoutExpired, requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+
+
+def retry_on_dead_connection(func):
+    """Retry a *read-only* call once if the connection turned out to be
+    dead (timeout / reset). exchangelib has already retired the broken
+    session by then, so the retry goes out on a fresh connection. Not for
+    writes (send, move, delete, ...): if the first attempt did reach the
+    server, repeating it would do it twice.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if not _is_dead_connection(e):
+                raise
+            log.warning("%s: connection problem (%s), retrying once on a fresh connection", func.__name__, e)
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 @dataclass
@@ -258,6 +286,7 @@ class MailClient:
         self.account = account
         self.page_size = page_size
 
+    @retry_on_dead_connection
     def list_folders(self) -> list[FolderSummary]:
         folders = []
 
@@ -280,6 +309,7 @@ class MailClient:
         walk(self.account.root / "Top of Information Store" if False else self.account.msg_folder_root)
         return folders
 
+    @retry_on_dead_connection
     def default_folder_id(self) -> str:
         """The folder to open on startup: the Inbox, via its EWS
         well-known id so it's found regardless of display language.
@@ -300,6 +330,7 @@ class MailClient:
             stack.extend(f.children)
         raise KeyError(f"no such folder: {folder_id}")
 
+    @retry_on_dead_connection
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
         folder = self._folder_by_id(folder_id)
         limit = limit or self.page_size
@@ -328,10 +359,12 @@ class MailClient:
             )
         return out
 
+    @retry_on_dead_connection
     def sent_folder_id(self) -> str:
         """Sent Items, via its well-known id (works with localized names)."""
         return self.account.sent.id
 
+    @retry_on_dead_connection
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         folder = self._folder_by_id(folder_id)
         item = folder.get(id=message_id)
@@ -401,6 +434,7 @@ class MailClient:
         item.move(archive_folder)
         return MovedMessage(folder_id=archive_folder.id, message_id=item.id)
 
+    @retry_on_dead_connection
     def list_attachments(self, folder_id: str, message_id: str) -> list[AttachmentSummary]:
         from exchangelib import FileAttachment
 
@@ -420,6 +454,7 @@ class MailClient:
             )
         return out
 
+    @retry_on_dead_connection
     def save_attachment(self, folder_id: str, message_id: str, attachment_id: str, dest_dir: Path) -> Path:
         from exchangelib import FileAttachment
 
@@ -479,6 +514,7 @@ class CalendarClient:
         self.tz = EWSTimeZone.localzone()
         self._room_directory: list[Room] | None = None  # all rooms in the org's room lists, fetched once
 
+    @retry_on_dead_connection
     def search_rooms(self, query: str) -> list[RoomMatch]:
         """Rooms matching `query` (case-insensitive, name or address):
         first from the organisation's room lists (GetRoomLists/GetRooms,
@@ -516,6 +552,7 @@ class CalendarClient:
             self._room_directory = rooms
         return self._room_directory
 
+    @retry_on_dead_connection
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
         end_ews = EWSDateTime.from_datetime(end).astimezone(self.tz)
@@ -538,6 +575,7 @@ class CalendarClient:
             )
         return out
 
+    @retry_on_dead_connection
     def rooms_day(self, rooms: list[Room], day: date) -> RoomsDay:
         """Free/busy for every room over the whole of `day`, plus your own
         Outlook working hours for that weekday, in one EWS

@@ -356,15 +356,35 @@ class EwstuiApp(App):
         self._update_status()
 
     def open_message(self, message_id: str) -> None:
+        """Show a message in the reading pane. The fetch runs in a thread,
+        so a slow or stalled server never freezes the UI; moving on to
+        another message cancels a fetch still in flight."""
         if not self.current_folder_id:
             return
         self.current_message_id = message_id
+        self.query_one("#preview", PreviewPane).show_loading()
+        self._load_preview(self._folder_of(message_id), message_id)
+
+    @work(thread=True, exclusive=True, group="preview")
+    def _load_preview(self, folder_id: str, message_id: str) -> None:
+        worker = get_current_worker()
         try:
-            detail = self.mail_client.get_message(self._folder_of(message_id), message_id)
+            detail = self.mail_client.get_message(folder_id, message_id)
         except Exception as e:  # noqa: BLE001
-            self.notify(f"Failed to load message: {e}", severity="error", timeout=10)
+            if not worker.is_cancelled:
+                self.call_from_thread(self._preview_failed, message_id, e)
             return
-        self.query_one("#preview", PreviewPane).show_message(detail)
+        if not worker.is_cancelled:
+            self.call_from_thread(self._show_preview, message_id, detail)
+
+    def _show_preview(self, message_id: str, detail) -> None:
+        if message_id == self.current_message_id:  # ignore a message the cursor already left
+            self.query_one("#preview", PreviewPane).show_message(detail)
+
+    def _preview_failed(self, message_id: str, error: Exception) -> None:
+        if message_id == self.current_message_id:
+            self.query_one("#preview", PreviewPane).clear()
+            self.notify(f"Failed to load message: {error}", severity="error", timeout=10)
 
     def load_priority_list(self) -> None:
         self.query_one("#priority", PriorityView).set_entries(self.priority_store.list_entries())
