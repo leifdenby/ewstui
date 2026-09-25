@@ -31,6 +31,7 @@ from .screens import (
 )
 from .folder_picker import MoveToFolderScreen
 from .links import LinkPickerScreen, extract_links, open_link
+from .message_cache import MessageCache
 from .room_grid import FindRoomScreen
 from .theme import MUTED_SLATE, THEMES
 from .keymap import STATUS_HINTS
@@ -45,6 +46,9 @@ log = logging.getLogger(__name__)
 
 # How often the open priority view checks todo.txt for outside edits (a stat).
 PRIORITY_WATCH_SECONDS = 1.0
+# Prefetch the next few messages once the cursor has rested on one this long.
+PREFETCH_DELAY = 0.5  # seconds
+PREFETCH_COUNT = 2
 
 
 def ews_guard(what: str):
@@ -188,7 +192,8 @@ class EwstuiApp(App):
         # (entry key, folder id, message id, Message-ID) to show once the Mail
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
-        self._preview_cache: tuple | None = None  # (message id, MessageDetail) shown in the reading pane
+        self._message_cache = MessageCache()  # fully loaded messages, this session (see message_cache.py)
+        self._prefetch_timer = None
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
@@ -401,12 +406,17 @@ class EwstuiApp(App):
         self._update_status()
 
     def open_message(self, message_id: str) -> None:
-        """Show a message in the reading pane. The fetch runs in a thread,
-        so a slow or stalled server never freezes the UI; moving on to
-        another message cancels a fetch still in flight."""
+        """Show a message in the reading pane: straight from the in-memory
+        cache when it's there and up to date, otherwise fetched in a thread
+        (so a slow server never freezes the UI; moving on cancels a fetch
+        still in flight). Either way, the next few are then prefetched."""
         if not self.current_folder_id:
             return
         self.current_message_id = message_id
+        cached = self._previewed(message_id)
+        if cached is not None:
+            self._show_preview(message_id, cached)
+            return
         self.query_one("#preview", PreviewPane).show_loading()
         self._load_preview(self._folder_of(message_id), message_id)
 
@@ -423,20 +433,74 @@ class EwstuiApp(App):
             self.call_from_thread(self._show_preview, message_id, detail)
 
     def _show_preview(self, message_id: str, detail) -> None:
+        # Cached for revisits, reply, links and add-to-priority.
+        self._message_cache.put(message_id, detail)
         if message_id == self.current_message_id:  # ignore a message the cursor already left
             self.query_one("#preview", PreviewPane).show_message(detail)
-            # Reused by reply / add-to-priority, so they need no request of their own.
-            self._preview_cache = (message_id, detail)
+            self._schedule_prefetch()
         # Priority entries added before ewstui stored Message-IDs get theirs
         # the first time the message is opened (no extra request needed).
         if getattr(detail, "internet_message_id", None):
             self.priority_store.remember_internet_id(message_id, detail.internet_message_id)
 
     def _previewed(self, message_id: str):
-        """The full message if it's the one loaded in the reading pane."""
-        if self._preview_cache is not None and self._preview_cache[0] == message_id:
-            return self._preview_cache[1]
-        return None
+        """The full message from the in-memory cache, if it's there and its
+        change key still matches what the message list says (so an email
+        changed elsewhere is fetched again rather than shown stale)."""
+        summary = self.query_one("#messages", MessageTable)._by_id.get(message_id)
+        return self._message_cache.get(message_id, summary.changekey if summary else None)
+
+    # -- prefetching the next messages ----------------------------------------------
+
+    def _schedule_prefetch(self) -> None:
+        """Once the cursor has rested on a message for PREFETCH_DELAY, fetch
+        the next PREFETCH_COUNT in the background so j shows them at once."""
+        if self._prefetch_timer is not None:
+            self._prefetch_timer.stop()
+        self._prefetch_timer = self.set_timer(PREFETCH_DELAY, self._start_prefetch)
+
+    def _start_prefetch(self) -> None:
+        try:
+            table = self.query_one("#messages", MessageTable)
+        except NoMatches:  # the timer fired while the app is shutting down
+            return
+        current = self.current_message_id
+        if current is None:
+            return
+        try:
+            row = table.get_row_index(current)
+        except RowDoesNotExist:
+            return
+        todo = []
+        for r in range(row + 1, min(row + 1 + PREFETCH_COUNT, table.row_count)):  # the next few rows
+            message_id = table.coordinate_to_cell_key((r, 0)).row_key.value
+            if self._previewed(message_id) is None:
+                todo.append((self._folder_of(message_id), message_id))
+        if todo:
+            self._set_prefetching(len(todo))
+            self._prefetch(todo)
+
+    @work(thread=True, exclusive=True, group="prefetch")
+    def _prefetch(self, todo: list) -> None:
+        worker = get_current_worker()
+        with connection.background():  # not shown as waiting/problems in the status bar
+            for i, (folder_id, message_id) in enumerate(todo):
+                if worker.is_cancelled:  # the cursor moved on: a newer prefetch replaces this one
+                    return
+                try:
+                    detail = self.mail_client.get_message(folder_id, message_id)
+                except Exception:  # noqa: BLE001 - just a prefetch; fetched on demand later
+                    log.info("prefetch failed", exc_info=True)
+                    continue
+                self.call_from_thread(self._message_cache.put, message_id, detail)
+                self.call_from_thread(self._set_prefetching, len(todo) - i - 1)
+        self.call_from_thread(self._set_prefetching, 0)
+
+    def _set_prefetching(self, n: int) -> None:
+        try:
+            self.query_one(StatusBar).prefetching = n
+        except NoMatches:  # shutting down
+            pass
 
     def _preview_failed(self, message_id: str, error: Exception) -> None:
         if message_id == self.current_message_id:

@@ -86,6 +86,7 @@ class StatusBar(Widget):
     # Connection indicator: (text, role), role "ok" / "busy" / "slow" /
     # "error"; ("", "") hides it (demo mode).
     conn: reactive[tuple] = reactive(("", ""))
+    prefetching: reactive[int] = reactive(0)  # background downloads in progress
 
     def render(self) -> Text:
         v = _vars(self)
@@ -94,6 +95,9 @@ class StatusBar(Widget):
             (f"  {self.hints}", v["tux-status-fg"]),
         )
         right = Text()
+        if self.prefetching:
+            right.append(f"⇣ prefetching {self.prefetching}", style=v["tux-dim"])
+            right.append(" · ", style=v["tux-dim"])
         text, role = self.conn
         if text:
             colour = {"ok": v["success"], "busy": v["accent"], "slow": v["warning"], "error": v["error"]}.get(

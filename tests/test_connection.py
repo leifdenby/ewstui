@@ -16,6 +16,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import CalendarClient, MailClient, retry_on_dead_connection
+from ewstui.message_cache import MessageCache
 from ewstui.widgets.message_table import MessageTable
 
 # -- 1. TCP keepalive ----------------------------------------------------------------
@@ -217,7 +218,7 @@ async def test_reply_timeout_is_a_notice_not_a_crash(tmp_path, monkeypatch):
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         await app.workers.wait_for_complete()
-        app._preview_cache = None  # not loaded in the reading pane: must fetch
+        app._message_cache = MessageCache()  # nothing cached: must fetch
         monkeypatch.setattr(app.mail_client, "get_message", _timeout)
         original = app.notify
         app.notify = lambda msg, **kw: (seen.append(msg), original(msg, **kw))

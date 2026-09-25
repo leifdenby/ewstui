@@ -26,6 +26,7 @@ The fix, in layers:
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
 import threading
@@ -51,23 +52,41 @@ POOL_SIZE = 3
 SLOW_AFTER = 3  # seconds before a running request shows as "waiting for server"
 
 
+_local = threading.local()
+
+
+@contextlib.contextmanager
+def background():
+    """Mark requests made in this block (this thread) as background work,
+    e.g. prefetching: the status bar counts them separately, and a slow or
+    failed one doesn't show as a connection problem."""
+    previous = getattr(_local, "background", False)
+    _local.background = True
+    try:
+        yield
+    finally:
+        _local.background = previous
+
+
 class ConnectionMonitor:
     """What the connection is doing, for the status bar. Fed by the session
     pool hooks in harden(): a request starts when a session is handed out,
     succeeds when it's given back, fails when exchangelib retires the
-    session (timeouts, resets). Thread-safe: requests run in workers."""
+    session (timeouts, resets). Thread-safe: requests run in workers.
+    Requests made inside `background()` are tracked apart from the ones
+    the user is waiting for."""
 
     def __init__(self, mono=time.monotonic):
         self._mono = mono
         self._lock = threading.Lock()
-        self._running: dict[int, float] = {}  # id(session) -> start time
+        self._running: dict[int, tuple[float, bool]] = {}  # id(session) -> (start, background?)
         self.last_ok: float | None = None
         self.last_error: float | None = None
         self.active = False  # set by harden(); stays False in --demo
 
     def started(self, session) -> None:
         with self._lock:
-            self._running[id(session)] = self._mono()
+            self._running[id(session)] = (self._mono(), getattr(_local, "background", False))
 
     def succeeded(self, session) -> None:
         with self._lock:
@@ -76,14 +95,20 @@ class ConnectionMonitor:
 
     def failed(self, session) -> None:
         with self._lock:
-            self._running.pop(id(session), None)
-            self.last_error = self._mono()
+            started = self._running.pop(id(session), None)
+            if started is None or not started[1]:  # a failed prefetch isn't worth an alarm
+                self.last_error = self._mono()
+
+    def background_count(self) -> int:
+        with self._lock:
+            return sum(1 for _, bg in self._running.values() if bg)
 
     def state(self) -> tuple[str, str]:
-        """(text, role) — role is "ok", "busy", "slow" or "error"."""
+        """(text, role) — role is "ok", "busy", "slow" or "error". Only
+        foreground requests count."""
         now = self._mono()
         with self._lock:
-            oldest = min(self._running.values(), default=None)
+            oldest = min((start for start, bg in self._running.values() if not bg), default=None)
         if oldest is not None:
             waited = now - oldest
             if waited >= SLOW_AFTER:

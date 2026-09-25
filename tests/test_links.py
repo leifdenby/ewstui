@@ -138,7 +138,9 @@ async def test_fetches_the_message_if_it_is_not_loaded_yet(tmp_path, opened):
     app = make_app(tmp_path)
     async with app.run_test(size=(160, 40)) as pilot:
         await on_m3(app, pilot)
-        app._preview_cache = None  # as if the reading pane hadn't loaded it
+        from ewstui.message_cache import MessageCache
+
+        app._message_cache = MessageCache()  # as if it had never been loaded
         await pilot.press("U")
         await app.workers.wait_for_complete()
         await pilot.pause()

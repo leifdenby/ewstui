@@ -165,6 +165,14 @@ of opening an empty UI.
   Basic with your *plain* user id — `--auth basic --username B123456`
   (still encrypted over HTTPS, and no handshake to stall on) — and save
   it once with `--account NAME --auth basic --username B123456`.
+- **Caching and prefetching**: emails you've opened are kept in memory
+  for the session (the most recent 200; nothing is written to disk), so
+  going back to one is instant. Exchange's change key — already in the
+  message list — tells ewstui when an email changed, so a stale copy is
+  never shown. When the cursor rests on an email, the next two are
+  downloaded in the background; the status bar shows `⇣ prefetching 2`
+  meanwhile. Prefetching never counts as "waiting for server" or as a
+  connection problem.
 - **Connection indicator**: the right of the status bar shows
   `● connected`, `● working` (a request is running),
   `◐ waiting for server 12s` (a slow or stalled request — the seconds
