@@ -8,6 +8,7 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import RowDoesNotExist
 
 from ..ews_client import MessageSummary
+from ..threads import build_threads, topic, tree_rows
 
 
 def _fmt_when(dt, now: datetime | None = None) -> str:
@@ -40,6 +41,7 @@ class MessageTable(DataTable):
         Binding("p", "add_to_priority_with_note", "Add to priority + note"),
         Binding("A", "archive", "Archive"),
         Binding("m", "move", "Move"),
+        Binding("t", "toggle_threads", "Threads"),
         Binding("v", "view_attachments", "Attachments"),
     ]
 
@@ -85,6 +87,15 @@ class MessageTable(DataTable):
             self.message_id = message_id
             super().__init__()
 
+    class ThreadsToggled(Message):
+        """t: the app refetches (threads need your Sent Items replies) and
+        re-renders with `threaded`, keeping the cursor on `message_id`."""
+
+        def __init__(self, threaded: bool, message_id: str | None) -> None:
+            self.threaded = threaded
+            self.message_id = message_id
+            super().__init__()
+
     class MoveRequested(Message):
         def __init__(self, message_id: str) -> None:
             self.message_id = message_id
@@ -98,32 +109,77 @@ class MessageTable(DataTable):
     class FocusFoldersRequested(Message):
         """h: move keyboard focus back to the folder pane."""
 
+    def __init__(self, *args, threaded: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.threaded = threaded
+        self._messages, self._by_id = [], {}
+
     def on_mount(self) -> None:
         self.cursor_type = "row"
         # Date before From/Subject, so it isn't pushed off the pane by a
         # long subject.
         self.add_columns(" ", "Received", "From", "Subject")
 
-    def set_messages(self, messages: list[MessageSummary], keep_cursor_on: str | None = None) -> None:
-        """Replace the rows. With `keep_cursor_on`, the cursor stays on
-        that message (if still listed) and no MessageOpened is posted, so
-        a background refresh doesn't refetch/reset the preview.
+    # -- rows: flat list, or threads ------------------------------------------
+    #
+    # Thread view: every message is still its own row (so every action
+    # applies to exactly the row you're on), but grouped by conversation:
+    # each thread is a tree — its first message, replies nested under the
+    # message they answer with ├─/└─ guides — and threads are placed in the
+    # newest-first order by their most recent message.
+
+    threaded = False
+    _messages: list[MessageSummary]
+    _by_id: dict[str, MessageSummary]
+    _home_folder: str | None = None
+
+    def set_messages(
+        self,
+        messages: list[MessageSummary],
+        keep_cursor_on: str | None = None,
+        home_folder_id: str | None = None,
+    ) -> None:
+        """Replace the rows. With `keep_cursor_on` (a message id), the
+        cursor stays on that message (if still listed) and no MessageOpened
+        is posted, so a background refresh doesn't refetch/reset the preview.
         """
-        if keep_cursor_on is None:
-            self._fill(messages)
+        self._messages = list(messages)
+        self._by_id = {m.id: m for m in messages}
+        if home_folder_id is not None:
+            self._home_folder = home_folder_id
+        self._render(keep_cursor_on)
+
+    def _render(self, keep: str | None = None) -> None:
+        if keep is None:
+            self._fill()
             return
         with self.prevent(DataTable.RowHighlighted):
-            self._fill(messages)
+            self._fill()
             try:
-                self.move_cursor(row=self.get_row_index(keep_cursor_on), animate=False)
+                self.move_cursor(row=self.get_row_index(keep), animate=False)
             except RowDoesNotExist:
                 pass  # gone (deleted/moved elsewhere); cursor stays at the top
 
-    def _fill(self, messages: list[MessageSummary]) -> None:
+    def _fill(self) -> None:
         self.clear()
-        for m in messages:
-            flag = "" if m.is_read else "●"
-            self.add_row(flag, _fmt_when(m.received), m.sender, m.subject, key=m.id)
+        if not self.threaded:
+            for m in self._messages:
+                self._add_message_row(m, m.subject)
+            return
+        for thread in build_threads(self._messages):
+            for m, prefix in tree_rows(thread):
+                # mutt-style: a reply with the thread's own topic shows only
+                # its tree guide; a changed subject is shown in full.
+                subject = m.subject if not prefix or topic(m.subject) != thread.topic else ""
+                self._add_message_row(m, prefix + subject)
+
+    def _add_message_row(self, m: MessageSummary, subject: str) -> None:
+        flag = "" if m.is_read else "●"
+        if self._home_folder and m.folder_id and m.folder_id != self._home_folder:
+            # A thread reply from Sent Items; after a bare tree guide ("└─ ")
+            # no extra space is needed.
+            subject += "(sent)" if subject.endswith(" ") else " (sent)"
+        self.add_row(flag, _fmt_when(m.received), m.sender, subject, key=m.id)
 
     def _current_message_id(self) -> str | None:
         if self.row_count == 0:
@@ -133,6 +189,11 @@ class MessageTable(DataTable):
         except Exception:
             return None
         return cell_key.row_key.value
+
+    def folder_of(self, message_id: str) -> str | None:
+        """The folder a listed message lives in (Sent Items for thread extras)."""
+        m = self._by_id.get(message_id)
+        return m.folder_id if m else None
 
     def action_cursor_top(self) -> None:
         if self.row_count:
@@ -146,6 +207,9 @@ class MessageTable(DataTable):
         mid = self._current_message_id()
         if mid:
             self.post_message(self.MessageOpened(mid, explicit=True))
+
+    def action_toggle_threads(self) -> None:
+        self.post_message(self.ThreadsToggled(not self.threaded, self._current_message_id()))
 
     def action_reply(self) -> None:
         mid = self._current_message_id()

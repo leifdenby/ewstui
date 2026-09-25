@@ -45,6 +45,7 @@ STORED_KEYS = (
     "page_size",
     "refresh_interval",
     "layout",
+    "threads",
     "priority_file",
     "attachment_dir",
 )

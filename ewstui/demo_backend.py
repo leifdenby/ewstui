@@ -37,6 +37,12 @@ DEMO_ROOM_LISTS = DEMO_ROOMS + [
 ]
 DEMO_PEOPLE = [Room("Havgus Hansen", "hh@corp.example")]
 
+# Conversation indexes for the demo "EWS bridge project" thread: a 22-byte
+# header, plus 5 bytes per reply level (your reply s1, then their m2).
+_EWS_THREAD = bytes(range(22))
+_EWS_S1 = _EWS_THREAD + b"\x01" * 5
+_EWS_M2 = _EWS_S1 + b"\x02" * 5
+
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
     "(plus auth flags) to talk to a real Exchange mailbox over EWS.\n\n"
@@ -78,6 +84,7 @@ class DemoMailClient:
                     sender="colleague@corp.example", received=now - timedelta(hours=3),
                     is_read=False, has_attachments=False,
                     to=["you@corp.example"], cc=["team@corp.example"], body_text=_LOREM,
+                    conversation_id="conv-ews", depth=2, conversation_index=_EWS_M2,  # answers your s1
                 ),
                 MessageDetail(
                     id="m3", changekey="c3", subject="IT maintenance window this weekend",
@@ -94,9 +101,10 @@ class DemoMailClient:
             ],
             "sent": [
                 MessageDetail(
-                    id="s1", changekey="c1", subject="Re: Project status",
+                    id="s1", changekey="c1", subject="Re: EWS bridge project",
                     sender="you@corp.example", received=now - timedelta(days=1, hours=2),
-                    is_read=True, has_attachments=False, to=["boss@corp.example"], cc=[], body_text=_LOREM,
+                    is_read=True, has_attachments=False, to=["colleague@corp.example"], cc=[], body_text=_LOREM,
+                    conversation_id="conv-ews", depth=1, conversation_index=_EWS_S1,
                 ),
                 MessageDetail(
                     id="s2", changekey="c2", subject="Weekly report",
@@ -130,9 +138,16 @@ class DemoMailClient:
         msgs = self._messages.get(folder_id, [])
         limit = limit or self.page_size
         return [
-            MessageSummary(m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments)
+            MessageSummary(
+                m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
+                conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
+                conversation_index=m.conversation_index,
+            )
             for m in msgs[offset : offset + limit]
         ]
+
+    def sent_folder_id(self) -> str:
+        return "sent"
 
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         for m in self._messages.get(folder_id, []):

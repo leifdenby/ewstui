@@ -35,6 +35,7 @@ MAIL_KEYS = [
     ("p", "add to priority list with a note"),
     ("A", "archive message"),
     ("m", "move to folder (type to filter, ↓/↑ or Ctrl+n/p, Enter)"),
+    ("t", "toggle thread view (conversations as nested trees, incl. your sent replies)"),
     ("u", "undo last delete/archive (repeatable)"),
     ("v", "view/save/open attachments"),
 ]

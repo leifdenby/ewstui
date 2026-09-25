@@ -161,7 +161,7 @@ class EwstuiApp(App):
         with Horizontal(id="main"):
             yield FolderList(id="folders")
             with Container(id="reading", classes=self.config.layout):
-                yield MessageTable(id="messages")
+                yield MessageTable(id="messages", threaded=self.config.threads)
                 yield PreviewPane(id="preview")
         yield CalendarView(id="calendar", classes="hidden")
         yield PriorityView(id="priority", classes="hidden")
@@ -202,14 +202,60 @@ class EwstuiApp(App):
     def select_folder(self, folder_id: str) -> None:
         self.current_folder_id = folder_id
         try:
-            messages = self.mail_client.list_messages(folder_id, limit=self.config.page_size)
+            messages = self._fetch_messages(folder_id)
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
             return
-        self.query_one("#messages", MessageTable).set_messages(messages)
+        self.query_one("#messages", MessageTable).set_messages(messages, home_folder_id=folder_id)
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
         self.query_one("#preview", PreviewPane).clear()
         self.current_message_id = None
+
+    def _fetch_messages(self, folder_id: str) -> list:
+        """The folder's messages; in thread view also your replies from
+        Sent Items that belong to those conversations (Outlook-style).
+        Safe to call from the refresh worker thread.
+        """
+        messages = self.mail_client.list_messages(folder_id, limit=self.config.page_size)
+        if not self.query_one("#messages", MessageTable).threaded:
+            return messages
+        try:
+            sent_id = self.mail_client.sent_folder_id()
+            if sent_id == folder_id:
+                return messages
+            conversations = {m.conversation_id for m in messages if m.conversation_id}
+            listed = {m.id for m in messages}
+            # One page of recent Sent Items, matched on conversation here —
+            # no server-side conversation filter needed.
+            replies = [
+                m
+                for m in self.mail_client.list_messages(sent_id, limit=self.config.page_size)
+                if m.conversation_id in conversations and m.id not in listed
+            ]
+        except Exception:  # noqa: BLE001 - threads still work without your replies
+            log.warning("couldn't load Sent Items for threads", exc_info=True)
+            return messages
+        return messages + replies
+
+    def _folder_of(self, message_id: str) -> str | None:
+        """Where a listed message lives: usually the current folder, but a
+        thread's replies from Sent Items live there."""
+        return self.query_one("#messages", MessageTable).folder_of(message_id) or self.current_folder_id
+
+    def on_message_table_threads_toggled(self, event: MessageTable.ThreadsToggled) -> None:
+        table = self.query_one("#messages", MessageTable)
+        table.threaded = event.threaded
+        self.config.threads = event.threaded
+        if not self.current_folder_id:
+            return
+        try:
+            messages = self._fetch_messages(self.current_folder_id)
+        except Exception as e:  # noqa: BLE001
+            self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
+            return
+        table.set_messages(messages, keep_cursor_on=event.message_id, home_folder_id=self.current_folder_id)
+        self._message_snapshot = [(m.id, m.is_read) for m in messages]
+        self.notify("Thread view on (t to switch off)" if event.threaded else "Thread view off (t to switch on)")
 
     # -- refresh (Ctrl+l, and every --refresh-interval minutes) ------------
 
@@ -235,7 +281,7 @@ class EwstuiApp(App):
         folder_id = self.current_folder_id
         try:
             folders = self.mail_client.list_folders()
-            messages = self.mail_client.list_messages(folder_id, limit=self.config.page_size) if folder_id else None
+            messages = self._fetch_messages(folder_id) if folder_id else None
         except Exception as e:  # noqa: BLE001 - surface any EWS error to the user
             log.warning("refresh failed", exc_info=True)
             if not worker.is_cancelled:
@@ -279,7 +325,7 @@ class EwstuiApp(App):
             return
         table = self.query_one("#messages", MessageTable)
         # Nothing selected yet (e.g. folder was empty): a normal fill is fine.
-        table.set_messages(messages, keep_cursor_on=table._current_message_id())
+        table.set_messages(messages, keep_cursor_on=table._current_message_id(), home_folder_id=folder_id)
         self._message_snapshot = snapshot
 
     def open_message(self, message_id: str) -> None:
@@ -287,7 +333,7 @@ class EwstuiApp(App):
             return
         self.current_message_id = message_id
         try:
-            detail = self.mail_client.get_message(self.current_folder_id, message_id)
+            detail = self.mail_client.get_message(self._folder_of(message_id), message_id)
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load message: {e}", severity="error", timeout=10)
             return
@@ -326,7 +372,7 @@ class EwstuiApp(App):
     def on_message_table_reply_requested(self, event: MessageTable.ReplyRequested) -> None:
         if not self.current_folder_id:
             return
-        folder_id = self.current_folder_id
+        folder_id = self._folder_of(event.message_id)
         detail = self.mail_client.get_message(folder_id, event.message_id)
         quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
         prefill_body = f"\n\n-- original message --\n{quoted}"
@@ -374,7 +420,7 @@ class EwstuiApp(App):
     def on_message_table_delete_requested(self, event: MessageTable.DeleteRequested) -> None:
         if not self.current_folder_id:
             return
-        folder_id = self.current_folder_id
+        folder_id = self._folder_of(event.message_id)
         try:
             subject = self.mail_client.get_message(folder_id, event.message_id).subject
             moved = self.mail_client.delete_message(folder_id, event.message_id)
@@ -386,22 +432,24 @@ class EwstuiApp(App):
         else:
             self.undo_stack.append(UndoEntry("deleted", subject, folder_id, moved))
             self.notify("Moved to Deleted Items — press u to undo")
-        self._refresh_keeping_row(folder_id)
+        self._refresh_keeping_row()
 
     def on_message_table_toggle_read_requested(self, event: MessageTable.ToggleReadRequested) -> None:
         if not self.current_folder_id:
             return
-        detail = self.mail_client.get_message(self.current_folder_id, event.message_id)
-        self.mail_client.mark_read(self.current_folder_id, event.message_id, read=not detail.is_read)
+        folder_id = self._folder_of(event.message_id)
+        detail = self.mail_client.get_message(folder_id, event.message_id)
+        self.mail_client.mark_read(folder_id, event.message_id, read=not detail.is_read)
         self.select_folder(self.current_folder_id)  # refresh list + unread counts
 
     def on_message_table_add_to_priority_requested(self, event: MessageTable.AddToPriorityRequested) -> None:
         if not self.current_folder_id:
             return
-        detail = self.mail_client.get_message(self.current_folder_id, event.message_id)
+        folder_id = self._folder_of(event.message_id)
+        detail = self.mail_client.get_message(folder_id, event.message_id)
         self.priority_store.add_email(
             message_id=event.message_id,
-            folder_id=self.current_folder_id,
+            folder_id=folder_id,
             subject=detail.subject,
             sender=detail.sender,
             priority=None,
@@ -413,14 +461,15 @@ class EwstuiApp(App):
     ) -> None:
         if not self.current_folder_id:
             return
-        detail = self.mail_client.get_message(self.current_folder_id, event.message_id)
+        folder_id = self._folder_of(event.message_id)
+        detail = self.mail_client.get_message(folder_id, event.message_id)
 
         def _on_result(note: str | None) -> None:
             if note is None:
                 return
             self.priority_store.add_email(
                 message_id=event.message_id,
-                folder_id=self.current_folder_id,
+                folder_id=folder_id,
                 subject=detail.subject,
                 sender=detail.sender,
                 priority=None,
@@ -433,7 +482,7 @@ class EwstuiApp(App):
     def on_message_table_archive_requested(self, event: MessageTable.ArchiveRequested) -> None:
         if not self.current_folder_id:
             return
-        folder_id = self.current_folder_id
+        folder_id = self._folder_of(event.message_id)
         try:
             subject = self.mail_client.get_message(folder_id, event.message_id).subject
             moved = self.mail_client.archive_message(folder_id, event.message_id)
@@ -442,12 +491,12 @@ class EwstuiApp(App):
             return
         self.undo_stack.append(UndoEntry("archived", subject, folder_id, moved))
         self.notify("Message archived — press u to undo")
-        self._refresh_keeping_row(folder_id)
+        self._refresh_keeping_row()
 
     def on_message_table_move_requested(self, event: MessageTable.MoveRequested) -> None:
         if not self.current_folder_id:
             return
-        folder_id = self.current_folder_id
+        folder_id = self._folder_of(event.message_id)
         try:
             subject = self.mail_client.get_message(folder_id, event.message_id).subject
         except Exception as e:  # noqa: BLE001
@@ -467,39 +516,40 @@ class EwstuiApp(App):
             self.undo_stack.append(UndoEntry("moved", subject, folder_id, moved))
             self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
             self.notify(f"Moved to {dest_name} — press u to undo")
-            self._refresh_keeping_row(folder_id)
+            self._refresh_keeping_row()
 
         self.push_screen(MoveToFolderScreen(subject, folders, self._recent_move_targets, folder_id), _move)
 
-    def _refresh_keeping_row(self, folder_id: str) -> None:
-        """Reload the folder after a message left it (delete/archive/move),
-        leaving the cursor on the same row — i.e. the next message — rather
-        than jumping back to the top."""
+    def _refresh_keeping_row(self) -> None:
+        """Reload the current folder after a message left it (delete/
+        archive/move), leaving the cursor on the same row — i.e. the next
+        message — rather than jumping back to the top."""
         table = self.query_one("#messages", MessageTable)
         row = table.cursor_row
-        self.select_folder(folder_id)
+        self.select_folder(self.current_folder_id)
         if table.row_count:
             table.move_cursor(row=min(row, table.row_count - 1))
 
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
         if not self.current_folder_id:
             return
+        folder_id = self._folder_of(event.message_id)
         try:
-            attachments = self.mail_client.list_attachments(self.current_folder_id, event.message_id)
+            attachments = self.mail_client.list_attachments(folder_id, event.message_id)
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load attachments: {e}", severity="error", timeout=10)
             return
         if not attachments:
             self.notify("No attachments on this message")
             return
-        detail = self.mail_client.get_message(self.current_folder_id, event.message_id)
+        detail = self.mail_client.get_message(folder_id, event.message_id)
 
         def _on_result(attachment_id: str | None) -> None:
             if attachment_id is None:
                 return
             try:
                 path = self.mail_client.save_attachment(
-                    self.current_folder_id, event.message_id, attachment_id, self.config.attachment_dir
+                    folder_id, event.message_id, attachment_id, self.config.attachment_dir
                 )
             except Exception as e:  # noqa: BLE001
                 self.notify(f"Failed to save attachment: {e}", severity="error", timeout=10)
@@ -675,14 +725,15 @@ class EwstuiApp(App):
             self.notify(f"Undo failed: {e}", severity="error", timeout=10)
             return
         self.notify(f"Restored {entry.verb} message: {entry.subject}")
-        if self.current_folder_id in (entry.original_folder_id, entry.moved.folder_id):
+        table = self.query_one("#messages", MessageTable)
+        # In thread view a restored Sent Items reply shows up in this folder's
+        # threads too, so reload whenever threads are on.
+        if table.threaded or self.current_folder_id in (entry.original_folder_id, entry.moved.folder_id):
             self.select_folder(self.current_folder_id)
-            if self.current_folder_id == entry.original_folder_id:
-                table = self.query_one("#messages", MessageTable)
-                try:
-                    table.move_cursor(row=table.get_row_index(restored.message_id))
-                except RowDoesNotExist:
-                    pass  # older than the loaded page; restored but not on screen
+            try:
+                table.move_cursor(row=table.get_row_index(restored.message_id))
+            except RowDoesNotExist:
+                pass  # not listed here (older than the loaded page, or another folder)
 
     def action_compose_new(self) -> None:
         def _send(result: dict) -> None:

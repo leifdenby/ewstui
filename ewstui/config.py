@@ -60,6 +60,7 @@ class Config:
     page_size: int = DEFAULT_PAGE_SIZE
     refresh_interval: float = DEFAULT_REFRESH_MINUTES  # minutes between background mail checks; 0 = off
     layout: str = DEFAULT_LAYOUT          # "columns" or "stacked" (see LAYOUTS)
+    threads: bool = False                 # start the message list in thread view (t toggles)
     demo: bool = False                   # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
@@ -141,6 +142,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="MINUTES",
         help=f"Check for new mail in the background every MINUTES (default {DEFAULT_REFRESH_MINUTES:g}; 0 = off). "
         "Ctrl+l refreshes on demand",
+    )
+    ui.add_argument(
+        "--threads",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Start the message list grouped into conversation threads (t toggles while running). "
+        "Save it with --account, or set threads = true in the config file",
     )
     ui.add_argument(
         "--layout",
@@ -241,6 +249,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         page_size=ns.page_size,
         refresh_interval=ns.refresh_interval,
         layout=ns.layout,
+        threads=bool(ns.threads),
         demo=ns.demo,
         debug=ns.debug,
         priority_file=ns.priority_file,

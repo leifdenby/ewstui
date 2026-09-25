@@ -42,6 +42,15 @@ class MessageSummary:
     received: datetime | None
     is_read: bool
     has_attachments: bool
+    # For the thread view: which conversation the message belongs to, how
+    # deep a reply it is (0 = starts the thread), its raw conversation index
+    # (a reply's index is its parent's plus 5 bytes, which is how the tree
+    # is built) and the folder it lives in (threads can include your replies
+    # from Sent Items).
+    conversation_id: str | None = None
+    depth: int = 0
+    folder_id: str | None = None
+    conversation_index: bytes | None = None
 
 
 @dataclass
@@ -187,6 +196,14 @@ def _sender(item) -> str:
     return "(unknown)"
 
 
+def _reply_depth(conversation_index: bytes | None) -> int:
+    """PidTagConversationIndex is a 22-byte header plus 5 bytes per reply
+    level, so its length says how deep in the thread a message is."""
+    if not conversation_index:
+        return 0
+    return max(0, (len(conversation_index) - 22) // 5)
+
+
 def _is_read(item) -> bool:
     # Items without a read flag (calendar items, contacts, ...) count as read.
     return bool(getattr(item, "is_read", True))
@@ -287,10 +304,13 @@ class MailClient:
         folder = self._folder_by_id(folder_id)
         limit = limit or self.page_size
         qs = folder.all().order_by("-datetime_received").only(
-            "subject", "sender", "datetime_received", "is_read", "has_attachments"
+            "subject", "sender", "datetime_received", "is_read", "has_attachments",
+            "conversation_id", "conversation_index",
         )
         out = []
         for item in qs[offset : offset + limit]:
+            conversation = getattr(item, "conversation_id", None)
+            index = getattr(item, "conversation_index", None)
             out.append(
                 MessageSummary(
                     id=item.id,
@@ -300,9 +320,17 @@ class MailClient:
                     received=item.datetime_received,
                     is_read=_is_read(item),
                     has_attachments=bool(getattr(item, "has_attachments", False)),
+                    conversation_id=getattr(conversation, "id", None),
+                    depth=_reply_depth(index),
+                    folder_id=folder_id,
+                    conversation_index=bytes(index) if index else None,
                 )
             )
         return out
+
+    def sent_folder_id(self) -> str:
+        """Sent Items, via its well-known id (works with localized names)."""
+        return self.account.sent.id
 
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         folder = self._folder_by_id(folder_id)

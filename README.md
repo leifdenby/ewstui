@@ -242,7 +242,19 @@ thread, and the cursor and open message stay where they were.
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note, `A` archive, `m`
-move to folder, `v` view/save/open attachments, `u` undo.
+move to folder, `t` thread view, `v` view/save/open attachments, `u`
+undo.
+
+**Thread view** (`t`, or start in it with `threads = true` in your
+account / `--threads`): messages in the same conversation are shown
+together as a tree, mutt-style — the first message, with each reply
+nested under the message it answers (`├─`, `└─`, `│`), placed in the
+list by the thread's most recent message. Replies that keep the
+thread's subject show just the tree guide; a changed subject is shown.
+Every row is still one message, so opening and `r`/`d`/`m`/... work on
+exactly the row you're on. Like Outlook, threads include your own
+replies from Sent Items, marked `(sent)` — ewstui fetches one page of
+recent Sent Items and matches them to the folder's conversations.
 
 **Moving mail** (`m`): opens a folder picker for the message under the
 cursor. Folders you've moved mail to this session are listed first,
