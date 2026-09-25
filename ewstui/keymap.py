@@ -61,6 +61,7 @@ ROOM_KEYS = [
 PRIORITY_KEYS = [
     ("A-Z", "set priority (current or selection)"),
     ("V", "visual selection, then a letter"),
+    ("Esc", "cancel the selection"),
     ("x", "toggle complete"),
     ("d", "remove from the list"),
     ("Enter / o", "jump to the email"),
@@ -73,11 +74,23 @@ COMPOSE_KEYS = [
     ("Esc", "discard and close"),
 ]
 
-# The help overlay's two columns (tuxedo-style), top to bottom.
-HELP_COLUMNS = [
-    [("GLOBAL", GLOBAL_KEYS), ("READING PANE", PREVIEW_KEYS), ("COMPOSE", COMPOSE_KEYS)],
-    [("MAIL", MAIL_KEYS), ("CALENDAR", CALENDAR_KEYS), ("FIND A ROOM", ROOM_KEYS), ("PRIORITY", PRIORITY_KEYS)],
-]
+# The help overlay's two columns (tuxedo-style), per view: the view's own
+# keys on the left (first, when stacked on a narrow terminal), the keys
+# that work everywhere on the right.
+HELP_COLUMNS = {
+    "mail": [
+        [("MAIL", MAIL_KEYS), ("READING PANE", PREVIEW_KEYS)],
+        [("GLOBAL", GLOBAL_KEYS), ("COMPOSE", COMPOSE_KEYS)],
+    ],
+    "priority": [
+        [("PRIORITY", PRIORITY_KEYS)],
+        [("GLOBAL", GLOBAL_KEYS)],
+    ],
+    "calendar": [
+        [("CALENDAR", CALENDAR_KEYS), ("FIND A ROOM", ROOM_KEYS)],
+        [("GLOBAL", GLOBAL_KEYS)],
+    ],
+}
 
 # Short hints for the status bar, by what has focus.
 STATUS_HINTS = {

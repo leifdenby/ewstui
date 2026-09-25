@@ -328,9 +328,11 @@ def help_column(sections, v: dict[str, str]) -> Text:
 
 
 class HelpScreen(ModalScreen[None]):
-    """`?`: every keybinding, tuxedo-style — a titled panel with sections in
-    two columns (one column on narrow terminals), scrollable if it doesn't
-    fit. j/k, Ctrl+d/u and arrows scroll; Esc, ? or q close.
+    """`?`: the keybindings for the current view (mail, priority or
+    calendar) next to the ones that work everywhere, tuxedo-style — a
+    titled panel with sections in two columns (one column on narrow
+    terminals), scrollable if it doesn't fit. j/k, Ctrl+d/u and arrows
+    scroll; Esc, ? or q close.
     """
 
     BINDINGS = [
@@ -373,6 +375,10 @@ class HelpScreen(ModalScreen[None]):
     }
     """
 
+    def __init__(self, mode: str = "mail") -> None:
+        super().__init__()
+        self._mode = mode if mode in keymap.HELP_COLUMNS else "mail"
+
     def compose(self) -> ComposeResult:
         with Vertical(id="help-box"):
             with VerticalScroll(id="help-scroll"):
@@ -383,9 +389,11 @@ class HelpScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         v = self.app.get_css_variables()
         box = self.query_one("#help-box")
-        box.border_title = Text.assemble((" ewstui", f"bold {v['accent']}"), (" · help ", v["tux-dim"]))
+        box.border_title = Text.assemble(
+            (" ewstui", f"bold {v['accent']}"), (" · help · ", v["tux-dim"]), (f"{self._mode.title()} ", v["foreground"])
+        )
         box.border_subtitle = " Esc close · j/k scroll "
-        left, right = keymap.HELP_COLUMNS
+        left, right = keymap.HELP_COLUMNS[self._mode]
         self.query_one("#help-left", Static).update(help_column(left, v))
         self.query_one("#help-right", Static).update(help_column(right, v))
         self._fit(self.app.size.width)

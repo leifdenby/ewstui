@@ -941,4 +941,5 @@ class EwstuiApp(App):
         self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent")
 
     def action_show_help(self) -> None:
-        self.push_screen(HelpScreen())
+        # Help for the view you're in (the status bar's mode chip).
+        self.push_screen(HelpScreen(self.query_one(StatusBar).mode.lower()))
