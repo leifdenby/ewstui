@@ -159,6 +159,12 @@ of opening an empty UI.
   `--ntlm-no-cbt --domain PROD --username jdoe`.
 - In zsh/bash, quote `DOMAIN\user` (`--username 'PROD\jdoe'`) or the
   backslash is eaten — or use `--domain` instead.
+- **Connection indicator**: the right of the status bar shows
+  `● connected`, `● working` (a request is running),
+  `◐ waiting for server 12s` (a slow or stalled request — the seconds
+  count up) or `✕ connection problem (2m ago)` until the next request
+  succeeds. ewstui keeps up to 3 connections, so one stalled request
+  doesn't hold up the others.
 - **Freezes after being idle**: gateways, firewalls and sleep can drop
   idle connections without telling either end. ewstui guards against
   this: TCP keepalive on every connection (probes after 30 s of

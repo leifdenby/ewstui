@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
 import time
 
 import requests
@@ -43,6 +44,59 @@ KEEPALIVE_COUNT = 3  # unanswered probes before the OS declares the connection d
 # (which stops while the Mac sleeps) by more than this, the Mac slept.
 SLEEP_DETECT = 30  # seconds
 REQUEST_TIMEOUT = 30  # seconds per EWS request (exchangelib default: 120)
+# Parallel connections. exchangelib's default is 1, so every request queued
+# behind whichever one was running: one stalled request (say, the background
+# refresh) left the preview stuck on "Loading…" too.
+POOL_SIZE = 3
+SLOW_AFTER = 3  # seconds before a running request shows as "waiting for server"
+
+
+class ConnectionMonitor:
+    """What the connection is doing, for the status bar. Fed by the session
+    pool hooks in harden(): a request starts when a session is handed out,
+    succeeds when it's given back, fails when exchangelib retires the
+    session (timeouts, resets). Thread-safe: requests run in workers."""
+
+    def __init__(self, mono=time.monotonic):
+        self._mono = mono
+        self._lock = threading.Lock()
+        self._running: dict[int, float] = {}  # id(session) -> start time
+        self.last_ok: float | None = None
+        self.last_error: float | None = None
+        self.active = False  # set by harden(); stays False in --demo
+
+    def started(self, session) -> None:
+        with self._lock:
+            self._running[id(session)] = self._mono()
+
+    def succeeded(self, session) -> None:
+        with self._lock:
+            if self._running.pop(id(session), None) is not None:
+                self.last_ok = self._mono()
+
+    def failed(self, session) -> None:
+        with self._lock:
+            self._running.pop(id(session), None)
+            self.last_error = self._mono()
+
+    def state(self) -> tuple[str, str]:
+        """(text, role) — role is "ok", "busy", "slow" or "error"."""
+        now = self._mono()
+        with self._lock:
+            oldest = min(self._running.values(), default=None)
+        if oldest is not None:
+            waited = now - oldest
+            if waited >= SLOW_AFTER:
+                return f"◐ waiting for server {waited:.0f}s", "slow"
+            return "● working", "busy"
+        if self.last_error is not None and (self.last_ok is None or self.last_error > self.last_ok):
+            ago = now - self.last_error
+            when = f"{ago:.0f}s ago" if ago < 60 else f"{ago / 60:.0f}m ago"
+            return f"✕ connection problem ({when})", "error"
+        return "● connected", "ok"
+
+
+MONITOR = ConnectionMonitor()  # one mailbox per process
 
 
 def keepalive_socket_options() -> list[tuple[int, int, int]]:
@@ -79,7 +133,7 @@ def install_keepalive_adapter(verify_ssl: bool = True) -> None:
     BaseProtocol.HTTP_ADAPTER_CLS = KeepAliveHTTPAdapter if verify_ssl else KeepAliveNoVerifyHTTPAdapter
 
 
-def harden(protocol, clock=time.time, mono=time.monotonic) -> None:
+def harden(protocol, clock=time.time, mono=time.monotonic, monitor: ConnectionMonitor | None = None) -> None:
     """Shorter timeout, and replace pooled sessions after the Mac slept.
 
     Wraps this protocol instance's get_session/release_session: each
@@ -92,8 +146,12 @@ def harden(protocol, clock=time.time, mono=time.monotonic) -> None:
     """
     if getattr(protocol, "_ewstui_hardened", False):
         return
+    monitor = monitor or MONITOR
     protocol.TIMEOUT = REQUEST_TIMEOUT
+    # No public setter; Configuration(max_connections=...) sets the same.
+    protocol._session_pool_maxsize = max(getattr(protocol, "_session_pool_maxsize", 1) or 1, POOL_SIZE)
     get_session, release_session = protocol.get_session, protocol.release_session
+    retire_session = protocol.retire_session
 
     def fresh_get_session():
         session = get_session()
@@ -105,12 +163,20 @@ def harden(protocol, clock=time.time, mono=time.monotonic) -> None:
                 protocol.close_session(session)
                 session = protocol.create_session()
                 session.usage_count = 1
+        monitor.started(session)
         return session
 
     def stamped_release_session(session):
+        monitor.succeeded(session)  # no-op for a fresh session put in by retire
         session.ewstui_last_used = (clock(), mono())
         release_session(session)
 
+    def monitored_retire_session(session):
+        monitor.failed(session)
+        retire_session(session)
+
     protocol.get_session = fresh_get_session
     protocol.release_session = stamped_release_session
+    protocol.retire_session = monitored_retire_session
     protocol._ewstui_hardened = True
+    monitor.active = True

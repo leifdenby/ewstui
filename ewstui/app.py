@@ -17,7 +17,7 @@ from textual.widgets.data_table import RowDoesNotExist
 from textual import events
 from textual.widgets import Tab, Tabs
 
-from . import config_file
+from . import config_file, connection
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
@@ -231,6 +231,16 @@ class EwstuiApp(App):
         if self.config.refresh_interval > 0:
             self.set_interval(self.config.refresh_interval * 60, self._background_refresh)
         self.set_interval(PRIORITY_WATCH_SECONDS, self._watch_priority_file)
+        self.set_interval(1.0, self._show_connection_state)
+
+    def _show_connection_state(self) -> None:
+        """Status bar connection indicator (live mailbox only)."""
+        if not connection.MONITOR.active:
+            return
+        try:
+            self.query_one(StatusBar).conn = connection.MONITOR.state()
+        except NoMatches:  # shutting down
+            pass
 
     # -- data loading ---------------------------------------------------
 

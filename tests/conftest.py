@@ -49,8 +49,18 @@ def fake_protocol(**attrs):
         release_session=lambda session: None,
         close_session=lambda session: None,
         create_session=lambda: SimpleNamespace(usage_count=0),
+        retire_session=lambda session: None,
     )
     return SimpleNamespace(**(defaults | attrs))
+
+
+@pytest.fixture(autouse=True)
+def fresh_connection_monitor(monkeypatch):
+    """The status-bar connection monitor is a module singleton; give each
+    test its own so one test's (fake) connection doesn't show in another."""
+    from ewstui import connection
+
+    monkeypatch.setattr(connection, "MONITOR", connection.ConnectionMonitor())
 
 
 @pytest.fixture(autouse=True)

@@ -83,6 +83,9 @@ class StatusBar(Widget):
     mode: reactive[str] = reactive("MAIL")
     hints: reactive[str] = reactive("")
     info: reactive[str] = reactive("")
+    # Connection indicator: (text, role), role "ok" / "busy" / "slow" /
+    # "error"; ("", "") hides it (demo mode).
+    conn: reactive[tuple] = reactive(("", ""))
 
     def render(self) -> Text:
         v = _vars(self)
@@ -90,5 +93,13 @@ class StatusBar(Widget):
             (f" {self.mode} ", f"bold {v['tux-mode-fg']} on {v['tux-mode-bg']}"),
             (f"  {self.hints}", v["tux-status-fg"]),
         )
-        right = Text(" · ".join(p for p in (self.info, f"v{__version__}") if p) + " ", style=v["tux-dim"])
+        right = Text()
+        text, role = self.conn
+        if text:
+            colour = {"ok": v["success"], "busy": v["accent"], "slow": v["warning"], "error": v["error"]}.get(
+                role, v["tux-dim"]
+            )
+            right.append(text, style=f"bold {colour}" if role in ("slow", "error") else colour)
+            right.append(" · ", style=v["tux-dim"])
+        right.append(" · ".join(p for p in (self.info, f"v{__version__}") if p) + " ", style=v["tux-dim"])
         return _line(left, right, self.size.width)
