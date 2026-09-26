@@ -394,6 +394,31 @@ def _meeting(item, tz, calendar=None) -> MeetingInfo | None:
     )
 
 
+SUMMARY_FIELDS = (
+    "subject", "sender", "datetime_received", "is_read", "has_attachments", "conversation_id", "conversation_index",
+)
+
+
+def _summary(item, folder_id: str | None) -> MessageSummary:
+    """A row of the message list, from an item fetched with SUMMARY_FIELDS."""
+    conversation = getattr(item, "conversation_id", None)
+    index = getattr(item, "conversation_index", None)
+    return MessageSummary(
+        id=item.id,
+        changekey=item.changekey,
+        subject=item.subject or "(no subject)",
+        sender=_sender(item),
+        received=item.datetime_received,
+        is_read=_is_read(item),
+        has_attachments=bool(getattr(item, "has_attachments", False)),
+        conversation_id=getattr(conversation, "id", None),
+        depth=_reply_depth(index),
+        folder_id=folder_id,
+        conversation_index=bytes(index) if index else None,
+        kind=_kind(item),
+    )
+
+
 def _unique_path(path: Path) -> Path:
     """If `path` already exists, append " (1)", " (2)", ... before the
     extension until it doesn't — never silently overwrite a previous
@@ -475,31 +500,25 @@ class MailClient:
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
         folder = self._folder_by_id(folder_id)
         limit = limit or self.page_size
-        qs = folder.all().order_by("-datetime_received").only(
-            "subject", "sender", "datetime_received", "is_read", "has_attachments",
-            "conversation_id", "conversation_index",
-        )
-        out = []
-        for item in qs[offset : offset + limit]:
-            conversation = getattr(item, "conversation_id", None)
-            index = getattr(item, "conversation_index", None)
-            out.append(
-                MessageSummary(
-                    id=item.id,
-                    changekey=item.changekey,
-                    subject=item.subject or "(no subject)",
-                    sender=_sender(item),
-                    received=item.datetime_received,
-                    is_read=_is_read(item),
-                    has_attachments=bool(getattr(item, "has_attachments", False)),
-                    conversation_id=getattr(conversation, "id", None),
-                    depth=_reply_depth(index),
-                    folder_id=folder_id,
-                    conversation_index=bytes(index) if index else None,
-                    kind=_kind(item),
-                )
-            )
-        return out
+        qs = folder.all().order_by("-datetime_received").only(*SUMMARY_FIELDS)
+        return [_summary(item, folder_id) for item in qs[offset : offset + limit]]
+
+    @retry_on_dead_connection
+    def search(self, query: str, folder_id: str | None = None, limit: int = 50) -> list[MessageSummary]:
+        """Exchange's own search (words in the subject, body, people; a word
+        also matches as the start of a longer one): in one folder, or in all
+        mail folders at once. Newest first; each result says its folder."""
+        from exchangelib.folders import FolderCollection
+
+        if folder_id is not None:
+            source = self._folder_by_id(folder_id)
+        else:
+            source = FolderCollection(account=self.account, folders=[f for f in self._all_folders() if _is_mail_folder(f)])
+        qs = source.filter(query).order_by("-datetime_received").only(*SUMMARY_FIELDS, "parent_folder_id")
+        return [
+            _summary(item, getattr(getattr(item, "parent_folder_id", None), "id", None) or folder_id)
+            for item in qs[:limit]
+        ]
 
     @retry_on_dead_connection
     def sent_folder_id(self) -> str:
