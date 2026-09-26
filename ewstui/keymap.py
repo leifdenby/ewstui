@@ -32,7 +32,7 @@ MAIL_KEYS = [
     ("U", "open a link from the email in the browser"),
     ("e", "all To / Cc recipients (e again folds)"),
     ("i", "answer an invite / remove a cancelled meeting"),
-    ("p / P", "add to priority list (+ note / none)"),
+    ("p / P", "add to priority list (+ note / none); p on a listed one edits its note"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
 ]

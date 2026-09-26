@@ -200,14 +200,15 @@ class AddNoteScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, label: str = "Note (Ctrl+S to save, Esc to cancel)") -> None:
+    def __init__(self, label: str = "Note (Ctrl+S to save, Esc to cancel)", value: str = "") -> None:
         super().__init__()
         self._label = label
+        self._value = value  # an existing note, to edit
 
     def compose(self) -> ComposeResult:
         with Vertical(id="note-box"):
-            yield Label(self._label)
-            yield Input(placeholder="Note", id="note-text")
+            yield Label(self._label, markup=False)
+            yield Input(value=self._value, placeholder="Note", id="note-text")
 
     def on_mount(self) -> None:
         self.query_one("#note-text", Input).focus()

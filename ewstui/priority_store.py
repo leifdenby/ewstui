@@ -31,6 +31,7 @@ from pathlib import Path
 
 DEFAULT_PATH = Path.home() / ".local" / "share" / "ewstui" / "priorities.todo.txt"
 EMAIL_TAG = "email"  # written as the @email context
+NOTE_SEPARATOR = " — "  # an email entry's text: "Subject — note"
 
 _PRIORITY_RE = re.compile(r"^\(([A-Z])\)\s+")
 _DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+")
@@ -286,16 +287,22 @@ class PriorityStore:
         note: str | None = None,
         internet_id: str | None = None,
     ) -> PriorityEntry:
+        """Add the email, or if it's on the list already, leave that entry as
+        it is (its priority and note too) except for setting `priority` if
+        one is given and filling in a missing Message-ID."""
         existing = self.find_by_message_id(message_id)  # also refreshes from disk
         if existing is not None:
-            existing.priority = priority
+            changed = False
+            if priority is not None and existing.priority != priority:
+                existing.priority, changed = priority, True
             if internet_id and not existing.internet_id:
-                existing.kv["msgid"] = internet_id
-            existing.dirty = True
-            self.save()
-            return existing
+                existing.kv["msgid"], changed = internet_id, True
+            if changed:
+                existing.dirty = True
+                self.save()
+            return self.find_by_message_id(message_id) or existing
 
-        description = subject if not note else f"{subject} — {note}"
+        description = subject if not note else f"{subject}{NOTE_SEPARATOR}{note}"
         entry = PriorityEntry(
             key=str(uuid.uuid4()),
             priority=priority,
@@ -310,6 +317,19 @@ class PriorityStore:
         self._lines.append(entry)
         self.save()
         return self.find_by_message_id(message_id) or entry
+
+    def set_note(self, message_id: str, note: str, subject: str | None = None) -> bool:
+        """Replace the note on the email's open entry (empty: no note),
+        keeping the subject part of its text. False if it has no entry."""
+        entry = self.find_by_message_id(message_id)  # also refreshes from disk
+        if entry is None:
+            return False
+        text, _ = split_note(entry.description, subject)
+        note = _sanitize_description(note)
+        entry.description = _sanitize_description(f"{text}{NOTE_SEPARATOR}{note}" if note else text)
+        entry.dirty = True
+        self.save()
+        return True
 
     def add_task(self, description: str, priority: str | None = None) -> PriorityEntry:
         """A plain, manually-typed todo.txt entry — not tied to any
@@ -399,6 +419,20 @@ class PriorityStore:
         self._lines.remove(e)
         self.save()
         return True
+
+
+def split_note(description: str, subject: str | None = None) -> tuple[str, str]:
+    """An email entry's text as (subject part, note): "Subject — note".
+    With the email's `subject`, a subject that itself contains " — " is
+    still split in the right place."""
+    if subject:
+        subject = _sanitize_description(subject)
+        if description == subject:
+            return description, ""
+        if description.startswith(subject + NOTE_SEPARATOR):
+            return subject, description[len(subject) + len(NOTE_SEPARATOR):]
+    text, sep, note = description.partition(NOTE_SEPARATOR)
+    return (text, note) if sep else (description, "")
 
 
 def _sanitize_description(text: str) -> str:

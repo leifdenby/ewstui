@@ -307,7 +307,8 @@ thread, and the cursor and open message stay where they were.
 
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
-no prompt), `p` add to priority list with a note, `A` archive, `m`
+no prompt), `p` add to priority list with a note (on an email that's
+already listed, `p` edits that entry's note instead), `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
 undo. `r` `R` `d` `A` `m` `P` `p` `v` also work while you're reading the
 email (focus in the reading pane), on that email; after a move, archive

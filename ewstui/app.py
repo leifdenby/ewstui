@@ -21,7 +21,7 @@ from . import config_file, connection
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
-from .priority_store import PriorityStore
+from .priority_store import PriorityStore, split_note
 from .invites import when_text
 from .screens import (
     AddNoteScreen,
@@ -807,6 +807,11 @@ class EwstuiApp(App):
     def on_message_table_add_to_priority_requested(self, event: MessageTable.AddToPriorityRequested) -> None:
         if not self.current_folder_id:
             return
+        existing = self.priority_store.find_by_message_id(event.message_id)
+        if existing is not None:  # leave its priority and note alone
+            pri = f"priority {existing.priority}" if existing.priority else "no priority"
+            self.notify(f"Already on the priority list ({pri}) — p edits its note, 2 sets the priority")
+            return
         folder_id = self._folder_of(event.message_id)
         subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
         self.priority_store.add_email(
@@ -828,6 +833,22 @@ class EwstuiApp(App):
             return
         folder_id = self._folder_of(event.message_id)
         subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
+        existing = self.priority_store.find_by_message_id(event.message_id)
+        if existing is not None:  # on the list already: edit its note
+            _, current = split_note(existing.description, subject)
+
+            def _on_edit(note: str | None) -> None:
+                if note is None or note == current:
+                    return
+                if not self.priority_store.set_note(event.message_id, note, subject):
+                    self.notify("That entry changed in todo.txt meanwhile — try again", severity="warning")
+                    return
+                self.notify("Note removed" if not note else "Note updated")
+                self._priorities_changed()
+
+            self.push_screen(AddNoteScreen(label=f"Edit note for: {subject}  (Ctrl+S / Enter to save, Esc to cancel)",
+                                           value=current), _on_edit)
+            return
 
         def _on_result(note: str | None) -> None:
             if note is None:
