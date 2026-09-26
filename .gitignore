@@ -6,3 +6,4 @@ dist/
 *.egg-info/
 ewstui.log
 .claude/settings.local.json
+.DS_Store
