@@ -28,13 +28,31 @@ def live():
 def test_reply_passes_subject_body_and_recipients(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test"])
-    item.reply.assert_called_once_with(subject="Re: Hi", body="thanks", to_recipients=["a@x.test"])
+    item.reply.assert_called_once_with(subject="Re: Hi", body="thanks", to_recipients=["a@x.test"], cc_recipients=None)
 
 
-def test_reply_all_passes_subject_and_body(live):
+def test_reply_all_goes_to_the_recipients_as_written(live):
     client, item = live
-    client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["ignored@x.test"], reply_all=True)
+    client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test", "b@x.test"], cc=["c@x.test"], reply_all=True)
+    item.reply.assert_called_once_with(
+        subject="Re: Hi", body="thanks", to_recipients=["a@x.test", "b@x.test"], cc_recipients=["c@x.test"],
+    )
+    item.reply_all.assert_not_called()
+
+
+def test_with_no_recipients_exchange_picks_them(live):
+    client, item = live
+    client.reply("inbox", "m1", subject="Re: Hi", body="thanks", reply_all=True)
     item.reply_all.assert_called_once_with(subject="Re: Hi", body="thanks")
+
+
+def test_reply_recipients():
+    from ewstui.app import reply_recipients
+
+    detail = SimpleNamespace(sender="boss@corp.example", to=["you@corp.example", "a@corp.example", "Room 4B"],
+                             cc=["b@corp.example", "boss@corp.example", "You@Corp.example"])
+    assert reply_recipients(detail, False, "you@corp.example") == (["boss@corp.example"], [])
+    assert reply_recipients(detail, True, "you@corp.example") == (["boss@corp.example", "a@corp.example"], ["b@corp.example"])
 
 
 def test_send_mail_uses_exchangelib_message(monkeypatch):
@@ -139,14 +157,31 @@ def test_live_reply_drafts_stay_replies(live):
     client, item = live
     client.account.drafts = "drafts-folder"
     client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="later", to=["a@x.test"])
-    item.create_reply.assert_called_once_with(subject="Re: Hi", body="later", to_recipients=["a@x.test"])
+    item.create_reply.assert_called_once_with(subject="Re: Hi", body="later", to_recipients=["a@x.test"], cc_recipients=None)
     item.create_reply.return_value.save.assert_called_once_with("drafts-folder")
-    client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="all", reply_all=True)
+    client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="all", reply_all=True)  # no recipients: Exchange's
     item.create_reply_all.return_value.save.assert_called_once_with("drafts-folder")
 
 
 def drafts(mail) -> list:
     return mail.list_messages("drafts")
+
+
+async def test_reply_all_prefills_everyone_and_sends_to_them(app, mail):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("j", "R")  # m2: to you, cc team
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ComposeScreen)
+        assert screen.query_one("#compose-to", Input).value == "colleague@corp.example"  # you left out
+        assert screen.query_one("#compose-cc", Input).value == "team@corp.example"
+        assert "to everyone (2)" in str(screen.query_one("#compose-context").render())
+        screen.query_one("#compose-cc", Input).value = ""  # drop the team from this one
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    sent = mail.sent[0]
+    assert sent["to"] == ["colleague@corp.example"] and sent["cc"] == [] and sent["reply_all"]
 
 
 async def test_escape_saves_a_reply_to_drafts(app, mail):

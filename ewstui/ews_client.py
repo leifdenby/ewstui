@@ -725,15 +725,16 @@ class MailClient:
 
     def save_reply_draft(
         self, folder_id: str, message_id: str, subject: str, body: str,
-        to: list[str] | None = None, reply_all: bool = False,
+        to: list[str] | None = None, reply_all: bool = False, cc: list[str] | None = None,
     ) -> None:
         """An unsent reply, saved to Drafts — still a reply to the email
-        (Outlook/OWA show it threaded and send it as a reply)."""
+        (Outlook/OWA show it threaded and send it as a reply), to the
+        recipients as written (see reply)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
-        if reply_all:
-            draft = item.create_reply_all(subject=subject, body=body)
+        if not to and not cc:
+            draft = item.create_reply_all(subject=subject, body=body) if reply_all else item.create_reply(subject=subject, body=body)
         else:
-            draft = item.create_reply(subject=subject, body=body, to_recipients=to or None)
+            draft = item.create_reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
         draft.save(self.account.drafts)
 
     def reply(
@@ -744,16 +745,22 @@ class MailClient:
         body: str,
         to: list[str] | None = None,
         reply_all: bool = False,
+        cc: list[str] | None = None,
     ) -> None:
-        """`to` overrides the reply recipients (plain reply only —
-        exchangelib's reply_all always goes to the original recipients).
-        """
-        folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
-        if reply_all:
-            item.reply_all(subject=subject, body=body)
-        else:
-            item.reply(subject=subject, body=body, to_recipients=to or None)
+        """Sent as a reply to the email (same conversation), to exactly `to`
+        and `cc` as written in the compose view — for reply-all too, which
+        prefills them with everyone. Only with no recipients at all does
+        Exchange pick them (the sender; everyone for reply-all)."""
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        if not to and not cc:
+            (item.reply_all if reply_all else item.reply)(subject=subject, body=body)
+            return
+        item.reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
+
+    @property
+    def my_address(self) -> str:
+        """Your own address (left out of reply-all's recipients)."""
+        return str(self.account.primary_smtp_address or "")
 
 
 class CalendarClient:

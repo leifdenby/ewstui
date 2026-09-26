@@ -304,11 +304,14 @@ class DemoMailClient:
         body: str,
         to: list[str] | None = None,
         reply_all: bool = False,
+        cc: list[str] | None = None,
     ) -> None:
         self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         self.sent.append(
-            {"in_reply_to": message_id, "to": to, "subject": subject, "body": body, "reply_all": reply_all}
+            {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body, "reply_all": reply_all}
         )
+
+    my_address = "you@corp.example"
 
     def search(self, query: str, folder_id: str | None = None, limit: int = 50) -> list[MessageSummary]:
         """Like Exchange's: every word in the subject, sender or text,
@@ -332,12 +335,12 @@ class DemoMailClient:
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])
 
-    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False) -> None:
+    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None) -> None:
         original = self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
-        recipients = to or [original.sender]
-        if reply_all:
-            recipients = [original.sender, *original.to]
-        self._add_draft(subject, body, recipients, list(original.cc) if reply_all else [])
+        if not to and not cc:  # as Exchange would pick them
+            to = [original.sender, *original.to] if reply_all else [original.sender]
+            cc = list(original.cc) if reply_all else []
+        self._add_draft(subject, body, to or [], cc or [])
 
     def _add_draft(self, subject, body, to, cc) -> None:
         n = len(self._messages["drafts"]) + 1
