@@ -815,23 +815,32 @@ class CalendarClient:
         location: str = "",
         body: str = "",
         resources: list[str] | None = None,
+        is_all_day: bool = False,
     ) -> None:
         """With `resources` (room addresses), the rooms are invited as
         resource attendees and invitations are sent, which is what
         actually books them (the room's booking assistant accepts or
         declines). Without, it's a plain appointment in your calendar.
+        An all-day event runs from `start`'s day up to (not including)
+        `end`'s day.
         """
-        from exchangelib import Attendee, CalendarItem, Mailbox
+        from exchangelib import Attendee, CalendarItem, EWSDate, Mailbox
         from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
 
+        if is_all_day:
+            when = {"start": EWSDate.from_date(start.date()), "end": EWSDate.from_date(end.date()), "is_all_day": True}
+        else:
+            when = {
+                "start": EWSDateTime.from_datetime(start).astimezone(self.tz),
+                "end": EWSDateTime.from_datetime(end).astimezone(self.tz),
+            }
         item = CalendarItem(
             account=self.account,
             folder=self.account.calendar,
             subject=subject,
-            start=EWSDateTime.from_datetime(start).astimezone(self.tz),
-            end=EWSDateTime.from_datetime(end).astimezone(self.tz),
             location=location,
             body=body,
+            **when,
         )
         if resources:
             item.resources = [

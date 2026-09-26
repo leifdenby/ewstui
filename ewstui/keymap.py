@@ -32,6 +32,7 @@ MAIL_KEYS = [
     ("U", "open a link from the email in the browser"),
     ("e", "all To / Cc recipients (e again folds)"),
     ("i", "answer an invite / remove a cancelled meeting"),
+    ("c", "calendar event from the email (save-the-dates)"),
     ("p / P", "add to priority list (+ note / none); p on a listed one edits its note"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
@@ -48,6 +49,7 @@ PREVIEW_KEYS = [
     ("r R d A m", "reply / all, delete, archive, move"),
     ("P / p v", "priority (+ note), attachments"),
     ("i", "answer the invite"),
+    ("c", "calendar event from the email"),
 ]
 
 CALENDAR_KEYS = [
@@ -118,6 +120,7 @@ STATUS_HINTS = {
     # pane is to the right, "o" when the email sits below the list.
     "folders": "j/k folder · {open} open · V move · H hide · . show hidden · ? help",
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
+    "event": "new event · h/l j/k [ ] pick a day · n next date from the email · Tab next field · Ctrl+S create · Esc close",
     "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",

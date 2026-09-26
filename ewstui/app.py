@@ -22,7 +22,9 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore, split_note
+from .event_panel import EventFromEmailPanel
 from .invites import when_text
+from .widgets.date_picker import DatePicker
 from .screens import (
     AddNoteScreen,
     AttachmentListScreen,
@@ -184,6 +186,7 @@ class EwstuiApp(App):
         Binding("U", "show_links", "Links", show=False),
         Binding("e", "toggle_recipients", "All recipients", show=False),
         Binding("i", "invite", "Answer invite", show=False),
+        Binding("c", "event_from_email", "Calendar event from email", show=False),
         Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -499,6 +502,83 @@ class EwstuiApp(App):
             return
         if isinstance(self.screen, InviteResponseScreen):
             self.screen.set_events(events)
+
+    # -- c: a calendar event from the email (save-the-dates without an invite) ---------
+
+    def action_event_from_email(self) -> None:
+        if self.query_one(StatusBar).mode != "MAIL":
+            return
+        existing = self.screen.query(EventFromEmailPanel)
+        if existing:  # already open: back into it
+            existing.first().query_one(DatePicker).focus()
+            return
+        detail = self._previewed(self.current_message_id) if self.current_message_id else None
+        if detail is None:
+            self.notify("Open an email first (or wait for it to load)")
+            return
+        # Right of the email, in the main area (header and status bar stay).
+        self.query_one("#main").mount(EventFromEmailPanel(detail))
+
+    def on_event_from_email_panel_day_changed(self, event: EventFromEmailPanel.DayChanged) -> None:
+        if event.day in self._invite_days:
+            self._event_panel_day(event.day, self._invite_days[event.day])
+        else:
+            self._load_event_day(event.day)
+
+    @work(thread=True, exclusive=True, group="event-day")
+    def _load_event_day(self, day: date) -> None:
+        start = datetime.combine(day, time.min)
+        try:
+            events = self.calendar_client.list_events(start, start + timedelta(days=1))
+        except Exception:  # noqa: BLE001 - the panel works without it
+            log.warning("looking up the calendar for a new event failed", exc_info=True)
+            return
+        self.call_from_thread(self._event_panel_day, day, events)
+
+    def _event_panel_day(self, day: date, events: list) -> None:
+        self._invite_days[day] = events
+        for panel in self.screen.query(EventFromEmailPanel):
+            panel.set_day_events(day, events)
+
+    def on_event_from_email_panel_submitted(self, event: EventFromEmailPanel.Submitted) -> None:
+        panel = event.control if isinstance(event.control, EventFromEmailPanel) else self.screen.query_one(EventFromEmailPanel)
+        detail = panel.detail
+        received = f", {_local(detail.received):%a %d %b %Y %H:%M}" if detail.received else ""
+        body = f"From the email “{detail.subject}” ({detail.sender}{received}):\n\n{(detail.body_text or '')[:4000]}"
+        self._create_event_from_email({**event.values, "body": body})
+
+    @work(thread=True, group="event-create")
+    def _create_event_from_email(self, values: dict) -> None:
+        try:
+            self.calendar_client.create_event(
+                subject=values["subject"], start=values["start"], end=values["end"],
+                location=values["location"], body=values["body"], is_all_day=values["is_all_day"],
+            )
+        except Exception as e:  # noqa: BLE001 - keep the panel, say why
+            log.warning("creating an event from an email failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Creating the event failed: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._event_created, values)
+
+    def _event_created(self, values: dict) -> None:
+        self._invite_days.clear()  # your calendar changed
+        start, end = values["start"], values["end"]
+        if values["is_all_day"]:
+            days = (end - start).days
+            when = f"{start:%a %d %b %Y}, all day" + (f" ({days} days)" if days > 1 else "")
+        else:
+            when = f"{start:%a %d %b %Y %H:%M}–{end:%H:%M}"
+        self.notify(f"Added “{values['subject']}” to your calendar: {when}")
+        self._close_event_panel()
+
+    def on_event_from_email_panel_closed(self, event: EventFromEmailPanel.Closed) -> None:
+        self._close_event_panel()
+
+    def _close_event_panel(self) -> None:
+        for panel in self.screen.query(EventFromEmailPanel):
+            panel.remove()
+        if self.query_one(StatusBar).mode == "MAIL":
+            self.query_one("#preview", PreviewPane).focus()
 
     def action_invite(self) -> None:
         """i: answer the invite in the reading pane (or remove a cancelled
@@ -1353,6 +1433,8 @@ class EwstuiApp(App):
         # own: the hints describe the view underneath and stay put.
         focused = self.screen_stack[0].focused
         pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)
+        if focused is not None and any(isinstance(a, EventFromEmailPanel) for a in focused.ancestors_with_self):
+            pane = "event"
         # The message list opens into the pane to its right ("l") in the
         # columns layout, but into the one below it ("o") when stacked; the
         # folder pane always opens rightwards.
@@ -1399,6 +1481,9 @@ class EwstuiApp(App):
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         mode = event.tab.id.removeprefix("mode-")
+        if mode != "mail":  # the event-from-email panel belongs to the email view
+            for panel in self.screen.query(EventFromEmailPanel):
+                panel.remove()
         views = {"mail": "#main", "priority": "#priority", "calendar": "#calendar"}
         for name, selector in views.items():
             self.query_one(selector).set_class(name != mode, "hidden")

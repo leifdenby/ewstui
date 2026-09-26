@@ -349,6 +349,19 @@ invite email is then archived (`u` brings the email back; your answer
 stays). A cancellation (`cancelled ·`) shows the meeting's time and
 place, and `i` offers to remove it from your calendar.
 
+**Event from an email** (`c`): for a save-the-date that came as plain
+text, without an invite. A panel opens to the right of the email (still
+readable; Tab goes between the panel's fields and the email) with the
+title taken from the subject (minus "Save the date:"), a month calendar
+to pick the day tuxedo-style (`h`/`l` a day, `j`/`k` a week, `[`/`]` a
+month, `t` today) and a field to type one (`tomorrow`, `fri`, `+3d`,
+`in 2 weeks`, `14 oct`, `2026-10-14`). Dates the email mentions are
+marked, the first upcoming one is picked, and `n` jumps to the next; a
+time range in the text ("10:00–16:00") fills in the times, otherwise
+it's all day (with a number of days). Below, your calendar that day.
+Ctrl+S adds the event to your calendar (no invitations), with the
+email's text in its notes; Esc closes the panel.
+
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the
 status bar shows how many). Then `d` delete, `A` archive, `m` move

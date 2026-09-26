@@ -103,6 +103,17 @@ def _demo_invites(now: datetime) -> list[MessageDetail]:
                 location="Aquarium", organizer="colleague@corp.example", calendar_item_id="e4",
             ),
         ),
+        # A save-the-date as plain text, no invite attached (c makes an event from it).
+        MessageDetail(
+            id="std1", changekey="c1", subject="Save the date: Autumn ML workshop",
+            sender="friend@corp.example", received=now - timedelta(days=5),
+            is_read=True, has_attachments=False, to=["you@corp.example"], cc=[],
+            body_text=(
+                "Hi all,\n\nPlease save the date for our autumn ML workshop on "
+                f"{now + timedelta(days=18):%d %B %Y}, 10:00–16:00, followed by dinner on "
+                f"{now + timedelta(days=19):%b %d}.\n\nA proper invite follows later.\n"
+            ),
+        ),
     ]
 
 
@@ -115,8 +126,9 @@ _LOREM = (
 
 class DemoMailClient:
     def __init__(self, page_size: int = 50, calendar: DemoCalendarClient | None = None, with_invites: bool = False):
-        """`with_invites` adds a meeting invite and a cancellation to the
-        Inbox (`--demo` does; most tests keep the plain four emails).
+        """`with_invites` adds a meeting invite, a cancellation and a
+        plain-text save-the-date to the Inbox (`--demo` does; most tests
+        keep the plain four emails).
         Answering the invite / removing the cancelled meeting changes
         `calendar` (if given), like Exchange does."""
         self.page_size = page_size
@@ -124,7 +136,7 @@ class DemoMailClient:
         self.calendar = calendar
         self.invite_responses: list[dict] = []  # what respond_to_invite would have done
         self._folders = [
-            FolderSummary(id="inbox", name="Inbox", total_count=6 if with_invites else 4, unread_count=2, depth=0),
+            FolderSummary(id="inbox", name="Inbox", total_count=7 if with_invites else 4, unread_count=2, depth=0),
             FolderSummary(id="sent", name="Sent Items", total_count=2, unread_count=0, depth=0),
             FolderSummary(id="drafts", name="Drafts", total_count=1, unread_count=0, depth=0),
             FolderSummary(id="archive", name="Archive", total_count=1, unread_count=0, depth=0),
@@ -390,13 +402,14 @@ class DemoCalendarClient:
             out.append(RoomAvailability(room=room, free=not busy, busy=busy))
         return RoomsDay(day=day, work_hours=None, rooms=out)  # None: UI falls back to 08:00-17:00
 
-    def create_event(self, subject, start, end, location="", body="", resources=None) -> None:
+    def create_event(self, subject, start, end, location="", body="", resources=None, is_all_day=False) -> None:
         self._events.append(
             EventSummary(
                 id=f"e{len(self._events) + 1}", changekey="c1", subject=subject,
-                start=start, end=end, location=location, organizer="you@corp.example", is_all_day=False,
+                start=start, end=end, location=location, organizer="you@corp.example", is_all_day=is_all_day,
             )
         )
+        self.last_created_body = body
         for email in resources or []:  # the demo rooms always accept
             self.room_bookings.setdefault(email, []).append(BusySlot(start, end, "Busy", "Demo User"))
 
