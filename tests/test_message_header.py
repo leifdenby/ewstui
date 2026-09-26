@@ -129,6 +129,21 @@ async def test_e_works_from_the_reading_pane_and_resets_per_email(tmp_path):
         assert not app.query_one("#preview", PreviewPane).recipients_expanded
 
 
+async def test_rule_and_folded_line_fit_when_a_scrollbar_appears(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await open_maintenance_email(app, pilot)
+        pane = app.query_one("#preview", PreviewPane)
+        assert not pane.show_vertical_scrollbar
+        await pilot.press("e")  # 25 recipient lines: now it scrolls
+        await pilot.pause()
+        await pilot.pause()
+        assert pane.show_vertical_scrollbar
+        width = app.query_one("#preview-body").size.width
+        rule = next(line for line in body_text(app).splitlines() if line.startswith("──"))
+        assert len(rule) <= width
+
+
 async def test_clicking_more_unfolds(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:

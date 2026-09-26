@@ -83,6 +83,11 @@ class PreviewPane(VerticalScroll):
     def on_resize(self) -> None:
         self._rerender()  # the folded To/Cc line and the rule follow the width
 
+    def watch_show_vertical_scrollbar(self, shown: bool) -> None:
+        # A scrollbar coming or going changes the width without a resize
+        # event; redraw once the layout has it.
+        self.call_after_refresh(self._rerender)
+
     def _rerender(self, *_) -> None:
         if self._message is not None:
             self._render_message()
