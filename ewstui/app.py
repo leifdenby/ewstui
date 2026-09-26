@@ -1683,6 +1683,23 @@ class EwstuiApp(App):
             _book,
         )
 
+    @ews_guard("Opening the event in Teams")
+    def on_calendar_view_teams_requested(self, event: CalendarView.TeamsRequested) -> None:
+        """T: an event with a Teams meeting: join it in Teams. Without one:
+        Teams' New meeting form filled in from the event (Teams can't make
+        an existing Exchange event a Teams meeting, so it's a new one)."""
+        detail = self.calendar_client.get_event(event.event_id)
+        link = teams.find_join_link(f"{detail.body_text}\n{detail.location}")
+        if link:
+            where = teams.join_meeting(link)
+            self.notify(f"Opening the Teams meeting “{detail.subject}” in {'Teams' if where == 'app' else 'your browser'}")
+            return
+        self._schedule_in_teams(detail.subject, detail.start, detail.end,
+                                attendees=[*detail.attendees, *detail.resources],
+                                location=detail.location, content=detail.body_text)
+        self.notify("That event has no Teams meeting: this is a new one in Teams — the old event stays (d deletes it)",
+                    timeout=10)
+
     @ews_guard("Deleting the event")
     def on_calendar_view_delete_event_requested(self, event: CalendarView.DeleteEventRequested) -> None:
         self.calendar_client.delete_event(event.event_id)

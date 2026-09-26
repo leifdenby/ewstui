@@ -11,6 +11,7 @@ form opens on teams.microsoft.com in the browser.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import sys
 import webbrowser
@@ -44,6 +45,30 @@ def meeting_link(subject: str, start: datetime, end: datetime, attendees: list[s
                  content: str = "", app: bool = True) -> str:
     """The deep link to Teams' "New meeting" form, filled in."""
     return f"{APP if app else WEB}?{meeting_query(subject, start, end, attendees, content)}"
+
+
+# A Teams meeting's join link, as Outlook/Teams write it into the invite.
+_JOIN = re.compile(r"https://teams\.(?:microsoft|live)\.com/(?:l/meetup-join|meet)/[^\s<>\"')\]]+", re.I)
+
+
+def find_join_link(text: str) -> str | None:
+    """The first Teams join link in an event's (or invite's) text."""
+    m = _JOIN.search(text or "")
+    return m[0] if m else None
+
+
+def join_meeting(link: str) -> str:
+    """Open a Teams meeting's join link in the Teams app (macOS), else the
+    browser (which offers to open Teams). Returns "app" or "browser"."""
+    if sys.platform == "darwin" and "/l/meetup-join/" in link:
+        app_link = re.sub(r"^https://teams\.microsoft\.com/", "msteams:/", link, flags=re.I)
+        try:
+            if subprocess.run(["open", app_link], capture_output=True, timeout=10).returncode == 0:
+                return "app"
+        except (OSError, subprocess.SubprocessError):
+            log.info("open msteams: failed", exc_info=True)
+    webbrowser.open(link)
+    return "browser"
 
 
 def open_in_teams(subject: str, start: datetime, end: datetime, attendees: list[str] | None = None,

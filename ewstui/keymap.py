@@ -58,6 +58,7 @@ CALENDAR_KEYS = [
     ("d", "delete event"),
     ("[ / ]", "earlier / later"),
     ("f", "find a free meeting room"),
+    ("T", "join its Teams meeting / make it one in Teams"),
 ]
 
 ROOM_KEYS = [
@@ -129,7 +130,7 @@ STATUS_HINTS = {
     "event": "new event · h/l j/k [ ] pick a day · v select days · n next date · Tab next field · Ctrl+S create · Ctrl+T in Teams · Esc close",
     "messages": "{open} open · r reply · d delete · m move · A archive · / search · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
-    "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
+    "calendar": "j/k event · n new · f find a room · T open in Teams · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",
     "visual": "{count} selected · j/k extend · d delete · A archive · m move · Space read · P priority · Esc cancel",
 }

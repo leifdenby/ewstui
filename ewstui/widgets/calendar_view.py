@@ -19,6 +19,7 @@ class CalendarView(DataTable):
         Binding("n", "new_event", "New event"),
         Binding("f", "find_room", "Find room"),
         Binding("d", "delete_event", "Delete"),
+        Binding("T", "open_in_teams", "Open in Teams"),
         Binding("[", "prev_range", "Earlier", show=False),
         Binding("]", "next_range", "Later", show=False),
     ]
@@ -35,6 +36,13 @@ class CalendarView(DataTable):
         """f: check which meeting rooms are free, then book one."""
 
     class DeleteEventRequested(Message):
+        def __init__(self, event_id: str) -> None:
+            self.event_id = event_id
+            super().__init__()
+
+    class TeamsRequested(Message):
+        """T: join the event's Teams meeting, or make a Teams meeting of it."""
+
         def __init__(self, event_id: str) -> None:
             self.event_id = event_id
             super().__init__()
@@ -82,6 +90,11 @@ class CalendarView(DataTable):
 
     def action_find_room(self) -> None:
         self.post_message(self.FindRoomRequested())
+
+    def action_open_in_teams(self) -> None:
+        eid = self._current_event_id()
+        if eid:
+            self.post_message(self.TeamsRequested(eid))
 
     def action_delete_event(self) -> None:
         eid = self._current_event_id()

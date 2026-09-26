@@ -423,6 +423,13 @@ attendees and notes you entered (plus the location, and picked rooms as
 attendees). Check it and send it from Teams, which creates the meeting,
 its join link and the invites.
 
+`T` on an event in the calendar view: if it's a Teams meeting (a Teams
+join link in its text), it opens that meeting in Teams to join. If it
+isn't, Teams' New meeting form opens filled in from the event (title,
+time, attendees and rooms, location, text) — a new Teams meeting, as
+Teams can't turn an existing event into one; the old event stays (`d`
+deletes it).
+
 The new-event screen has Attendees (addresses, comma separated) and
 Notes fields: with Ctrl+S the attendees get an invitation from Exchange
 and the notes become the event's text.

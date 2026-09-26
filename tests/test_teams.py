@@ -112,6 +112,80 @@ async def test_ctrl_s_invites_the_attendees_with_the_notes(tmp_path, opened):
     assert app.calendar_client.last_created_body == "Agenda: budget"
 
 
+def test_find_join_link():
+    text = ("Microsoft Teams meeting\nJoin on your computer: "
+            "<https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%7d>\n")
+    assert teams.find_join_link(text) == \
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%7d"
+    assert teams.find_join_link("Join: https://teams.microsoft.com/meet/3812345?p=abc") == \
+        "https://teams.microsoft.com/meet/3812345?p=abc"
+    assert teams.find_join_link("see https://example.com") is None
+
+
+def test_join_opens_the_app_on_macos(monkeypatch):
+    runs, browsed = [], []
+    monkeypatch.setattr(teams.sys, "platform", "darwin")
+    monkeypatch.setattr(teams.webbrowser, "open", browsed.append)
+    monkeypatch.setattr(teams.subprocess, "run", lambda cmd, **kw: runs.append(cmd) or SimpleNamespace(returncode=0))
+    assert teams.join_meeting("https://teams.microsoft.com/l/meetup-join/19%3ax/0") == "app"
+    assert runs[0] == ["open", "msteams:/l/meetup-join/19%3ax/0"]
+    assert teams.join_meeting("https://teams.microsoft.com/meet/123?p=x") == "browser"  # not an app link: the browser
+    assert browsed == ["https://teams.microsoft.com/meet/123?p=x"]
+
+
+async def test_T_joins_an_events_teams_meeting(tmp_path, opened, monkeypatch):
+    joined = []
+    monkeypatch.setattr(teams, "join_meeting", lambda link: joined.append(link) or "app")
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("3")
+        await settle(app, pilot)
+        cal = app.query_one("#calendar")
+        cal.move_cursor(row=cal.get_row_index("e2"))  # the demo 1:1: a Teams meeting
+        await pilot.press("T")
+        await settle(app, pilot)
+    assert joined == ["https://teams.microsoft.com/l/meetup-join/19%3ameeting_demo%40thread.v2/0?context=%7b%7d"]
+    assert opened == []
+
+
+async def test_T_on_an_event_without_one_makes_a_new_teams_meeting(tmp_path, opened, monkeypatch):
+    monkeypatch.setattr(teams, "join_meeting", lambda link: pytest.fail("nothing to join"))
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("3")
+        await settle(app, pilot)
+        cal = app.query_one("#calendar")
+        cal.move_cursor(row=cal.get_row_index("e1"))  # Standup: not a Teams meeting
+        await pilot.press("T")
+        await settle(app, pilot)
+    subject, start, end, attendees, content = opened[0]
+    assert subject == "Standup" and content == "Location: Zoom"
+
+
+def test_live_get_event_has_the_text_and_attendees():
+    from exchangelib import Attendee, EWSDateTime, EWSTimeZone, Mailbox
+
+    from ewstui.ews_client import CalendarClient
+
+    utc = EWSTimeZone("UTC")
+    item = SimpleNamespace(
+        id="ev1", changekey="c", subject="Sync", location="Room 4B", is_all_day=False,
+        start=EWSDateTime(2026, 10, 14, 8, tzinfo=utc), end=EWSDateTime(2026, 10, 14, 9, tzinfo=utc),
+        organizer=Mailbox(email_address="me@corp.example"), text_body="Agenda",
+        required_attendees=[Attendee(mailbox=Mailbox(email_address="a@corp.example"), response_type="Unknown")],
+        optional_attendees=[Attendee(mailbox=Mailbox(email_address="b@corp.example"), response_type="Unknown")],
+        resources=[Attendee(mailbox=Mailbox(email_address="room@corp.example"), response_type="Unknown")],
+    )
+    client = CalendarClient(SimpleNamespace(calendar=SimpleNamespace(get=lambda id: item)))
+    client.tz = utc
+    detail = client.get_event("ev1")
+    assert (detail.attendees, detail.resources, detail.body_text) == (["a@corp.example", "b@corp.example"],
+                                                                      ["room@corp.example"], "Agenda")
+    assert detail.start == datetime(2026, 10, 14, 8)
+
+
 def test_live_create_event_invites_attendees(monkeypatch):
     from unittest.mock import MagicMock
 

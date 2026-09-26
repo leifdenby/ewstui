@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from .ews_client import (
     AttachmentSummary,
+    EventDetail,
     EventSummary,
     FolderSummary,
     MeetingInfo,
@@ -405,6 +406,18 @@ class DemoCalendarClient:
 
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         return [e for e in self._events if e.start < end and e.end > start]
+
+    # The demo 1:1 is a Teams meeting (T joins it); the others aren't.
+    EVENT_DETAILS = {
+        "e2": (["boss@corp.example"], "Microsoft Teams meeting\nJoin: "
+               "https://teams.microsoft.com/l/meetup-join/19%3ameeting_demo%40thread.v2/0?context=%7b%7d\n"),
+    }
+
+    def get_event(self, event_id: str) -> EventDetail:
+        e = next(e for e in self._events if e.id == event_id)
+        attendees, body = self.EVENT_DETAILS.get(event_id, ([], ""))
+        return EventDetail(e.id, e.changekey, e.subject, e.start, e.end, e.location, e.organizer, e.is_all_day,
+                           attendees=list(attendees), body_text=body)
 
     def answer_invite(self, invite_id: str, subject: str, meeting: MeetingInfo, response: str) -> None:
         """Accepted / tentative: the meeting is in the calendar; declined: it isn't."""

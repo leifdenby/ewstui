@@ -266,6 +266,14 @@ class EventSummary:
     is_all_day: bool
 
 
+@dataclass
+class EventDetail(EventSummary):
+    """An event in full (CalendarClient.get_event)."""
+    attendees: list[str] = field(default_factory=list)  # required, then optional
+    resources: list[str] = field(default_factory=list)  # rooms
+    body_text: str = ""
+
+
 # Mail folders don't only hold Messages: Drafts can hold unsent meeting
 # invites (CalendarItem), and other folders contacts, tasks, etc. Those
 # lack sender/is_read/to_recipients, so read fields defensively.
@@ -910,6 +918,25 @@ class CalendarClient:
             item.save(send_meeting_invitations=SEND_TO_ALL_AND_SAVE_COPY)
         else:
             item.save()
+
+    @retry_on_dead_connection
+    def get_event(self, event_id: str) -> EventDetail:
+        """One event in full: its text and who's invited (the list only
+        fetches what the agenda shows)."""
+        item = self.account.calendar.get(id=event_id)
+        return EventDetail(
+            id=item.id,
+            changekey=item.changekey,
+            subject=item.subject or "(no subject)",
+            start=_to_local(item.start, self.tz),
+            end=_to_local(item.end, self.tz),
+            location=item.location or "",
+            organizer=_email(item.organizer),
+            is_all_day=bool(item.is_all_day),
+            attendees=_addresses(item, "required_attendees") + _addresses(item, "optional_attendees"),
+            resources=_addresses(item, "resources"),
+            body_text=getattr(item, "text_body", None) or "",
+        )
 
     def delete_event(self, event_id: str) -> None:
         item = self.account.calendar.get(id=event_id)
