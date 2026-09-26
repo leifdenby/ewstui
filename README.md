@@ -279,6 +279,10 @@ a full path (`~/…`, `/…`), and Enter saves it there (without opening
 it). Folders you saved to this session, and the usual attachment
 folder, are at the top.
 
+Several at once: `V` starts a selection in the list, `j`/`k` extend it;
+then Enter saves and opens all of them, `s` saves all of them to one
+folder. Esc ends the selection first.
+
 Only real file attachments are downloadable; an attachment that's
 itself an embedded email or calendar item (e.g. a forwarded message)
 shows up greyed out in the list since EWS represents those

@@ -1388,23 +1388,39 @@ class EwstuiApp(App):
         def _on_result(choice: dict | None) -> None:
             if choice is None:
                 return
+            ids = choice["ids"]
+            if choice.get("skipped"):
+                self.notify(f"Skipped {choice['skipped']} embedded item(s): not downloadable", severity="warning")
             if choice["action"] == "open":
-                path = _save(choice["id"], self.config.attachment_dir)
-                if path is not None:
-                    self._open_with_system_default(path)
+                saved = [p for p in (_save(i, self.config.attachment_dir) for i in ids) if p is not None]
+                if len(saved) == 1:
+                    self._open_with_system_default(saved[0])
+                    return
+                failed = []
+                for path in saved:
+                    try:
+                        open_with_default_app(path)
+                    except OpenError as e:
+                        failed.append(f"{path.name}: {e}")
+                where = display_path(self.config.attachment_dir, Path.home())
+                self.notify(f"Saved {len(saved)} files to {where} and opening them"
+                            + (f" (couldn't open {len(failed)}: {failed[0]})" if failed else ""))
                 return
-            name = next((a.name for a in attachments if a.id == choice["id"]), "the attachment")
+            names = [a.name for a in attachments if a.id in ids]
+            title = f"Save “{names[0]}” to…" if len(names) == 1 else f"Save {len(names)} attachments to…"
 
             def _to_folder(folder: Path | None) -> None:
                 if folder is None:
                     return
-                path = _save(choice["id"], folder)
-                if path is not None:
+                saved = [p for p in (_save(i, folder) for i in ids) if p is not None]
+                if saved:
                     self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
-                    self.notify(f"Saved to {display_path(path, Path.home())}")
+                    shown = display_path(saved[0], Path.home()) if len(saved) == 1 else \
+                        f"{len(saved)} files to {display_path(folder, Path.home())}"
+                    self.notify(f"Saved {shown}" if len(saved) > 1 else f"Saved to {shown}")
 
             self.push_screen(
-                PathPickerScreen(f"Save “{name}” to…", first=[*self._recent_save_dirs, self.config.attachment_dir]),
+                PathPickerScreen(title, first=[*self._recent_save_dirs, self.config.attachment_dir]),
                 _to_folder,
             )
 

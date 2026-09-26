@@ -485,8 +485,10 @@ class ConfirmScreen(ModalScreen[bool]):
 
 class AttachmentListScreen(ModalScreen[dict | None]):
     """Lists a message's attachments; Enter/l saves + opens the selected
-    one, s saves it to a folder you pick, Esc cancels. Dismisses with
-    {"id": attachment id, "action": "open" | "save_to"}, or None.
+    one, s saves it to a folder you pick, Esc cancels. V selects several
+    (j/k extend it) for Enter / s to do all at once; Esc first ends the
+    selection. Dismisses with {"ids": [attachment ids], "action": "open" |
+    "save_to", "skipped": n not downloadable}, or None.
     """
 
     BINDINGS = [
@@ -495,6 +497,7 @@ class AttachmentListScreen(ModalScreen[dict | None]):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("l", "select_cursor", "Open", show=False),
         Binding("s", "save_to", "Save to…", show=False),
+        Binding("V", "toggle_visual", "Select several", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -509,22 +512,63 @@ class AttachmentListScreen(ModalScreen[dict | None]):
         padding: 1 2;
         background: $surface;
     }
+    #attachment-items ListItem.-selected-attachment {
+        background: $tux-mode-bg 40%;
+        text-style: bold;
+    }
+    #attachment-help {
+        color: $text-muted;
+    }
     """
 
     def __init__(self, subject: str, attachments: list) -> None:
         super().__init__()
         self._subject = subject
         self._attachments = attachments
+        self._anchor: int | None = None  # where V started a selection
 
     def compose(self) -> ComposeResult:
         from textual.widgets import ListItem, ListView
 
         with Vertical(id="attachment-box"):
-            yield Label(f"Attachments — {self._subject}  (Enter/l save + open · s save to… · Esc cancel)", markup=False)
+            yield Label(f"Attachments — {self._subject}", markup=False)
             with ListView(id="attachment-items"):
                 for att in self._attachments:
                     note = "" if att.is_file else "  [dim](embedded item, not downloadable)[/dim]"
                     yield ListItem(Label(f"{att.name}  ({_human_size(att.size)}){note}"), name=att.id)
+            yield Label("", id="attachment-help", markup=False)
+
+    def on_mount(self) -> None:
+        self._show_selection()
+
+    # -- selecting several (V) ----------------------------------------------------
+
+    def selected(self) -> list:
+        """The attachments chosen: the selection, or the one under the cursor."""
+        index = self._list().index
+        if index is None:
+            return []
+        if self._anchor is None:
+            return [self._attachments[index]]
+        lo, hi = sorted((self._anchor, index))
+        return self._attachments[lo:hi + 1]
+
+    def action_toggle_visual(self) -> None:
+        index = self._list().index
+        self._anchor = None if self._anchor is not None or index is None else index
+        self._show_selection()
+
+    def _show_selection(self) -> None:
+        from textual.widgets import ListItem
+
+        chosen = {id(a) for a in self.selected()} if self._anchor is not None else set()
+        for item, att in zip(self._list().query(ListItem), self._attachments):
+            item.set_class(id(att) in chosen, "-selected-attachment")
+        if self._anchor is None:
+            text = "Enter/l save + open · s save to… · V select several · Esc cancel"
+        else:
+            text = f"{len(self.selected())} selected · j/k extend · Enter save + open all · s save all to… · Esc end selection"
+        self.query_one("#attachment-help", Label).update(text)
 
     def _list(self):
         from textual.widgets import ListView
@@ -538,10 +582,16 @@ class AttachmentListScreen(ModalScreen[dict | None]):
     def action_cursor_down(self) -> None:
         lv = self._list()
         lv.index = 0 if lv.index is None else min(lv.index + 1, len(self._attachments) - 1)
+        self._show_selection()
 
     def action_cursor_up(self) -> None:
         lv = self._list()
         lv.index = 0 if lv.index is None else max(lv.index - 1, 0)
+        self._show_selection()
+
+    def on_list_view_highlighted(self, event) -> None:
+        if self.is_mounted:
+            self._show_selection()
 
     def action_select_cursor(self) -> None:
         self._select_current()
@@ -550,20 +600,22 @@ class AttachmentListScreen(ModalScreen[dict | None]):
         self._select_current("save_to")
 
     def action_cancel(self) -> None:
+        if self._anchor is not None:  # Esc first ends a selection
+            self._anchor = None
+            self._show_selection()
+            return
         self.dismiss(None)
 
     def on_list_view_selected(self, event) -> None:
         self._select_current()
 
     def _select_current(self, action: str = "open") -> None:
-        lv = self._list()
-        if lv.index is None:
-            return
-        att = self._attachments[lv.index]
-        if not att.is_file:
+        chosen = self.selected()
+        files = [a for a in chosen if a.is_file]
+        if not files:  # only embedded items: nothing to download
             self.app.bell()
             return
-        self.dismiss({"id": att.id, "action": action})
+        self.dismiss({"ids": [a.id for a in files], "action": action, "skipped": len(chosen) - len(files)})
 
 
 def _human_size(n: int) -> str:
