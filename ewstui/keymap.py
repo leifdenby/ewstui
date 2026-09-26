@@ -33,6 +33,7 @@ MAIL_KEYS = [
     ("e", "all To / Cc recipients (e again folds)"),
     ("i", "answer an invite / remove a cancelled meeting"),
     ("c", "calendar event from the email (save-the-dates)"),
+    ("/", "search this folder (fuzzy, as you type)"),
     ("p / P", "add to priority list (+ note / none); p on a listed one edits its note"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
@@ -83,6 +84,7 @@ FOLDER_KEYS = [
     ("V", "pick up a folder: j/k move it, Enter/V put down"),
     ("Esc", "put it back where it was"),
     ("H", "hide / unhide the folder"),
+    ("/", "search all folders"),
     (".", "show hidden folders (dimmed)"),
 ]
 
@@ -120,10 +122,11 @@ INVITE_HINTS = {"invite": "i answer invite", "cancellation": "i remove from cale
 STATUS_HINTS = {
     # {open}: the key the layout makes natural — "l" (right) when the next
     # pane is to the right, "o" when the email sits below the list.
-    "folders": "j/k folder · {open} open · V move · H hide · . show hidden · ? help",
+    "folders": "j/k folder · {open} open · / search all folders · V move · H hide · . show hidden · ? help",
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
+    "search": "type to search · Enter/↓ to the results · Esc end the search",
     "event": "new event · h/l j/k [ ] pick a day · v select days · n next date from the email · Tab next field · Ctrl+S create · Esc close",
-    "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
+    "messages": "{open} open · r reply · d delete · m move · A archive · / search · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",

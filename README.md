@@ -323,6 +323,16 @@ undo. `r` `R` `d` `A` `m` `P` `p` `v` also work while you're reading the
 email (focus in the reading pane), on that email; after a move, archive
 or delete you stay in the reading pane, on the next email.
 
+**Search** (`/`): in the message list, searches the folder you're in;
+in the folder pane, all your mail folders. A search bar opens above the
+list and the list narrows as you type: a fuzzy match on subject and
+sender (`budg` finds "Q3 budget review", best matches first), and, once
+you pause, Exchange's own search too, which also looks in the text and
+in older emails than the ones loaded. All-folder results are tagged with
+their folder. Enter or ↓ goes into the results (open, reply, archive…
+as usual; the results stay current), `/` back to the search bar, Esc
+ends the search.
+
 **Links** (`U`): lists the links in the email shown in the reading
 pane (web and `mailto:` links, with the text just before each so you
 can tell them apart). `j`/`k` and Enter — or just `1`–`9` — open one in

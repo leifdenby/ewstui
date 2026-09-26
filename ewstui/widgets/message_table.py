@@ -10,6 +10,7 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import RowDoesNotExist
 
 from ..ews_client import MessageSummary
+from ..search import rank
 from ..threads import build_threads, topic, tree_rows
 
 
@@ -128,6 +129,9 @@ class MessageTable(DataTable):
             self.message_ids = message_ids
             super().__init__()
 
+    class SearchCancelled(Message):
+        """Esc on search results (no selection going): end the search."""
+
     class VisualChanged(Message):
         """Visual selection started, changed size or ended (status bar)."""
 
@@ -145,6 +149,15 @@ class MessageTable(DataTable):
         self._anchor: int | None = None
         self._row_cells: dict[str, tuple] = {}  # message id -> cells as added (to un-highlight)
         self._painted: set[str] = set()  # rows currently drawn as selected
+        # Search (/): the fuzzy filter on the rows, matches Exchange's search
+        # found beyond the loaded rows, and folder names to tag rows with
+        # (all-folder search).
+        self.search = ""
+        self._extra: list[MessageSummary] = []
+        self.folder_names: dict[str, str] = {}
+        # Ids Exchange's search returned: shown even when the words were in
+        # the text rather than the subject/sender (after the fuzzy matches).
+        self.server_matches: set[str] = set()
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
@@ -201,12 +214,37 @@ class MessageTable(DataTable):
         last one given is kept.
         """
         self._messages = list(messages)
-        self._by_id = {m.id: m for m in messages}
+        listed = {m.id for m in messages}
+        self._extra = [m for m in self._extra if m.id not in listed]
+        self._by_id = {m.id: m for m in [*messages, *self._extra]}
         if home_folder_id is not None:
             self._home_folder = home_folder_id
         if priorities is not None:
             self._priorities = dict(priorities)
         self._render(keep_cursor_on)
+
+    def set_search(self, query: str, extra: list[MessageSummary] | None = None) -> None:
+        """Show only the rows matching `query`, best first ("" shows all
+        again). `extra`: more matches (from Exchange's search) to include
+        than the loaded rows. The cursor goes to the best match."""
+        self.search = query
+        if extra is not None:
+            listed = {m.id for m in self._messages}
+            self._extra = [m for m in extra if m.id not in listed]
+        if not query:
+            self._extra = []
+            self.server_matches = set()
+        self._by_id = {m.id: m for m in [*self._messages, *self._extra]}
+        self._render(None)
+
+    def shown_messages(self) -> list[MessageSummary]:
+        """The rows, in order: all, or the matches while searching."""
+        if not self.search:
+            return list(self._messages)
+        candidates = [*self._messages, *self._extra]
+        ranked = rank(candidates, self.search)
+        shown = {m.id for m in ranked}
+        return ranked + [m for m in candidates if m.id in self.server_matches and m.id not in shown]
 
     def _render(self, keep: str | None = None) -> None:
         if keep is None:
@@ -225,6 +263,10 @@ class MessageTable(DataTable):
         if self._anchor is not None:  # the rows changed under the selection: drop it
             self._anchor = None
             self.post_message(self.VisualChanged(0))
+        if self.search:  # search results: a flat list, best match first
+            for m in self.shown_messages():
+                self._add_message_row(m, m.subject)
+            return
         if not self.threaded:
             for m in self._messages:
                 self._add_message_row(m, m.subject)
@@ -240,11 +282,14 @@ class MessageTable(DataTable):
 
     def _add_message_row(self, m: MessageSummary, subject: str) -> None:
         flag = "" if m.is_read else "●"
-        if self._home_folder and m.folder_id and m.folder_id != self._home_folder:
+        if self._home_folder and m.folder_id and m.folder_id != self._home_folder and not self.folder_names:
             # A thread reply from Sent Items; after a bare tree guide ("└─ ")
             # no extra space is needed.
             subject += "(sent)" if subject.endswith(" ") else " (sent)"
-        tag = MEETING_TAGS.get(getattr(m, "kind", "mail"))
+        tag = MEETING_TAGS.get(getattr(m, "kind", "mail"), "")
+        folder = self.folder_names.get(m.folder_id or "")
+        if folder:  # all-folder search: which folder it's in
+            tag = f"{folder} · {tag}"
         if tag:  # invites and cancellations: after any tree guide, before the subject
             guide = subject[: len(subject) - len(subject.lstrip("│├└┌─ "))]
             subject = Text.assemble(guide, (tag, "dim"), subject[len(guide):], end="", no_wrap=True)
@@ -277,6 +322,8 @@ class MessageTable(DataTable):
         if self._anchor is not None:
             self._anchor = None
             self._paint()
+        elif self.search:  # Esc on search results: back to the whole folder
+            self.post_message(self.SearchCancelled())
 
     def _paint(self) -> None:
         """Draw the selected rows highlighted; restore rows that left the

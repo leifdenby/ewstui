@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from textual import work
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
@@ -15,7 +15,7 @@ from textual.css.query import NoMatches
 from textual.worker import get_current_worker
 from textual.widgets.data_table import RowDoesNotExist
 from textual import events
-from textual.widgets import Tab, Tabs
+from textual.widgets import Input, Tab, Tabs
 
 from . import config_file, connection
 from .config import Config
@@ -25,6 +25,7 @@ from .priority_store import PriorityStore, split_note
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
+from .widgets.search_bar import SearchBar
 from .screens import (
     AddNoteScreen,
     AttachmentListScreen,
@@ -56,6 +57,8 @@ PREFETCH_DELAY = 0.5  # seconds
 PREFETCH_COUNT = 2
 # What answering an invite did, for the notice afterwards.
 INVITE_DONE = {"accept": "Accepted", "tentative": "Tentatively accepted", "decline": "Declined"}
+# Ask Exchange's search once typing has paused this long.
+SEARCH_DELAY = 0.35  # seconds
 
 
 def ews_guard(what: str):
@@ -208,6 +211,7 @@ class EwstuiApp(App):
         Binding("e", "toggle_recipients", "All recipients", show=False),
         Binding("i", "invite", "Answer invite", show=False),
         Binding("c", "event_from_email", "Calendar event from email", show=False),
+        Binding("slash", "search", "Search", show=False),
         Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -236,6 +240,10 @@ class EwstuiApp(App):
         # Your calendar on the days invites are for (the card's clashes and
         # day strip), by day; dropped on Ctrl+l and after answering an invite.
         self._invite_days: dict[date, list] = {}
+        # Search (/): "folder" (the current one) or "all" (every mail folder)
+        # while the search bar is open, else None; its pending Exchange search.
+        self._search_scope: str | None = None
+        self._search_timer = None
         self._prefetch_timer = None
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
@@ -442,6 +450,8 @@ class EwstuiApp(App):
 
         if messages is None or folder_id != self.current_folder_id:
             return  # user switched folders while we were fetching
+        if self._search_scope == "all":
+            return  # the list shows all-folder search results, not this folder
         snapshot = [(m.id, m.is_read) for m in messages]
         if snapshot == self._message_snapshot:
             return
@@ -523,6 +533,113 @@ class EwstuiApp(App):
             return
         if isinstance(self.screen, InviteResponseScreen):
             self.screen.set_events(events)
+
+    # -- / : search this folder (message list) or all folders (folder pane) -----------
+
+    def action_search(self) -> None:
+        if self.query_one(StatusBar).mode != "MAIL":
+            return
+        bars = self.query(SearchBar)
+        if bars:  # already searching: back to typing
+            bars.first().focus()
+            return
+        scope = "all" if isinstance(self.screen_stack[0].focused, FolderList) else "folder"
+        if not self.current_folder_id:
+            return
+        self._search_scope = scope
+        table = self.query_one("#messages", MessageTable)
+        bar = SearchBar(scope)
+        self.query_one("#reading").mount(bar, before=table)
+        if scope == "all":  # the results replace the list, each tagged with its folder
+            table.folder_names = {f.id: f.name for f in self.query_one("#folders", FolderList)._all}
+            table.set_messages([])
+        bar.focus()
+        self._update_status()
+
+    @on(Input.Changed, "#search-bar")
+    def _search_typed(self, event: Input.Changed) -> None:
+        query = event.value.strip()
+        table = self.query_one("#messages", MessageTable)
+        if self._search_scope == "folder":
+            table.set_search(query)  # the loaded emails, at once
+        elif not query:
+            table.set_messages([])
+        if self._search_timer is not None:
+            self._search_timer.stop()
+        if len(query) >= 2:  # then Exchange's search, once you pause typing
+            folder_id = self.current_folder_id if self._search_scope == "folder" else None
+            self._search_timer = self.set_timer(SEARCH_DELAY, lambda: self._server_search(query, folder_id))
+        self._update_status()
+
+    @work(thread=True, exclusive=True, group="search")
+    def _server_search(self, query: str, folder_id: str | None) -> None:
+        try:
+            results = self.mail_client.search(query, folder_id)
+        except Exception as e:  # noqa: BLE001 - the local matches still show
+            log.warning("search failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Exchange's search failed: {e}", severity="warning", timeout=8)
+            return
+        self.call_from_thread(self._search_results, query, results)
+
+    def _search_results(self, query: str, results: list) -> None:
+        bars = self.query(SearchBar)
+        if not bars or bars.first().value.strip() != query:
+            return  # typed on since, or closed
+        table = self.query_one("#messages", MessageTable)
+        table.server_matches = {m.id for m in results}
+        if self._search_scope == "all":
+            table.set_messages(results)
+            table.set_search(query)
+        else:
+            table.set_search(query, extra=results)
+        self._update_status()
+
+    def _rerun_search(self) -> None:
+        """After a move/archive/delete on search results: the same search
+        again, so the results are current (the email that left is gone)."""
+        table = self.query_one("#messages", MessageTable)
+        query = table.search
+        if not query:
+            return
+        try:
+            results = self.mail_client.search(query, None if self._search_scope == "all" else self.current_folder_id)
+        except Exception:  # noqa: BLE001
+            log.warning("search failed", exc_info=True)
+            results = []
+        table.server_matches = {m.id for m in results}
+        if self._search_scope == "all":
+            table.set_messages(results)
+        table.set_search(query, extra=None if self._search_scope == "all" else results)
+
+    def on_search_bar_to_results(self, event: SearchBar.ToResults) -> None:
+        self.query_one("#messages", MessageTable).focus()
+
+    def on_search_bar_closed(self, event: SearchBar.Closed) -> None:
+        self._close_search()
+
+    def on_message_table_search_cancelled(self, event: MessageTable.SearchCancelled) -> None:
+        self._close_search()
+
+    def _close_search(self, refocus: bool = True) -> None:
+        if self._search_scope is None:
+            return
+        scope, self._search_scope = self._search_scope, None
+        if self._search_timer is not None:
+            self._search_timer.stop()
+        for bar in self.query(SearchBar):
+            bar.remove()
+        table = self.query_one("#messages", MessageTable)
+        table.server_matches = set()
+        if scope == "all":  # back to the folder you were in
+            table.folder_names = {}
+            table.search = ""
+            table._extra = []
+            self.select_folder(self.current_folder_id)
+        else:
+            table.set_search("")
+        if refocus:
+            table.focus()
+        self._update_status()
 
     # -- c: a calendar event from the email (save-the-dates without an invite) ---------
 
@@ -788,6 +905,7 @@ class EwstuiApp(App):
     # -- mail pane events -------------------------------------------------
 
     def on_folder_list_folder_selected(self, event: FolderList.FolderSelected) -> None:
+        self._close_search(refocus=False)  # another folder: a new start
         self.select_folder(event.folder.id)
         self.query_one("#messages", MessageTable).focus()
 
@@ -1074,7 +1192,10 @@ class EwstuiApp(App):
         table = self.query_one("#messages", MessageTable)
         row = table.cursor_row if row is None else row
         scroll_y = table.scroll_y  # and the list stays where it was on screen
-        self.select_folder(self.current_folder_id)
+        if self._search_scope != "all":  # (all-folder results aren't this folder's list)
+            self.select_folder(self.current_folder_id)
+        if self._search_scope is not None:
+            self._rerun_search()  # search results: the email that left drops out
         if table.row_count:
             table.move_cursor(row=min(row, table.row_count - 1), scroll=False)
             table.keep_scroll(scroll_y)
@@ -1500,6 +1621,8 @@ class EwstuiApp(App):
         pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)
         if focused is not None and any(isinstance(a, EventFromEmailPanel) for a in focused.ancestors_with_self):
             pane = "event"
+        if isinstance(focused, SearchBar):
+            pane = "search"
         # The message list opens into the pane to its right ("l") in the
         # columns layout, but into the one below it ("o") when stacked; the
         # folder pane always opens rightwards.
@@ -1527,6 +1650,11 @@ class EwstuiApp(App):
                 items.append((f"{unread} unread", "accent"))
             if table.threaded:
                 items.append(("threads", "dim"))
+            if self._search_scope is not None:
+                where = "all folders" if self._search_scope == "all" else folder
+                found = len(table.shown_messages()) if table.search else 0
+                items = [(f"Search {where}", "normal"), (f"“{table.search}”" if table.search else "type to search", "accent"),
+                         (f"{found} found", "dim")]
             top.items = tuple(items)
             status.info = f"{len(messages)} messages"
         elif mode == "priority":
