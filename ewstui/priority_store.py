@@ -429,25 +429,30 @@ class PriorityStore:
         return True
 
 
-DATE_FIELDS = ("due", "t")  # todo.txt due date, and threshold ("don't show before") date
-_DATE_FIELD_RE = re.compile(r"^(due|t):(\d{4}-\d{2}-\d{2})$")
+# Fields written in the note that are todo.txt key:value fields, not text:
+# the due date, the threshold ("don't show before") date, and how long
+# answering it will take (dur:30m, dur:2h, dur:1d).
+DATE_FIELDS = ("due", "t", "dur")
+_DATE_FIELD_RE = re.compile(r"^(?:(due|t):(\d{4}-\d{2}-\d{2})|(dur):(\d+[mhd]))$")
 
 
 def split_date_fields(note: str) -> tuple[str, dict[str, str]]:
-    """"call Bo due:2026-10-01" -> ("call Bo", {"due": "2026-10-01"}): the
-    date fields become todo.txt key:value fields, not note text."""
-    words, dates = [], {}
+    """"call Bo due:2026-10-01 dur:30m" -> ("call Bo", {"due": "2026-10-01",
+    "dur": "30m"}): those fields become todo.txt key:value fields, not note
+    text."""
+    words, fields = [], {}
     for word in note.split():
         m = _DATE_FIELD_RE.match(word)
         if m:
-            dates[m[1]] = m[2]
+            key, value = (m[1], m[2]) if m[1] else (m[3], m[4])
+            fields[key] = value
         else:
             words.append(word)
-    return " ".join(words), dates
+    return " ".join(words), fields
 
 
 def note_with_dates(note: str, entry: PriorityEntry) -> str:
-    """The note to edit: its text plus the entry's due:/t: dates."""
+    """The note to edit: its text plus the entry's due:/t:/dur: fields."""
     fields = [f"{k}:{entry.kv[k]}" for k in DATE_FIELDS if k in entry.kv]
     return " ".join([note, *fields]).strip()
 

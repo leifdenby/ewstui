@@ -293,7 +293,9 @@ class AddNoteScreen(ModalScreen[str | None]):
 
     Typing `due:` or `t:` (todo.txt's due and threshold dates) opens a
     month calendar, tuxedo-style: h/l j/k [ ] t pick the day, Enter puts it
-    in (due:2026-10-01), Esc closes it and you go on typing.
+    in (due:2026-10-01), Esc closes it and you go on typing. `dur:` (how
+    long answering will take) opens a row of durations the same way: h/l
+    move, 1-7 pick one straight away (dur:30m).
     """
 
     BINDINGS = [
@@ -313,14 +315,15 @@ class AddNoteScreen(ModalScreen[str | None]):
         padding: 1 2;
         background: $surface;
     }
-    #note-date {
+    #note-date, #note-duration {
         display: none;
+        height: auto;
         margin-top: 1;
     }
-    #note-date.open {
+    #note-date.open, #note-duration.open {
         display: block;
     }
-    #note-date-help {
+    #note-date-help, #note-duration-help {
         color: $text-muted;
     }
     """
@@ -332,63 +335,90 @@ class AddNoteScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         from .widgets.date_picker import DatePicker
+        from .widgets.duration_picker import DurationPicker
 
         with Vertical(id="note-box"):
             yield Label(self._label, markup=False)
-            # (no select-on-focus: coming back from the calendar, typing goes on after the date)
-            yield Input(value=self._value, placeholder="Note (due: or t: picks a date)", id="note-text",
+            # (no select-on-focus: coming back from a picker, typing goes on after what it put in)
+            yield Input(value=self._value, placeholder="Note (due: or t: picks a date, dur: how long)", id="note-text",
                         select_on_focus=False)
             with Vertical(id="note-date"):
                 yield DatePicker(id="note-date-picker")
                 yield Label("h/l day · j/k week · [ ] month · t today\nEnter put it in · Esc back to typing",
                             id="note-date-help", markup=False)
+            with Vertical(id="note-duration"):
+                yield Label("How long will it take?", markup=False)
+                yield DurationPicker(id="note-duration-picker")
+                yield Label("h/l choose · 1-7 or Enter put it in · Esc back to typing",
+                            id="note-duration-help", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#note-text", Input).focus()
 
-    # -- the date calendar (due: / t:) ----------------------------------------------
+    # -- the pickers: calendar (due: / t:), durations (dur:) --------------------------
+
+    PICKERS = {"due:": "#note-date", "t:": "#note-date", "dur:": "#note-duration"}
 
     @property
     def picking_date(self) -> bool:
         return self.query_one("#note-date").has_class("open")
 
+    @property
+    def picking_duration(self) -> bool:
+        return self.query_one("#note-duration").has_class("open")
+
     def on_input_changed(self, event: Input.Changed) -> None:
         field = event.input
         before = field.value[: field.cursor_position]
-        for key in ("due:", "t:"):
+        for key, picker in self.PICKERS.items():
             if before.endswith(key) and (len(before) == len(key) or before[-len(key) - 1] == " "):
-                self._open_date_picker()
+                self._open_picker(picker)
                 return
 
-    def _open_date_picker(self) -> None:
+    def _open_picker(self, box_id: str) -> None:
         from datetime import date
 
         from .widgets.date_picker import DatePicker
+        from .widgets.duration_picker import DurationPicker
 
-        picker = self.query_one(DatePicker)
-        picker.value = date.today()
-        self.query_one("#note-date").add_class("open")
+        box = self.query_one(box_id)
+        box.add_class("open")
+        if box_id == "#note-date":
+            picker = self.query_one(DatePicker)
+            picker.value = date.today()
+        else:
+            picker = self.query_one(DurationPicker)
         picker.focus()
 
-    def _close_date_picker(self) -> None:
-        self.query_one("#note-date").remove_class("open")
+    def _close_pickers(self) -> None:
+        for box_id in ("#note-date", "#note-duration"):
+            self.query_one(box_id).remove_class("open")
         self.query_one("#note-text", Input).focus()
 
-    def action_pick_date(self) -> None:
-        from .widgets.date_picker import DatePicker
-
-        if not self.picking_date:
-            return
+    def _insert(self, text: str) -> None:
+        """Put `text` in the note where the cursor is, close the picker and
+        go on typing after it."""
         field = self.query_one("#note-text", Input)
-        text = self.query_one(DatePicker).value.isoformat()
         at = field.cursor_position
         field.value = field.value[:at] + text + field.value[at:]
-        self._close_date_picker()
+        self._close_pickers()
         field.cursor_position = at + len(text)
 
+    def action_pick_date(self) -> None:  # Enter (in the note field itself, Enter saves)
+        from .widgets.date_picker import DatePicker
+        from .widgets.duration_picker import DurationPicker
+
+        if self.picking_date:
+            self._insert(self.query_one(DatePicker).value.isoformat())
+        elif self.picking_duration:
+            self._insert(self.query_one(DurationPicker).value)
+
+    def on_duration_picker_picked(self, event) -> None:  # 1-7
+        self._insert(event.value)
+
     def action_cancel(self) -> None:
-        if self.picking_date:  # Esc first closes the calendar
-            self._close_date_picker()
+        if self.picking_date or self.picking_duration:  # Esc first closes the picker
+            self._close_pickers()
             return
         self.dismiss(None)
 

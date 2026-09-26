@@ -145,6 +145,36 @@ async def test_escape_closes_the_calendar_first_and_t_opens_it_too(tmp_path):
         assert not screen.picking_date
 
 
+async def test_typing_dur_opens_the_durations(tmp_path):
+    from ewstui.widgets.duration_picker import DurationPicker
+
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        screen = app.screen
+        await pilot.press(*"reply dur:")
+        await pilot.pause()
+        assert screen.picking_duration and isinstance(app.focused, DurationPicker)
+        await pilot.press("l", "enter")  # 30m -> 1h
+        await pilot.pause()
+        field = screen.query_one("#note-text")
+        assert field.value == "reply dur:1h" and not screen.picking_duration
+        await pilot.press(*" dur:", "5")  # 5: 2h straight away (replaces the 1h field when saved)
+        await pilot.pause()
+        assert field.value == "reply dur:1h dur:2h"
+        await pilot.press("enter")
+        await settle(app, pilot)
+    entry = PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1")
+    assert entry.kv["dur"] == "2h" and entry.description == "Q3 budget review — reply"
+
+
+def test_dur_is_a_todo_txt_field():
+    assert split_date_fields("reply dur:30m due:2026-10-01") == ("reply", {"dur": "30m", "due": "2026-10-01"})
+    assert split_date_fields("dur:soon") == ("dur:soon", {})
+
+
 async def test_capital_p_on_a_prioritised_email_changes_nothing(tmp_path):
     app = make_app(tmp_path)
     seen = []

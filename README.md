@@ -360,9 +360,11 @@ are ever opened.
 **Due dates on the priority list**: in the note (`p`), typing `due:` —
 or `t:`, todo.txt's threshold date — opens a month calendar like
 tuxedo's: `h`/`l` a day, `j`/`k` a week, `[`/`]` a month, `t` today,
-Enter puts the date in (`due:2026-10-01`), Esc goes back to typing. The
-dates are saved as todo.txt fields, and `p` on a listed email shows
-them with the note to change or remove.
+Enter puts the date in (`due:2026-10-01`), Esc goes back to typing.
+`dur:` (how long answering will take) opens a row of durations the same
+way: 5m · 15m · 30m · 1h · 2h · 4h · 1d, `h`/`l` to choose and Enter, or
+`1`–`7` straight away (`dur:30m`). These are saved as todo.txt fields,
+and `p` on a listed email shows them with the note to change or remove.
 
 **Recipients** (`e`): the reading pane shows people by name, with a
 long To or Cc list folded onto one line ("Anna Berg, Bo Christensen …
