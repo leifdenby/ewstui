@@ -25,7 +25,36 @@ class PreviewPane(VerticalScroll):
         Binding("ctrl+f", "page_down", "Page down", show=False),
         Binding("ctrl+b", "page_up", "Page up", show=False),
         Binding("space", "page_down", "Page down", show=False),
+        # The email actions, on the email being read (as in the message list;
+        # Space pages here, so toggling read stays a list key).
+        Binding("r", "email('reply')", "Reply", show=False),
+        Binding("R", "email('reply_all')", "Reply all", show=False),
+        Binding("d", "email('delete')", "Delete", show=False),
+        Binding("A", "email('archive')", "Archive", show=False),
+        Binding("m", "email('move')", "Move", show=False),
+        Binding("P", "email('priority')", "Add to priority", show=False),
+        Binding("p", "email('priority_note')", "Add to priority + note", show=False),
+        Binding("v", "email('attachments')", "Attachments", show=False),
     ]
+
+    def action_email(self, action: str) -> None:
+        """Post the same request the message list would, for the email shown."""
+        from .message_table import MessageTable
+
+        message_id = self.app.current_message_id
+        if not message_id:
+            return
+        request = {
+            "reply": lambda: MessageTable.ReplyRequested(message_id, reply_all=False),
+            "reply_all": lambda: MessageTable.ReplyRequested(message_id, reply_all=True),
+            "delete": lambda: MessageTable.DeleteRequested(message_id),
+            "archive": lambda: MessageTable.ArchiveRequested(message_id),
+            "move": lambda: MessageTable.MoveRequested(message_id),
+            "priority": lambda: MessageTable.AddToPriorityRequested(message_id),
+            "priority_note": lambda: MessageTable.AddToPriorityWithNoteRequested(message_id),
+            "attachments": lambda: MessageTable.ViewAttachmentsRequested(message_id),
+        }[action]
+        self.post_message(request())
 
     DEFAULT_CSS = """
     PreviewPane #preview-body {

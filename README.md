@@ -309,7 +309,9 @@ thread, and the cursor and open message stay where they were.
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note, `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
-undo.
+undo. `r` `R` `d` `A` `m` `P` `p` `v` also work while you're reading the
+email (focus in the reading pane), on that email; after a move, archive
+or delete you stay in the reading pane, on the next email.
 
 **Links** (`U`): lists the links in the email shown in the reading
 pane (web and `mailto:` links, with the text just before each so you

@@ -45,6 +45,8 @@ PREVIEW_KEYS = [
     ("h", "back to the message list"),
     ("U", "links in this email"),
     ("e", "all To / Cc recipients"),
+    ("r R d A m", "reply / all, delete, archive, move"),
+    ("P / p v", "priority (+ note), attachments"),
     ("i", "answer the invite"),
 ]
 
@@ -117,7 +119,7 @@ STATUS_HINTS = {
     "folders": "j/k folder · {open} open · V move · H hide · . show hidden · ? help",
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
     "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
-    "preview": "j/k scroll · Ctrl+d/u half page · h back · ? help",
+    "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",
     "visual": "{count} selected · j/k extend · d delete · A archive · m move · Space read · P priority · Esc cancel",
