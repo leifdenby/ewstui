@@ -928,9 +928,11 @@ class EwstuiApp(App):
         message — rather than jumping back to the top."""
         table = self.query_one("#messages", MessageTable)
         row = table.cursor_row if row is None else row
+        scroll_y = table.scroll_y  # and the list stays where it was on screen
         self.select_folder(self.current_folder_id)
         if table.row_count:
-            table.move_cursor(row=min(row, table.row_count - 1))
+            table.move_cursor(row=min(row, table.row_count - 1), scroll=False)
+            table.keep_scroll(scroll_y)
 
     # -- visual selection: one action on many messages --------------------------
 

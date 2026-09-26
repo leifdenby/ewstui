@@ -4,6 +4,7 @@ from datetime import datetime
 
 from rich.text import Text
 from textual.binding import Binding
+from textual.geometry import Region
 from textual.message import Message
 from textual.widgets import DataTable
 from textual.widgets.data_table import RowDoesNotExist
@@ -13,6 +14,8 @@ from ..threads import build_threads, topic, tree_rows
 
 
 MEETING_TAGS = {"invite": "invite · ", "cancellation": "cancelled · "}
+# Keep this share of the visible rows in view above and below the cursor.
+SCROLL_MARGIN_FRACTION = 0.25
 
 
 def _fmt_when(dt, now: datetime | None = None) -> str:
@@ -304,6 +307,38 @@ class MessageTable(DataTable):
         if ids:
             self.post_message(self.BulkRequested(action, ids))
         return True
+
+    # -- scrolling: keep emails in view around the cursor ------------------------
+
+    def scroll_margin(self) -> int:
+        """Rows kept visible above and below the cursor (vim's scrolloff):
+        a quarter of the rows on screen, fewer on a very short pane."""
+        visible = self.scrollable_content_region.height - self._get_fixed_offset().top
+        if visible < 5:
+            return 0
+        return min(max(2, int(visible * SCROLL_MARGIN_FRACTION)), (visible - 1) // 2)
+
+    def _scroll_cursor_into_view(self, animate: bool = False) -> None:
+        # DataTable scrolls just enough to show the cursor's row; scroll far
+        # enough to show `scroll_margin` more rows past it as well.
+        if self.cursor_type != "row":
+            super()._scroll_cursor_into_view(animate=animate)
+            return
+        fixed = self._get_fixed_offset()
+        _, y, width, height = self._get_row_region(self.cursor_row)
+        margin = self.scroll_margin()
+        region = Region(int(self.scroll_x) + fixed.left, y - margin, width - fixed.left, height + 2 * margin)
+        self.scroll_to_region(region, animate=animate, spacing=fixed, force=True)
+
+    def keep_scroll(self, scroll_y: float) -> None:
+        """Put the list back at `scroll_y` once the rows are laid out (after
+        a refill, e.g. an email deleted), keeping the cursor in view."""
+
+        def restore() -> None:
+            self.scroll_to(y=scroll_y, animate=False, force=True)
+            self._scroll_cursor_into_view()
+
+        self.call_after_refresh(restore)
 
     def _current_message_id(self) -> str | None:
         if self.row_count == 0:
