@@ -72,6 +72,11 @@ def test_typed_path(home):
     assert typed_path("~/Documents/Personal", home) == home / "Documents/Personal"
     assert typed_path(str(home / "code"), home) == home / "code"
     assert typed_path("~/nope", home) is None and typed_path("Documents", home) is None
+    assert typed_path("~", home) == home
+    # "~N" is on the way to "~/Nextcloud", not user N's home (that used to crash the app)
+    assert typed_path("~N", home) is None and typed_path("~nobody-here/x", home) is None
+    assert rank(list_dirs(home), "~D", home, []) != []  # still a fuzzy search
+    assert rank(list_dirs(home), "~D", home, [], use_fzf=True) != []
     assert rank(list_dirs(home), "~/code/project", home, [])[0] == home / "code/project"
 
 
@@ -81,6 +86,21 @@ async def settle(app, pilot):
     await pilot.pause()
     await app.workers.wait_for_complete()
     await pilot.pause()
+
+
+async def test_typing_a_tilde_and_letters_does_not_crash(home, tmp_path):
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        await pilot.press(*"~D")
+        await settle(app, pilot)
+        await pilot.press(*"ocs")
+        await settle(app, pilot)
+        assert isinstance(app.screen, PathPickerScreen)
+        assert app.screen._shown  # found something, no crash
 
 
 async def test_s_saves_the_attachment_where_you_pick(home, tmp_path):

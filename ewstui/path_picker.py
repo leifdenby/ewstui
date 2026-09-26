@@ -101,10 +101,16 @@ def display(path: Path, root: Path) -> str:
 def typed_path(query: str, root: Path) -> Path | None:
     """A folder typed out in full (~/..., /...) that exists."""
     q = query.strip()
-    if not q.startswith(("~", "/")):
+    if q == "~" or q.startswith("~/"):  # (not "~name": that'd be another user's home — "~N" is just typing)
+        path = root / q[2:]
+    elif q.startswith("/"):
+        path = Path(q)
+    else:
         return None
-    path = Path(q).expanduser() if q.startswith("~") else Path(q)
-    return path if path.is_dir() else None
+    try:
+        return path if path.is_dir() else None
+    except OSError:  # e.g. a name too long
+        return None
 
 
 def rank(dirs: list[Path], query: str, root: Path, first: list[Path], use_fzf: bool = False) -> list[Path]:
@@ -222,7 +228,11 @@ class PathPickerScreen(ModalScreen[Path | None]):
         dirs, first = list(self._dirs), list(self._first)
 
         def ranked_by_fzf() -> None:  # a process per keystroke: off the UI thread
-            shown = rank(dirs, query, self.root, first, use_fzf=True)
+            try:
+                shown = rank(dirs, query, self.root, first, use_fzf=True)
+            except Exception:  # noqa: BLE001 - never take the app down over a ranking
+                log.warning("ranking folders with fzf failed", exc_info=True)
+                shown = rank(dirs, query, self.root, first)
             self.app.call_from_thread(self._show, query, shown)
 
         self.run_worker(ranked_by_fzf, thread=True, exclusive=True, group="path-rank")
