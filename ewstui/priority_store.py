@@ -302,6 +302,7 @@ class PriorityStore:
                 self.save()
             return self.find_by_message_id(message_id) or existing
 
+        note, dates = split_date_fields(note or "")
         description = subject if not note else f"{subject}{NOTE_SEPARATOR}{note}"
         entry = PriorityEntry(
             key=str(uuid.uuid4()),
@@ -312,7 +313,8 @@ class PriorityStore:
             description=_sanitize_description(description),
             projects=[],
             contexts=[EMAIL_TAG],
-            kv={"id": message_id, "folder": folder_id, "from": sender, **({"msgid": internet_id} if internet_id else {})},
+            kv={"id": message_id, "folder": folder_id, "from": sender, **({"msgid": internet_id} if internet_id else {}),
+                **dates},
         )
         self._lines.append(entry)
         self.save()
@@ -320,11 +322,17 @@ class PriorityStore:
 
     def set_note(self, message_id: str, note: str, subject: str | None = None) -> bool:
         """Replace the note on the email's open entry (empty: no note),
-        keeping the subject part of its text. False if it has no entry."""
+        keeping the subject part of its text. due:/t: dates in the note are
+        the entry's due / threshold dates (removed if left out). False if it
+        has no entry."""
         entry = self.find_by_message_id(message_id)  # also refreshes from disk
         if entry is None:
             return False
         text, _ = split_note(entry.description, subject)
+        note, dates = split_date_fields(note)
+        for key in DATE_FIELDS:
+            entry.kv.pop(key, None)
+        entry.kv.update(dates)
         note = _sanitize_description(note)
         entry.description = _sanitize_description(f"{text}{NOTE_SEPARATOR}{note}" if note else text)
         entry.dirty = True
@@ -419,6 +427,29 @@ class PriorityStore:
         self._lines.remove(e)
         self.save()
         return True
+
+
+DATE_FIELDS = ("due", "t")  # todo.txt due date, and threshold ("don't show before") date
+_DATE_FIELD_RE = re.compile(r"^(due|t):(\d{4}-\d{2}-\d{2})$")
+
+
+def split_date_fields(note: str) -> tuple[str, dict[str, str]]:
+    """"call Bo due:2026-10-01" -> ("call Bo", {"due": "2026-10-01"}): the
+    date fields become todo.txt key:value fields, not note text."""
+    words, dates = [], {}
+    for word in note.split():
+        m = _DATE_FIELD_RE.match(word)
+        if m:
+            dates[m[1]] = m[2]
+        else:
+            words.append(word)
+    return " ".join(words), dates
+
+
+def note_with_dates(note: str, entry: PriorityEntry) -> str:
+    """The note to edit: its text plus the entry's due:/t: dates."""
+    fields = [f"{k}:{entry.kv[k]}" for k in DATE_FIELDS if k in entry.kv]
+    return " ".join([note, *fields]).strip()
 
 
 def split_note(description: str, subject: str | None = None) -> tuple[str, str]:

@@ -21,7 +21,7 @@ from . import config_file, connection
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
-from .priority_store import PriorityStore, split_note
+from .priority_store import PriorityStore, note_with_dates, split_note
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
@@ -1141,6 +1141,7 @@ class EwstuiApp(App):
         existing = self.priority_store.find_by_message_id(event.message_id)
         if existing is not None:  # on the list already: edit its note
             _, current = split_note(existing.description, subject)
+            current = note_with_dates(current, existing)  # due:/t: too, to see and change
 
             def _on_edit(note: str | None) -> None:
                 if note is None or note == current:

@@ -357,6 +357,13 @@ can tell them apart). `j`/`k` and Enter — or just `1`–`9` — open one in
 your default browser; `Esc` cancels. Only `http(s)` and `mailto` links
 are ever opened.
 
+**Due dates on the priority list**: in the note (`p`), typing `due:` —
+or `t:`, todo.txt's threshold date — opens a month calendar like
+tuxedo's: `h`/`l` a day, `j`/`k` a week, `[`/`]` a month, `t` today,
+Enter puts the date in (`due:2026-10-01`), Esc goes back to typing. The
+dates are saved as todo.txt fields, and `p` on a listed email shows
+them with the note to change or remove.
+
 **Recipients** (`e`): the reading pane shows people by name, with a
 long To or Cc list folded onto one line ("Anna Berg, Bo Christensen …
 +14 more"). `e` — or a click on "+14 more" — lists everyone, one per

@@ -290,11 +290,16 @@ class PickPriorityScreen(ModalScreen[str | None]):
 class AddNoteScreen(ModalScreen[str | None]):
     """A short text prompt. Dismisses with the entered text (empty string
     if left blank but saved), or None if cancelled.
+
+    Typing `due:` or `t:` (todo.txt's due and threshold dates) opens a
+    month calendar, tuxedo-style: h/l j/k [ ] t pick the day, Enter puts it
+    in (due:2026-10-01), Esc closes it and you go on typing.
     """
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
+        Binding("enter", "pick_date", "Put the date in", show=False),  # (in the note field, Enter saves)
     ]
 
     DEFAULT_CSS = """
@@ -308,6 +313,16 @@ class AddNoteScreen(ModalScreen[str | None]):
         padding: 1 2;
         background: $surface;
     }
+    #note-date {
+        display: none;
+        margin-top: 1;
+    }
+    #note-date.open {
+        display: block;
+    }
+    #note-date-help {
+        color: $text-muted;
+    }
     """
 
     def __init__(self, label: str = "Note (Ctrl+S to save, Esc to cancel)", value: str = "") -> None:
@@ -316,14 +331,65 @@ class AddNoteScreen(ModalScreen[str | None]):
         self._value = value  # an existing note, to edit
 
     def compose(self) -> ComposeResult:
+        from .widgets.date_picker import DatePicker
+
         with Vertical(id="note-box"):
             yield Label(self._label, markup=False)
-            yield Input(value=self._value, placeholder="Note", id="note-text")
+            # (no select-on-focus: coming back from the calendar, typing goes on after the date)
+            yield Input(value=self._value, placeholder="Note (due: or t: picks a date)", id="note-text",
+                        select_on_focus=False)
+            with Vertical(id="note-date"):
+                yield DatePicker(id="note-date-picker")
+                yield Label("h/l day · j/k week · [ ] month · t today\nEnter put it in · Esc back to typing",
+                            id="note-date-help", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#note-text", Input).focus()
 
+    # -- the date calendar (due: / t:) ----------------------------------------------
+
+    @property
+    def picking_date(self) -> bool:
+        return self.query_one("#note-date").has_class("open")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        field = event.input
+        before = field.value[: field.cursor_position]
+        for key in ("due:", "t:"):
+            if before.endswith(key) and (len(before) == len(key) or before[-len(key) - 1] == " "):
+                self._open_date_picker()
+                return
+
+    def _open_date_picker(self) -> None:
+        from datetime import date
+
+        from .widgets.date_picker import DatePicker
+
+        picker = self.query_one(DatePicker)
+        picker.value = date.today()
+        self.query_one("#note-date").add_class("open")
+        picker.focus()
+
+    def _close_date_picker(self) -> None:
+        self.query_one("#note-date").remove_class("open")
+        self.query_one("#note-text", Input).focus()
+
+    def action_pick_date(self) -> None:
+        from .widgets.date_picker import DatePicker
+
+        if not self.picking_date:
+            return
+        field = self.query_one("#note-text", Input)
+        text = self.query_one(DatePicker).value.isoformat()
+        at = field.cursor_position
+        field.value = field.value[:at] + text + field.value[at:]
+        self._close_date_picker()
+        field.cursor_position = at + len(text)
+
     def action_cancel(self) -> None:
+        if self.picking_date:  # Esc first closes the calendar
+            self._close_date_picker()
+            return
         self.dismiss(None)
 
     def action_save(self) -> None:
