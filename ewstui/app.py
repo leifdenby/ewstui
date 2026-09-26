@@ -102,6 +102,10 @@ class EwstuiApp(App):
     Screen {
         background: $background;
     }
+    ModalScreen {
+        /* popups dim the view behind them instead of hiding it */
+        background: $background 60%;
+    }
     #modes {
         background: $panel;
         height: 2;

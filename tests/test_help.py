@@ -29,6 +29,14 @@ def plain(screen, which) -> str:
     return screen.query_one(f"#help-{which}", Static).render().plain
 
 
+async def test_popups_dim_the_view_behind_them_instead_of_hiding_it(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 50)) as pilot:
+        screen = await open_help(app, pilot)
+        assert screen.styles.background.a < 1
+        assert "Inbox" in app.export_screenshot()  # the folder list shows through
+
+
 async def test_help_is_visible_in_two_columns_on_a_wide_terminal(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 50)) as pilot:
