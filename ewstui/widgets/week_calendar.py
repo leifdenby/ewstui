@@ -74,9 +74,7 @@ class WeekCalendar(Widget):
         dim, accent, key = c.get("tux-dim", "grey50"), c.get("accent", "blue"), c.get("tux-key", "yellow")
         col = max(8, (self.size.width - (WORKDAYS - 1)) // WORKDAYS)
         gap = Content(" ")
-        lines = [Content.from_markup(
-            f"[b {accent}]$t[/] [{dim}]$k[/]", t="Your calendar", k="Ctrl+B/F earlier/later weeks · Ctrl+O hide",
-        )]
+        lines = [Content.from_markup(f"[b {accent}]$t[/]", t="Your calendar")]  # its keys are in the hint bar
         days = by_day(self.events or [], self.first, self.last)
         now = datetime.now()
         for week in range(self.weeks):

@@ -93,6 +93,26 @@ async def test_ctrl_o_shows_the_calendar_beside_the_email(tmp_path):
         assert not screen.calendar_shown
 
 
+async def test_the_keys_are_shown_at_the_bottom_like_the_other_views(tmp_path):
+    from ewstui.widgets.chrome import HintBar, StatusBar
+
+    app = make_app(tmp_path)
+    async with app.run_test(size=(180, 45)) as pilot:
+        await pilot.pause()
+        main_bar = app.query_one(StatusBar)
+        await pilot.press("r")
+        await pilot.pause()
+        bar = app.screen.query_one(HintBar)
+        assert bar.region.y == 44  # the bottom line, where the status bar is
+        text = str(bar.render())
+        assert text.startswith(" WRITE ") and "Ctrl+S send" in text and "Esc save to Drafts" in text
+        assert "Ctrl+O your calendar" in text
+        await pilot.press("ctrl+o")
+        await pilot.pause()
+        assert "Ctrl+B/F weeks" in str(bar.render())
+        assert app.query_one(StatusBar) is main_bar  # the app still finds its own status bar
+
+
 async def test_typing_still_works_with_the_calendar_open(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(180, 45)) as pilot:

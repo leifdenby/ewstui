@@ -70,6 +70,37 @@ class TopBar(Widget):
         return _line(left, right, self.size.width)
 
 
+class HintBar(Widget):
+    """A status-bar lookalike (mode chip and key hints) for full-window
+    popups such as the compose view. Not a StatusBar, so the app never
+    mistakes it for the main one."""
+
+    DEFAULT_CSS = """
+    HintBar {
+        dock: bottom;
+        height: 1;
+        background: $tux-statusbar;
+    }
+    """
+
+    def __init__(self, mode: str, hints: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.mode = mode
+        self.hints = hints
+
+    def set_hints(self, hints: str) -> None:
+        self.hints = hints
+        self.refresh()
+
+    def render(self) -> Text:
+        v = _vars(self)
+        left = Text.assemble(
+            (f" {self.mode} ", f"bold {v['tux-mode-fg']} on {v['tux-mode-bg']}"),
+            (f"  {self.hints}", v["tux-status-fg"]),
+        )
+        return _line(left, Text(), self.size.width)
+
+
 class StatusBar(Widget):
     """Mode chip, hints for the focused pane, counts and version."""
 

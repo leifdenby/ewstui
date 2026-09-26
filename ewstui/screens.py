@@ -60,6 +60,9 @@ class ComposeScreen(ModalScreen[dict | None]):
     #compose-box.with-calendar #compose-calendar {
         display: block;
     }
+    #compose-title {
+        text-style: bold;
+    }
     #compose-context {
         color: $text-muted;
     }
@@ -85,13 +88,20 @@ class ComposeScreen(ModalScreen[dict | None]):
         # called in a thread. None: no calendar.
         self.fetch_events = fetch_events
 
+    def _hints(self) -> str:
+        hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
+        if self.fetch_events:
+            hints.append("Ctrl+B/F weeks · Ctrl+O hide calendar" if self.calendar_shown else "Ctrl+O your calendar")
+        return " · ".join(hints)
+
     def compose(self) -> ComposeResult:
+        from .widgets.chrome import HintBar
         from .widgets.week_calendar import WeekCalendar
 
+        yield HintBar("WRITE", "", id="compose-hints")  # the keys, where the status bar is in the other views
         with Horizontal(id="compose-box"):
             with Vertical(id="compose-fields"):
-                yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to save to Drafts and close"
-                            + (", Ctrl+O your calendar)" if self.fetch_events else ")"))
+                yield Label("Reply" if self.context else "New email", id="compose-title")
                 if self.context:
                     yield Label(self.context, id="compose-context", markup=False)
                 yield Input(value=self._to, placeholder="To", id="compose-to")
@@ -102,15 +112,23 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     # -- the calendar beside the email (Ctrl+O) ------------------------------------
 
+    def on_mount(self) -> None:
+        from .widgets.chrome import HintBar
+
+        self.query_one(HintBar).set_hints(self._hints())
+
     @property
     def calendar_shown(self) -> bool:
         return self.query_one("#compose-box").has_class("with-calendar")
 
     def action_toggle_calendar(self) -> None:
+        from .widgets.chrome import HintBar
+
         if self.fetch_events is None:
             return
         box = self.query_one("#compose-box")
         box.toggle_class("with-calendar")
+        self.query_one(HintBar).set_hints(self._hints())
         if self.calendar_shown:
             self._load_calendar()
 
