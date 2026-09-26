@@ -100,6 +100,26 @@ async def test_reply_sends_with_subject_and_recipient(app, mail):
     assert sent["body"].startswith("Sounds good")
 
 
+async def test_reply_shows_who_sent_it_and_when(app, mail):
+    received = mail.get_message("inbox", "m1").received
+    when = received.strftime("%a %d %b %Y %H:%M")
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "")
+        context = str(app.screen.query_one("#compose-context").render())
+        assert context == f"Replying to Finance Team <finance@corp.example> · sent {when}"
+        body = app.screen.query_one("#compose-body", TextArea).text
+        assert f"On {when}, Finance Team <finance@corp.example> wrote:\n> " in body
+
+
+async def test_failed_send_keeps_the_reply_context(app, mail, monkeypatch):
+    monkeypatch.setattr(mail, "reply", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no")))
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "x")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "Replying to Finance Team" in str(app.screen.query_one("#compose-context").render())
+
+
 async def test_cmd_enter_sends(app, mail):
     async with app.run_test() as pilot:
         await open_reply(pilot, app, "Via Cmd+Enter")

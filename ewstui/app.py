@@ -76,6 +76,11 @@ def ews_guard(what: str):
     return decorate
 
 
+def _local(dt: datetime) -> datetime:
+    """A time from Exchange (UTC-aware) as this machine's local time."""
+    return dt.astimezone() if dt.tzinfo is not None else dt
+
+
 def _split_addresses(field: str) -> list[str]:
     """'a@x, b@y; c@z' -> ['a@x', 'b@y', 'c@z'] (the To field is free text)."""
     return [a.strip() for a in field.replace(";", ",").split(",") if a.strip()]
@@ -720,7 +725,14 @@ class EwstuiApp(App):
     def _open_reply(self, folder_id: str, message_id: str, reply_all: bool, detail) -> None:
         event = SimpleNamespace(message_id=message_id, reply_all=reply_all)
         quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
-        prefill_body = f"\n\n-- original message --\n{quoted}"
+        # Who wrote it and when: shown while writing, and as the usual
+        # attribution line above the quote (the recipients see that one).
+        name = (getattr(detail, "names", None) or {}).get(detail.sender)
+        who = f"{name} <{detail.sender}>" if name else detail.sender
+        when = _local(detail.received).strftime("%a %d %b %Y %H:%M") if detail.received else None
+        attribution = f"On {when}, {who} wrote:" if when else f"{who} wrote:"
+        prefill_body = f"\n\n{attribution}\n{quoted}"
+        context = f"Replying to {who}" + (f" · sent {when}" if when else "")
 
         def _send(result: dict) -> None:
             self.mail_client.reply(
@@ -733,7 +745,7 @@ class EwstuiApp(App):
             )
 
         self._compose_and_send(
-            ComposeScreen(to=detail.sender, subject=f"Re: {detail.subject}", body=prefill_body),
+            ComposeScreen(to=detail.sender, subject=f"Re: {detail.subject}", body=prefill_body, context=context),
             _send,
             sent_message="Reply sent",
         )
@@ -753,7 +765,7 @@ class EwstuiApp(App):
                 log.exception("send failed")
                 self.notify(f"Send failed: {e} — draft kept", severity="error", timeout=10)
                 self._compose_and_send(
-                    ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"]),
+                    ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"], context=screen.context),
                     send,
                     sent_message,
                 )

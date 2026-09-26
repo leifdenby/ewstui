@@ -37,6 +37,9 @@ class ComposeScreen(ModalScreen[dict | None]):
         padding: 1 2;
         background: $surface;
     }
+    #compose-context {
+        color: $text-muted;
+    }
     #compose-body {
         height: 1fr;
         border: round $primary;
@@ -44,15 +47,18 @@ class ComposeScreen(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, to: str = "", subject: str = "", body: str = "") -> None:
+    def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "") -> None:
         super().__init__()
         self._to = to
         self._subject = subject
         self._body = body
+        self.context = context  # for a reply: who sent the email and when
 
     def compose(self) -> ComposeResult:
         with Vertical(id="compose-box"):
             yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to cancel)")
+            if self.context:
+                yield Label(self.context, id="compose-context", markup=False)
             yield Input(value=self._to, placeholder="To", id="compose-to")
             yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
             yield TextArea(self._body, id="compose-body")

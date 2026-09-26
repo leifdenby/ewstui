@@ -72,7 +72,10 @@ def render_header(msg, width: int, expanded: bool = False, colors: dict[str, str
     the width of the pane."""
     c = {**DEFAULT_COLORS, **(colors or {})}
     names = getattr(msg, "names", {}) or {}
-    when = msg.received.strftime("%a %d %b %Y %H:%M") if isinstance(msg.received, datetime) else "(no date)"
+    received = msg.received
+    if isinstance(received, datetime) and received.tzinfo is not None:
+        received = received.astimezone()  # Exchange gives UTC: show this machine's local time
+    when = received.strftime("%a %d %b %Y %H:%M") if isinstance(received, datetime) else "(no date)"
     lines = [
         Content.from_markup(f"[b {c['foreground']}]$s[/]", s=msg.subject),
         Content(""),

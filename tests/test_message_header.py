@@ -61,6 +61,14 @@ def test_expanded_header_lists_everyone_with_their_address():
     assert out[3 + 30].startswith("Date")
 
 
+def test_date_is_shown_in_local_time():
+    from datetime import timezone
+
+    utc = datetime(2026, 9, 25, 11, 22, tzinfo=timezone.utc)  # how Exchange gives times
+    local = utc.astimezone().strftime("%a %d %b %Y %H:%M")
+    assert f"Date  {local}" in lines(detail(received=utc))
+
+
 def test_no_recipients_and_attachments():
     out = lines(detail(to=[], has_attachments=True, received=None))
     assert "To    (none)" in out
