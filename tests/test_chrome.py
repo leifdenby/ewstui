@@ -112,6 +112,45 @@ async def test_status_bar_mode_chip_and_hints_follow_focus(tmp_path):
         assert status(app).startswith(" CALENDAR ") and "f find a room" in status(app)
 
 
+@pytest.mark.parametrize("popup_key", ["question_mark", "U"])
+async def test_status_bar_hints_survive_a_popup(tmp_path, popup_key):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("j", "j")  # the IT email (has links, for U)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        before = status(app)
+        assert "r reply" in before
+        await pilot.press(popup_key)
+        await pilot.pause()
+        assert status(app) == before  # not blanked while the popup is open
+        await pilot.press("escape")
+        await pilot.pause()
+        assert status(app) == before
+
+
+async def test_status_bar_offers_i_on_invites(tmp_path):
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "p.todo.txt")])
+    app = EwstuiApp(DemoMailClient(with_invites=True), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert "i " not in status(app)
+        await pilot.press("j", "j", "j", "j")  # the invite
+        await pilot.pause()
+        assert "i answer invite" in status(app)
+        await pilot.press("o")  # in the reading pane too
+        await pilot.pause()
+        assert "i answer invite" in status(app)
+        await pilot.press("h", "j")  # the cancellation
+        await pilot.pause()
+        assert "i remove from calendar" in status(app)
+        await pilot.press("g")
+        await pilot.pause()
+        assert "i answer" not in status(app) and "i remove" not in status(app)
+
+
 async def test_status_bar_right_side_shows_counts_and_version(tmp_path):
     from ewstui import __version__
 

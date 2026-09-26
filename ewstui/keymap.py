@@ -100,6 +100,9 @@ HELP_COLUMNS = {
     ],
 }
 
+# Put in front of the mail hints when the email shown is a meeting item.
+INVITE_HINTS = {"invite": "i answer invite", "cancellation": "i remove from calendar"}
+
 # Short hints for the status bar, by what has focus.
 STATUS_HINTS = {
     # {open}: the key the layout makes natural — "l" (right) when the next

@@ -37,7 +37,7 @@ from .links import LinkPickerScreen, extract_links, open_link
 from .message_cache import MessageCache
 from .room_grid import FindRoomScreen
 from .theme import MUTED_SLATE, THEMES
-from .keymap import STATUS_HINTS
+from .keymap import INVITE_HINTS, STATUS_HINTS
 from .widgets.calendar_view import CalendarView
 from .widgets.chrome import StatusBar, TopBar
 from .widgets.folder_list import FolderList
@@ -428,6 +428,7 @@ class EwstuiApp(App):
         if not self.current_folder_id:
             return
         self.current_message_id = message_id
+        self._update_status()  # e.g. "i answer invite" for an invite
         cached = self._previewed(message_id)
         if cached is not None:
             self._show_preview(message_id, cached)
@@ -1291,7 +1292,9 @@ class EwstuiApp(App):
         except NoMatches:  # focus events can arrive while the app is shutting down
             return
         mode = status.mode.lower()
-        focused = self.focused
+        # The main view's focus, even while a popup (help, links, …) has its
+        # own: the hints describe the view underneath and stay put.
+        focused = self.screen_stack[0].focused
         pane = {FolderList: "folders", MessageTable: "messages", PreviewPane: "preview"}.get(type(focused), mode)
         # The message list opens into the pane to its right ("l") in the
         # columns layout, but into the one below it ("o") when stacked; the
@@ -1299,6 +1302,11 @@ class EwstuiApp(App):
         open_key = "o" if pane == "messages" and self.config.layout == "stacked" else "l"
         status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, "")).format(open=open_key)
         table = self.query_one("#messages", MessageTable)
+        if pane in ("messages", "preview"):
+            current = table._by_id.get(self.current_message_id or "")
+            invite_hint = INVITE_HINTS.get(getattr(current, "kind", "mail"))
+            if invite_hint:  # the email shown is an invite / cancellation
+                status.hints = f"{invite_hint} · {status.hints}"
         if mode == "mail" and table.in_visual_mode:
             status.hints = STATUS_HINTS["visual"].format(count=len(table.selected_ids()))
         if mode == "mail":
