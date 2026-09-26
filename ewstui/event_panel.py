@@ -52,6 +52,7 @@ def parse_time(text: str) -> time | None:
 class EventFromEmailPanel(Vertical):
     BINDINGS = [
         Binding("ctrl+s", "create", "Create event"),
+        Binding("ctrl+t", "teams", "Schedule in Teams"),
         Binding("escape", "close", "Close"),
     ]
 
@@ -108,6 +109,13 @@ class EventFromEmailPanel(Vertical):
     class Closed(Message):
         pass
 
+    class TeamsRequested(Message):
+        """Ctrl+T: schedule it as a Teams meeting instead (in Teams)."""
+
+        def __init__(self, values: dict) -> None:
+            self.values = values
+            super().__init__()
+
     class DayChanged(Message):
         """The chosen day changed: the app looks up your calendar for it."""
 
@@ -136,7 +144,7 @@ class EventFromEmailPanel(Vertical):
 
     def compose(self) -> ComposeResult:
         self.border_title = "New event from this email"
-        self.border_subtitle = "Ctrl+S create · Esc close"
+        self.border_subtitle = "Ctrl+S create · Ctrl+T in Teams · Esc close"
         yield self._titled(Input(value=event_subject(self.detail.subject), placeholder="Title", id="ev-subject"), "title")
         with Horizontal(id="ev-when"):
             yield DatePicker(value=self._start_day, marked=self.found, today=self.today, anchor=self._anchor, id="ev-date")
@@ -251,14 +259,17 @@ class EventFromEmailPanel(Vertical):
             raise ValueError("the end must be after the start")
         return {"subject": subject, "start": start, "end": end, "location": location, "is_all_day": False}
 
-    def action_create(self) -> None:
+    def action_create(self, teams: bool = False) -> None:
         try:
             values = self.values()
         except ValueError as e:
             self.app.bell()
             self.app.notify(f"Can't create the event: {e}", severity="warning")
             return
-        self.post_message(self.Submitted(values))
+        self.post_message(self.TeamsRequested(values) if teams else self.Submitted(values))
+
+    def action_teams(self) -> None:
+        self.action_create(teams=True)
 
     def action_close(self) -> None:
         if self.query_one(DatePicker).clear_range():  # Esc first ends a selection of days

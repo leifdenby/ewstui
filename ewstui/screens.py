@@ -178,11 +178,14 @@ class ComposeScreen(ModalScreen[dict | None]):
 
 
 class NewEventScreen(ModalScreen[dict | None]):
-    """New calendar event. Dismisses with a dict of field values, or None."""
+    """New calendar event. Dismisses with a dict of field values, or None.
+    Ctrl+T instead: the same plus "teams": True, to schedule it in Teams
+    (a Teams meeting, with its join link) rather than as a plain event."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+t", "teams", "Schedule in Teams"),
     ]
 
     DEFAULT_CSS = """
@@ -218,7 +221,7 @@ class NewEventScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="event-box"):
-            yield Label(f"{self._title}  (Ctrl+S to save, Esc to cancel)", markup=False)
+            yield Label(f"{self._title}  (Ctrl+S save · Ctrl+T Teams meeting instead · Esc cancel)", markup=False)
             yield Input(placeholder="Subject", id="event-subject")
             yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="event-start")
             yield Input(value=self._end_default, placeholder="End (YYYY-MM-DD HH:MM)", id="event-end")
@@ -230,7 +233,7 @@ class NewEventScreen(ModalScreen[dict | None]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-    def action_save(self) -> None:
+    def action_save(self, teams: bool = False) -> None:
         fmt = "%Y-%m-%d %H:%M"
         try:
             start = datetime.strptime(self.query_one("#event-start", Input).value, fmt)
@@ -244,8 +247,12 @@ class NewEventScreen(ModalScreen[dict | None]):
                 "start": start,
                 "end": end,
                 "location": self.query_one("#event-location", Input).value,
+                "teams": teams,
             }
         )
+
+    def action_teams(self) -> None:
+        self.action_save(teams=True)
 
 
 class PickPriorityScreen(ModalScreen[str | None]):

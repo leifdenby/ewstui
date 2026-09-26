@@ -126,7 +126,7 @@ STATUS_HINTS = {
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
     "search": "type to search · Enter/↓ to the results · Esc end the search",
     "find-folder": "type part of a folder's name · Enter open the top match · ↓ choose · Esc all folders",
-    "event": "new event · h/l j/k [ ] pick a day · v select days · n next date from the email · Tab next field · Ctrl+S create · Esc close",
+    "event": "new event · h/l j/k [ ] pick a day · v select days · n next date · Tab next field · Ctrl+S create · Ctrl+T in Teams · Esc close",
     "messages": "{open} open · r reply · d delete · m move · A archive · / search · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",

@@ -412,6 +412,16 @@ start with. Below, your calendar that day. Ctrl+S adds the event to
 your calendar (no invitations), with the email's text in its notes;
 Esc closes the panel.
 
+**Teams meetings** (Ctrl+T): Exchange can't make a Teams join link —
+only the Teams service can (Outlook's "Teams meeting" button asks Teams
+too) — so in the new-event screen (`n` in the calendar, and after
+picking rooms in the room finder) and in the event-from-email panel
+(`c`), Ctrl+T hands the meeting to Teams instead of saving it: Teams'
+own "New meeting" form opens (the Teams app, or teams.microsoft.com if
+it isn't installed) with the title, times and description filled in,
+and picked rooms as attendees. Add people there and send it from Teams,
+which creates the meeting, its join link and the invites.
+
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the
 status bar shows how many). Then `d` delete, `A` archive, `m` move

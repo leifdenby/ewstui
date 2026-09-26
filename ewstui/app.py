@@ -17,7 +17,7 @@ from textual.widgets.data_table import RowDoesNotExist
 from textual import events
 from textual.widgets import Input, Tab, Tabs
 
-from . import config_file, connection
+from . import config_file, connection, teams
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
@@ -737,6 +737,13 @@ class EwstuiApp(App):
         else:
             when = f"{start:%a %d %b %Y %H:%M}–{end:%H:%M}"
         self.notify(f"Added “{values['subject']}” to your calendar: {when}")
+        self._close_event_panel()
+
+    def on_event_from_email_panel_teams_requested(self, event: EventFromEmailPanel.TeamsRequested) -> None:
+        panel = event.control if isinstance(event.control, EventFromEmailPanel) else self.screen.query_one(EventFromEmailPanel)
+        v = event.values
+        self._schedule_in_teams(v["subject"], v["start"], v["end"], location=v["location"],
+                                content=panel.detail.body_text or "")
         self._close_event_panel()
 
     def on_event_from_email_panel_closed(self, event: EventFromEmailPanel.Closed) -> None:
@@ -1553,6 +1560,9 @@ class EwstuiApp(App):
         def _on_result(result: dict | None) -> None:
             if result is None:
                 return
+            if result.get("teams"):
+                self._schedule_in_teams(result["subject"], result["start"], result["end"], location=result["location"])
+                return
             try:
                 self.calendar_client.create_event(
                     subject=result["subject"], start=result["start"], end=result["end"], location=result["location"]
@@ -1565,6 +1575,21 @@ class EwstuiApp(App):
             self.load_calendar_range()
 
         self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
+
+    def _schedule_in_teams(self, subject: str, start, end, attendees: list[str] | None = None,
+                           location: str = "", content: str = "") -> None:
+        """Ctrl+T: open Teams' own "New meeting" form, filled in (see
+        teams.py) — Exchange can't make the Teams join link, Teams does."""
+        text = "\n\n".join(p for p in (f"Location: {location}" if location else "", content) if p)
+        try:
+            where = teams.open_in_teams(subject, start, end, attendees, text)
+        except Exception as e:  # noqa: BLE001
+            log.warning("opening Teams failed", exc_info=True)
+            self.notify(f"Couldn't open Teams: {e}", severity="error", timeout=10)
+            return
+        place = "the Teams app" if where == "app" else "Teams in your browser"
+        self.notify(f"Opened “{subject}” in {place} — add attendees there if you like, and send it from Teams",
+                    timeout=10)
 
     # -- folder pane arrangement (V to move, H to hide) -----------------------------
 
@@ -1612,6 +1637,10 @@ class EwstuiApp(App):
 
             def _on_event(details: dict | None) -> None:
                 if details is None:
+                    return
+                if details.get("teams"):  # a Teams meeting in the room(s): invited as attendees, which books them
+                    self._schedule_in_teams(details["subject"], details["start"], details["end"],
+                                            attendees=[r.email for r in rooms], location=details["location"])
                     return
                 try:
                     self.calendar_client.create_event(
