@@ -25,6 +25,10 @@ class ComposeScreen(ModalScreen[dict | None]):
         # (kitty keyboard protocol: Ghostty, kitty, WezTerm, iTerm2 with
         # "Report keys using CSI u"); Terminal.app swallows it.
         Binding("super+enter", "send", "Send", show=False),
+        # Your calendar beside the email, to check when you're free.
+        Binding("ctrl+o", "toggle_calendar", "Calendar", show=False),
+        Binding("ctrl+b", "calendar_weeks(-1)", "Earlier weeks", show=False),
+        Binding("ctrl+f", "calendar_weeks(1)", "Later weeks", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -38,6 +42,24 @@ class ComposeScreen(ModalScreen[dict | None]):
         padding: 1 2;
         background: $surface;
     }
+    #compose-box.with-calendar {
+        width: 98%;
+        height: 90%;
+    }
+    #compose-fields {
+        width: 1fr;
+    }
+    #compose-box.with-calendar #compose-fields {
+        width: 2fr;
+    }
+    #compose-calendar {
+        display: none;
+        width: 3fr;
+        padding-left: 2;
+    }
+    #compose-box.with-calendar #compose-calendar {
+        display: block;
+    }
     #compose-context {
         color: $text-muted;
     }
@@ -48,7 +70,8 @@ class ComposeScreen(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False) -> None:
+    def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False,
+                 fetch_events=None) -> None:
         super().__init__()
         self._to = to
         self._subject = subject
@@ -57,15 +80,63 @@ class ComposeScreen(ModalScreen[dict | None]):
         # Opened with text that isn't saved anywhere (reopened after a failed
         # send): Esc saves it even if it's unchanged.
         self.unsaved = unsaved
+        # fetch_events(start, end) -> [EventSummary], for the calendar (Ctrl+O);
+        # called in a thread. None: no calendar.
+        self.fetch_events = fetch_events
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="compose-box"):
-            yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to save to Drafts and close)")
-            if self.context:
-                yield Label(self.context, id="compose-context", markup=False)
-            yield Input(value=self._to, placeholder="To", id="compose-to")
-            yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
-            yield TextArea(self._body, id="compose-body")
+        from .widgets.week_calendar import WeekCalendar
+
+        with Horizontal(id="compose-box"):
+            with Vertical(id="compose-fields"):
+                yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to save to Drafts and close"
+                            + (", Ctrl+O your calendar)" if self.fetch_events else ")"))
+                if self.context:
+                    yield Label(self.context, id="compose-context", markup=False)
+                yield Input(value=self._to, placeholder="To", id="compose-to")
+                yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
+                yield TextArea(self._body, id="compose-body")
+            yield WeekCalendar(id="compose-calendar")
+
+    # -- the calendar beside the email (Ctrl+O) ------------------------------------
+
+    @property
+    def calendar_shown(self) -> bool:
+        return self.query_one("#compose-box").has_class("with-calendar")
+
+    def action_toggle_calendar(self) -> None:
+        if self.fetch_events is None:
+            return
+        box = self.query_one("#compose-box")
+        box.toggle_class("with-calendar")
+        if self.calendar_shown:
+            self._load_calendar()
+
+    def action_calendar_weeks(self, weeks: int) -> None:
+        if not self.calendar_shown:
+            return
+        from .widgets.week_calendar import WeekCalendar
+
+        self.query_one(WeekCalendar).shift(weeks * 3)
+        self._load_calendar()
+
+    def _load_calendar(self) -> None:
+        from .widgets.week_calendar import WeekCalendar
+
+        calendar = self.query_one(WeekCalendar)
+        first, last = calendar.first, calendar.last
+        start = datetime.combine(first, datetime.min.time())
+        end = datetime.combine(last + timedelta(days=1), datetime.min.time())
+
+        def fetch() -> None:
+            try:
+                events = self.fetch_events(start, end)
+            except Exception as e:  # noqa: BLE001 - writing goes on without it
+                self.app.call_from_thread(self.app.notify, f"Couldn't load your calendar: {e}", severity="warning")
+                events = []
+            self.app.call_from_thread(calendar.set_events, first, events)
+
+        self.run_worker(fetch, thread=True, exclusive=True, group="compose-calendar")
 
     def _fields(self) -> dict:
         return {

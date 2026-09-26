@@ -848,6 +848,9 @@ class EwstuiApp(App):
         error never throws away what the user wrote.
         """
 
+        if screen.fetch_events is None:  # Ctrl+O: your calendar beside the email
+            screen.fetch_events = self.calendar_client.list_events
+
         def _reopen(result: dict) -> None:
             self._compose_and_send(
                 ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"],

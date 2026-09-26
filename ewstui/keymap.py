@@ -91,6 +91,8 @@ COMPOSE_KEYS = [
     ("Ctrl+s", "send / save"),
     ("Cmd+Enter", "send (if the terminal passes Cmd)"),
     ("Esc", "save to Drafts and close"),
+    ("Ctrl+O", "your calendar beside the email"),
+    ("Ctrl+B / F", "calendar: earlier / later weeks"),
 ]
 
 # The help overlay's two columns (tuxedo-style), per view: the view's own
