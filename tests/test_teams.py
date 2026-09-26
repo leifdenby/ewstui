@@ -122,6 +122,45 @@ def test_find_join_link():
     assert teams.find_join_link("see https://example.com") is None
 
 
+def linux(monkeypatch, handler: str | None, open_code: int = 0) -> tuple[list, list]:
+    """Pretend to be Linux; `handler`: what xdg-mime says handles msteams:
+    (None: no xdg tools at all)."""
+    runs, browsed = [], []
+    monkeypatch.setattr(teams.sys, "platform", "linux")
+    monkeypatch.setattr(teams.webbrowser, "open", browsed.append)
+    monkeypatch.setattr(teams.shutil, "which", lambda name: f"/usr/bin/{name}" if handler is not None else None)
+
+    def run(cmd, **kw):
+        runs.append(cmd)
+        if cmd[0] == "xdg-mime":
+            return SimpleNamespace(returncode=0, stdout=f"{handler}\n".encode() if handler else b"", stderr=b"")
+        return SimpleNamespace(returncode=open_code, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(teams.subprocess, "run", run)
+    return runs, browsed
+
+
+def test_linux_uses_a_registered_msteams_handler(monkeypatch):
+    runs, browsed = linux(monkeypatch, "teams-for-linux.desktop")
+    assert teams.open_in_teams("x", START, END) == "app"
+    assert runs[-1][0] == "xdg-open" and runs[-1][1].startswith("msteams:/l/meeting/new?") and browsed == []
+    assert teams.join_meeting("https://teams.microsoft.com/l/meetup-join/19%3ax/0") == "app"
+    assert runs[-1] == ["xdg-open", "msteams:/l/meetup-join/19%3ax/0"]
+
+
+def test_linux_without_a_handler_uses_the_browser(monkeypatch):
+    runs, browsed = linux(monkeypatch, "")  # xdg tools, but nothing handles msteams:
+    assert teams.open_in_teams("x", START, END) == "browser"
+    assert not any(cmd[0] == "xdg-open" for cmd in runs) and browsed[0].startswith("https://teams.microsoft.com/")
+    runs, browsed = linux(monkeypatch, None)  # no xdg tools at all
+    assert teams.join_meeting("https://teams.microsoft.com/l/meetup-join/19%3ax/0") == "browser" and runs == []
+
+
+def test_linux_handler_failing_falls_back_to_the_browser(monkeypatch):
+    runs, browsed = linux(monkeypatch, "teams-for-linux.desktop", open_code=4)
+    assert teams.open_in_teams("x", START, END) == "browser" and len(browsed) == 1
+
+
 def test_join_opens_the_app_on_macos(monkeypatch):
     runs, browsed = [], []
     monkeypatch.setattr(teams.sys, "platform", "darwin")

@@ -423,6 +423,12 @@ attendees and notes you entered (plus the location, and picked rooms as
 attendees). Check it and send it from Teams, which creates the meeting,
 its join link and the invites.
 
+On Linux (Microsoft retired the official Teams app there in 2022), an
+app registered for `msteams:` links — e.g. teams-for-linux — is used if
+there is one (`xdg-mime query default x-scheme-handler/msteams`),
+otherwise Teams on the web in your browser (Chrome/Edge work best for
+meetings).
+
 `T` on an event in the calendar view: if it's a Teams meeting (a Teams
 join link in its text), it opens that meeting in Teams to join. If it
 isn't, Teams' New meeting form opens filled in from the event (title,

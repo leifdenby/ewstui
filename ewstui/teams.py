@@ -5,13 +5,16 @@ Exchange (EWS) can't make a Teams meeting — the join link comes from the
 Teams service — so ewstui opens Teams' own "New meeting" form, filled in
 with the title, times, attendees and description, through Teams' deep link
 (msteams:/l/meeting/new?...). You send it from Teams, which creates the
-meeting, its join link and the invites. Without the Teams app, the same
-form opens on teams.microsoft.com in the browser.
+meeting, its join link and the invites. The Teams app on macOS; on Linux
+(no official app since 2022) whatever handles msteams: links, e.g.
+teams-for-linux; otherwise the same form on teams.microsoft.com in the
+browser.
 """
 from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 import sys
 import webbrowser
@@ -57,32 +60,59 @@ def find_join_link(text: str) -> str | None:
     return m[0] if m else None
 
 
+def _run(command: list[str]):
+    return subprocess.run(command, capture_output=True, timeout=10)
+
+
+def _linux_msteams_handler() -> bool:
+    """Is an app registered for msteams: links (e.g. teams-for-linux)?
+    There's no official Teams app for Linux any more."""
+    if not (shutil.which("xdg-mime") and shutil.which("xdg-open")):
+        return False
+    try:
+        done = _run(["xdg-mime", "query", "default", "x-scheme-handler/msteams"])
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
+def _open_app_link(link: str) -> bool:
+    """Open an msteams: link in a Teams app: the Teams app on macOS, on
+    Linux whatever is registered for msteams: links. False if there's none
+    or it didn't work (then the browser it is)."""
+    if sys.platform == "darwin":
+        command = ["open", link]
+    elif sys.platform.startswith("linux") and _linux_msteams_handler():
+        command = ["xdg-open", link]
+    else:
+        return False
+    try:
+        done = _run(command)
+    except (OSError, subprocess.SubprocessError):
+        log.info("%s failed", command[0], exc_info=True)
+        return False
+    if done.returncode != 0:
+        log.info("%s msteams: failed (%s): %s", command[0], done.returncode,
+                 (done.stderr or b"").decode(errors="replace").strip())
+    return done.returncode == 0
+
+
 def join_meeting(link: str) -> str:
-    """Open a Teams meeting's join link in the Teams app (macOS), else the
-    browser (which offers to open Teams). Returns "app" or "browser"."""
-    if sys.platform == "darwin" and "/l/meetup-join/" in link:
+    """Open a Teams meeting's join link in a Teams app (see _open_app_link),
+    else the browser (which offers to open Teams). Returns "app" or "browser"."""
+    if "/l/meetup-join/" in link:
         app_link = re.sub(r"^https://teams\.microsoft\.com/", "msteams:/", link, flags=re.I)
-        try:
-            if subprocess.run(["open", app_link], capture_output=True, timeout=10).returncode == 0:
-                return "app"
-        except (OSError, subprocess.SubprocessError):
-            log.info("open msteams: failed", exc_info=True)
+        if _open_app_link(app_link):
+            return "app"
     webbrowser.open(link)
     return "browser"
 
 
 def open_in_teams(subject: str, start: datetime, end: datetime, attendees: list[str] | None = None,
                   content: str = "") -> str:
-    """Open the form in the Teams app (macOS), else in the browser.
-    Returns "app" or "browser" (where it opened)."""
-    if sys.platform == "darwin":
-        link = meeting_link(subject, start, end, attendees, content, app=True)
-        try:
-            done = subprocess.run(["open", link], capture_output=True, timeout=10)
-            if done.returncode == 0:
-                return "app"
-            log.info("open msteams: failed (%s): %s", done.returncode, done.stderr.decode(errors="replace").strip())
-        except (OSError, subprocess.SubprocessError):
-            log.info("open msteams: failed", exc_info=True)
+    """Open the form in a Teams app (see _open_app_link), else in the
+    browser. Returns "app" or "browser" (where it opened)."""
+    if _open_app_link(meeting_link(subject, start, end, attendees, content, app=True)):
+        return "app"
     webbrowser.open(meeting_link(subject, start, end, attendees, content, app=False))
     return "browser"
