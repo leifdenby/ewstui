@@ -75,6 +75,13 @@ PRIORITY_KEYS = [
     ("Enter / o", "jump to the email"),
 ]
 
+FOLDER_KEYS = [
+    ("V", "pick up a folder: j/k move it, Enter/V put down"),
+    ("Esc", "put it back where it was"),
+    ("H", "hide / unhide the folder"),
+    (".", "show hidden folders (dimmed)"),
+]
+
 COMPOSE_KEYS = [
     ("Tab", "next field"),
     ("Ctrl+s", "send / save"),
@@ -88,7 +95,7 @@ COMPOSE_KEYS = [
 HELP_COLUMNS = {
     "mail": [
         [("MAIL", MAIL_KEYS), ("READING PANE", PREVIEW_KEYS)],
-        [("GLOBAL", GLOBAL_KEYS), ("COMPOSE", COMPOSE_KEYS)],
+        [("GLOBAL", GLOBAL_KEYS), ("FOLDERS", FOLDER_KEYS), ("COMPOSE", COMPOSE_KEYS)],
     ],
     "priority": [
         [("PRIORITY", PRIORITY_KEYS)],
@@ -107,7 +114,8 @@ INVITE_HINTS = {"invite": "i answer invite", "cancellation": "i remove from cale
 STATUS_HINTS = {
     # {open}: the key the layout makes natural — "l" (right) when the next
     # pane is to the right, "o" when the email sits below the list.
-    "folders": "j/k folder · {open} open · Tab next pane · ? help",
+    "folders": "j/k folder · {open} open · V move · H hide · . show hidden · ? help",
+    "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
     "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",

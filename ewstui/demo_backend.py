@@ -129,6 +129,8 @@ class DemoMailClient:
             FolderSummary(id="drafts", name="Drafts", total_count=1, unread_count=0, depth=0),
             FolderSummary(id="archive", name="Archive", total_count=1, unread_count=0, depth=0),
             FolderSummary(id="trash", name="Deleted Items", total_count=0, unread_count=0, depth=0),
+            # Outlook housekeeping: not listed unless unhidden (. shows it, H unhides it).
+            FolderSummary(id="sync", name="Sync Issues", total_count=0, unread_count=0, depth=0, hidden_by_default=True),
         ]
         now = datetime.now()
         self._attachments: dict[str, list[tuple[str, str, bytes]]] = {

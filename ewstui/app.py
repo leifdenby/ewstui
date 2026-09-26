@@ -272,7 +272,8 @@ class EwstuiApp(App):
         if not folders:
             return
         folder_list = self.query_one("#folders", FolderList)
-        folder_list.set_folders(folders)
+        folder_list.set_folders(folders, self.config.folder_prefs)
+        folders = folder_list.folders or folders  # as listed: your order, hidden ones left out
         self._folder_unread = {f.id: f.unread_count for f in folders}
         # Open the Inbox, not the first row: live mailboxes list "Top of
         # Information Store" first. Fall back to the first folder if the
@@ -392,10 +393,11 @@ class EwstuiApp(App):
         if self.screen is not self.screen_stack[0]:
             return  # a modal (compose, help, ...) is open; the next refresh catches up
 
+        hidden = self.query_one("#folders", FolderList).hidden_folder_ids
         gained = [
             (f.name, f.unread_count - self._folder_unread[f.id])
             for f in folders
-            if f.id in self._folder_unread and f.unread_count > self._folder_unread[f.id]
+            if f.id in self._folder_unread and f.unread_count > self._folder_unread[f.id] and f.id not in hidden
         ]
         self._folder_unread = {f.id: f.unread_count for f in folders}
         if gained:
@@ -1190,6 +1192,26 @@ class EwstuiApp(App):
 
         self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
 
+    # -- folder pane arrangement (V to move, H to hide) -----------------------------
+
+    def on_folder_list_prefs_changed(self, event: FolderList.PrefsChanged) -> None:
+        self.config.folder_prefs = event.prefs
+        notice = event.notice or "Folder order saved"
+        if not (self.config.account and self.config.config_path):
+            self.notify(f"{notice} (this session only — start with --account NAME to keep it)", timeout=6)
+            return
+        names = {f.id: f.name for f in self.query_one("#folders", FolderList)._all}
+        try:
+            config_file.save_folder_prefs(self.config.config_path, self.config.account, event.prefs, names)
+        except (OSError, config_file.ConfigFileError) as e:
+            self.notify(f"{notice}, but couldn't save it: {e}", severity="warning", timeout=10)
+            return
+        if event.notice:
+            self.notify(event.notice)
+
+    def on_folder_list_move_mode_changed(self, event: FolderList.MoveModeChanged) -> None:
+        self._update_status()
+
     def _save_found_room(self, room) -> None:
         """A room picked with / in the room grid: remember it for next time."""
         self.config.rooms.append(room)
@@ -1301,6 +1323,8 @@ class EwstuiApp(App):
         # folder pane always opens rightwards.
         open_key = "o" if pane == "messages" and self.config.layout == "stacked" else "l"
         status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, "")).format(open=open_key)
+        if pane == "folders" and focused.moving is not None:
+            status.hints = STATUS_HINTS["moving"]
         table = self.query_one("#messages", MessageTable)
         if pane in ("messages", "preview"):
             current = table._by_id.get(self.current_message_id or "")

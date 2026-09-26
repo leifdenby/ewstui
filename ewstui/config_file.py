@@ -24,6 +24,7 @@ import tomlkit
 from tomlkit import TOMLDocument
 
 from .ews_client import Room
+from .folder_tree import FolderPrefs
 
 # CLI options that can be stored in a profile (argparse dest names).
 # Never: password (Keychain/env/prompt only), debug, demo,
@@ -51,9 +52,10 @@ STORED_KEYS = (
     "attachment_dir",
 )
 PATH_KEYS = {"token_cache", "priority_file", "attachment_dir"}
-# Profile keys that aren't CLI options: only ever set by editing the file,
-# and read separately (see account_rooms).
-FILE_ONLY_KEYS = ("rooms",)
+# Profile keys that aren't CLI options: set by editing the file or from the
+# app, and read separately (see account_rooms, account_folder_prefs).
+FOLDER_KEYS = ("folder_order", "hidden_folders", "shown_folders")
+FILE_ONLY_KEYS = ("rooms", *FOLDER_KEYS)
 
 
 class ConfigFileError(ValueError):
@@ -145,6 +147,40 @@ def add_room(path: Path, name: str, room: Room) -> bool:
     path.write_text(tomlkit.dumps(doc))
     path.chmod(0o600)
     return True
+
+
+def account_folder_prefs(doc: TOMLDocument, name: str) -> FolderPrefs:
+    """The folder pane arrangement saved for the account: folder_order,
+    hidden_folders and shown_folders, each a list of EWS folder ids."""
+    table = doc.get("accounts", {}).get(name) or {}
+    lists = {}
+    for key in FOLDER_KEYS:
+        value = table.get(key, [])
+        value = value.unwrap() if hasattr(value, "unwrap") else value
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ConfigFileError(f"[accounts.{name}] {key} must be a list of folder ids")
+        lists[key] = value
+    return FolderPrefs(order=lists["folder_order"], hidden=lists["hidden_folders"], shown=lists["shown_folders"])
+
+
+def save_folder_prefs(path: Path, name: str, prefs: FolderPrefs, names: dict[str, str]) -> None:
+    """Write the folder arrangement into [accounts.NAME], one id per line
+    with the folder's name as a comment (ids alone are unreadable)."""
+    doc = load(path)
+    table = doc.get("accounts", {}).get(name)
+    if table is None:
+        raise ConfigFileError(f"no [accounts.{name}] in {path}")
+    for key, ids in zip(FOLDER_KEYS, (prefs.order, prefs.hidden, prefs.shown)):
+        if not ids:
+            table.pop(key, None)
+            continue
+        array = tomlkit.array()
+        for fid in ids:
+            array.add_line(fid, comment=names.get(fid) or None)
+        array.add_line(indent="")
+        table[key] = array
+    path.write_text(tomlkit.dumps(doc))
+    path.chmod(0o600)
 
 
 def has_account(doc: TOMLDocument, name: str) -> bool:

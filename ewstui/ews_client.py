@@ -59,6 +59,32 @@ class FolderSummary:
     total_count: int
     unread_count: int
     depth: int = 0
+    parent_id: str | None = None
+    # Outlook/Exchange housekeeping (Sync Issues, Conversation History, RSS
+    # feeds, F2 integration): not listed unless you unhide it (H).
+    hidden_by_default: bool = False
+
+
+# Folders hidden unless unhidden: well-known Exchange housekeeping folders
+# (by type, or by name for older servers / localized names), Outlook's RSS
+# folder (by folder class) and the F2 document-system integration folders.
+HIDDEN_FOLDER_CLASSES = ("IPF.Note.OutlookHomepage",)
+HIDDEN_FOLDER_NAMES = {
+    "sync issues", "conflicts", "local failures", "server failures", "conversation history",
+    "synkroniseringsfejl", "konflikter", "lokale fejl", "serverfejl", "samtaleoversigt",
+}
+HIDDEN_FOLDER_PREFIXES = ("flyt til f2", "overført til f2")
+
+
+def _hidden_by_default(folder) -> bool:
+    from exchangelib.folders import Conflicts, ConversationHistory, LocalFailures, RSSFeeds, ServerFailures, SyncIssues
+
+    if isinstance(folder, (SyncIssues, Conflicts, LocalFailures, ServerFailures, ConversationHistory, RSSFeeds)):
+        return True
+    if (getattr(folder, "folder_class", None) or "").startswith(HIDDEN_FOLDER_CLASSES):
+        return True
+    name = (getattr(folder, "name", None) or "").strip().casefold()
+    return name in HIDDEN_FOLDER_NAMES or name.startswith(HIDDEN_FOLDER_PREFIXES)
 
 
 @dataclass
@@ -398,7 +424,7 @@ class MailClient:
     def list_folders(self) -> list[FolderSummary]:
         folders = []
 
-        def walk(folder, depth=0):
+        def walk(folder, depth=0, parent_id=None):
             folders.append(
                 FolderSummary(
                     id=folder.id,
@@ -406,15 +432,22 @@ class MailClient:
                     total_count=folder.total_count or 0,
                     unread_count=folder.unread_count or 0,
                     depth=depth,
+                    parent_id=parent_id,
+                    hidden_by_default=_hidden_by_default(folder),
                 )
             )
             for child in folder.children:
-                walk(child, depth + 1)
+                if _is_mail_folder(child):  # not Calendar, Contacts, Tasks, Yammer, ... (nor their subfolders)
+                    walk(child, depth + 1, folder.id)
 
         # exchangelib caches the whole folder tree (and its counts) on the
         # root after the first walk; drop it so every listing is current.
         self.account.root.clear_cache()
-        walk(self.account.root / "Top of Information Store" if False else self.account.msg_folder_root)
+        # The mail folders under "Top of Information Store" (itself not a
+        # folder you'd open), top level at depth 0.
+        for child in self.account.msg_folder_root.children:
+            if _is_mail_folder(child):
+                walk(child)
         return folders
 
     @retry_on_dead_connection

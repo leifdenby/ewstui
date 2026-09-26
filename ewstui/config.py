@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from . import config_file
+from .folder_tree import FolderPrefs
 from .theme import ALIASES, DEFAULT_THEME, THEMES
 from .opener import default_attachment_dir
 from .priority_store import DEFAULT_PATH as DEFAULT_PRIORITY_PATH
@@ -76,6 +77,8 @@ class Config:
     pending_account_updates: dict = field(default_factory=dict)
     # Meeting rooms for "find a room" (config file only, see config_file.account_rooms)
     rooms: list = field(default_factory=list)
+    # Folder pane order and hidden folders (config file only, see folder_tree.py)
+    folder_prefs: FolderPrefs = field(default_factory=FolderPrefs)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -211,6 +214,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         account = config_file.resolve_account_name(doc, ns.account)
         profile = config_file.account_settings(doc, account) if account else {}
         rooms = config_file.account_rooms(doc, account) if account else []
+        folder_prefs = config_file.account_folder_prefs(doc, account) if account else FolderPrefs()
     except config_file.ConfigFileError as e:
         raise SystemExit(f"error: {e}") from e
     if account and not config_file.has_account(doc, account):
@@ -243,6 +247,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         config_path=config_path,
         pending_account_updates=explicit if ns.account else {},
         rooms=rooms,
+        folder_prefs=folder_prefs,
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime

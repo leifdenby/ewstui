@@ -323,6 +323,17 @@ long To or Cc list folded onto one line ("Anna Berg, Bo Christensen …
 line with their address; `e` again folds it. Each new email starts
 folded.
 
+**Folders**: the folder pane lists your mail folders (not Calendar,
+Contacts, Tasks, …). In it, `V` picks up the folder under the cursor,
+`j`/`k` move it among the folders at its level (its subfolders go with
+it), and Enter or `V` puts it down; `Esc` puts it back. `H` hides a
+folder (and what's in it); `.` shows hidden folders dimmed, where `H`
+unhides them. Outlook's housekeeping folders (Sync Issues, Conversation
+History, RSS feeds) and the F2 integration folders are hidden to start
+with. The order and hidden folders are saved in your account's section
+of the config file (`folder_order`, `hidden_folders`, `shown_folders`,
+each folder id with its name as a comment).
+
 **Invites** (`i`): meeting invites are tagged `invite ·` in the list,
 and the reading pane shows a card above the text: when, where, your
 answer so far, what it clashes with in your calendar, and your day as a
