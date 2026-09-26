@@ -90,6 +90,54 @@ async def test_escape_ends_the_selection_before_closing(tmp_path, home, opened):
         assert not isinstance(app.screen, AttachmentListScreen)
 
 
+def test_safe_filename():
+    from ewstui.ews_client import safe_filename
+
+    assert safe_filename("Report 1/2.pdf") == "Report 1_2.pdf"
+    assert safe_filename("a\\b\x07.txt") == "a_b_.txt"
+    assert safe_filename("..") == "attachment" and safe_filename(None) == "attachment"
+    assert safe_filename("Q3-budget.xlsx") == "Q3-budget.xlsx"
+
+
+async def test_a_slash_in_the_name_is_saved_as_one_file(tmp_path, home, opened):
+    app = make_app(tmp_path)
+    app.mail_client._attachments["m1"] = [("Report 1/2.pdf", "application/pdf", b"%PDF")]
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_list(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert (tmp_path / "attachments" / "Report 1_2.pdf").read_bytes() == b"%PDF"
+
+
+async def test_a_failed_save_is_logged(tmp_path, home, opened, monkeypatch, caplog):
+    app = make_app(tmp_path)
+
+    def fail(*a, **kw):
+        raise PermissionError("read-only folder")
+
+    monkeypatch.setattr(app.mail_client, "save_attachment", fail)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await open_list(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert any("saving attachment" in r.getMessage() and r.exc_info for r in caplog.records)
+
+
+async def test_a_crash_is_logged(tmp_path, monkeypatch, caplog):
+    app = make_app(tmp_path)
+
+    def boom():
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(app, "action_show_links", boom)
+    with pytest.raises(RuntimeError):
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(app, pilot)
+            await pilot.press("U")
+            await pilot.pause()
+    assert any(r.getMessage() == "ewstui crashed" and r.exc_info for r in caplog.records)
+
+
 async def test_one_attachment_still_saves_and_opens(tmp_path, home, opened):
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:

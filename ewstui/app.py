@@ -1373,6 +1373,7 @@ class EwstuiApp(App):
             try:
                 return self.mail_client.save_attachment(folder_id, event.message_id, attachment_id, dest_dir)
             except Exception as e:  # noqa: BLE001
+                log.warning("saving attachment %r to %s failed", attachment_id, dest_dir, exc_info=True)
                 self.notify(f"Failed to save attachment: {e}", severity="error", timeout=10)
                 return None
 
@@ -1392,6 +1393,7 @@ class EwstuiApp(App):
                     try:
                         open_with_default_app(path)
                     except OpenError as e:
+                        log.warning("opening %s failed: %s", path, e)
                         failed.append(f"{path.name}: {e}")
                 where = display_path(self.config.attachment_dir, Path.home())
                 self.notify(f"Saved {len(saved)} files to {where} and opening them"
@@ -1421,9 +1423,16 @@ class EwstuiApp(App):
         try:
             open_with_default_app(path)
         except OpenError as e:
+            log.warning("opening %s failed: %s", path, e)
             self.notify(f"Saved to {path}, but couldn't open it automatically: {e}", severity="warning", timeout=10)
             return
         self.notify(f"Saved to {path} and opening it")
+
+    def _handle_exception(self, error: Exception) -> None:
+        # A crash: Textual prints the traceback to the terminal once the
+        # app has closed; put it in the log too, so it can be looked at later.
+        log.critical("ewstui crashed", exc_info=error)
+        super()._handle_exception(error)
 
     # -- priority pane events ---------------------------------------------
 

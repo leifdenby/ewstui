@@ -23,6 +23,7 @@ from .ews_client import (
     RoomMatch,
     RoomsDay,
     _unique_path,
+    safe_filename,
 )
 
 DEMO_ROOMS = [
@@ -360,7 +361,7 @@ class DemoMailClient:
             if f"{message_id}:{name}" == attachment_id or name == attachment_id:
                 dest_dir = Path(dest_dir)
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                dest_path = _unique_path(dest_dir / name)
+                dest_path = _unique_path(dest_dir / safe_filename(name))
                 dest_path.write_bytes(content)
                 return dest_path
         raise LookupError(f"No attachment with id {attachment_id!r} on this message")

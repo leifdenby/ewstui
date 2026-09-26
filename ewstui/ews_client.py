@@ -419,6 +419,14 @@ def _summary(item, folder_id: str | None) -> MessageSummary:
     )
 
 
+def safe_filename(name: str | None) -> str:
+    """An attachment's name as a file name in the chosen folder: a "/" (as
+    in "Report 1/2.pdf") would make it a path into a subfolder, and a
+    name that's only dots would be the folder itself."""
+    cleaned = "".join("_" if ch in "/\\\0" or ord(ch) < 32 else ch for ch in (name or "")).strip()
+    return cleaned if cleaned.strip(".") else "attachment"
+
+
 def _unique_path(path: Path) -> Path:
     """If `path` already exists, append " (1)", " (2)", ... before the
     extension until it doesn't — never silently overwrite a previous
@@ -691,7 +699,7 @@ class MailClient:
 
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = _unique_path(dest_dir / (match.name or "attachment"))
+        dest_path = _unique_path(dest_dir / safe_filename(match.name))
         dest_path.write_bytes(match.content)
         return dest_path
 
