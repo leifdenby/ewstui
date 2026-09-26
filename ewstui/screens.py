@@ -202,6 +202,9 @@ class NewEventScreen(ModalScreen[dict | None]):
     #event-box Input {
         margin-bottom: 1;
     }
+    #event-notes {
+        height: 6;
+    }
     """
 
     def __init__(
@@ -226,6 +229,9 @@ class NewEventScreen(ModalScreen[dict | None]):
             yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="event-start")
             yield Input(value=self._end_default, placeholder="End (YYYY-MM-DD HH:MM)", id="event-end")
             yield Input(value=self._location_default, placeholder="Location", id="event-location")
+            yield Input(placeholder="Attendees (addresses, comma separated) — they get an invitation",
+                        id="event-attendees")
+            yield TextArea(id="event-notes", placeholder="Notes")
 
     def on_mount(self) -> None:
         self.query_one("#event-subject", Input).focus()
@@ -247,6 +253,9 @@ class NewEventScreen(ModalScreen[dict | None]):
                 "start": start,
                 "end": end,
                 "location": self.query_one("#event-location", Input).value,
+                "attendees": [a.strip() for a in self.query_one("#event-attendees", Input).value.replace(";", ",").split(",")
+                              if a.strip()],
+                "notes": self.query_one("#event-notes", TextArea).text.strip(),
                 "teams": teams,
             }
         )

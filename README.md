@@ -418,9 +418,14 @@ too) — so in the new-event screen (`n` in the calendar, and after
 picking rooms in the room finder) and in the event-from-email panel
 (`c`), Ctrl+T hands the meeting to Teams instead of saving it: Teams'
 own "New meeting" form opens (the Teams app, or teams.microsoft.com if
-it isn't installed) with the title, times and description filled in,
-and picked rooms as attendees. Add people there and send it from Teams,
-which creates the meeting, its join link and the invites.
+it isn't installed) with everything filled in: title, times, the
+attendees and notes you entered (plus the location, and picked rooms as
+attendees). Check it and send it from Teams, which creates the meeting,
+its join link and the invites.
+
+The new-event screen has Attendees (addresses, comma separated) and
+Notes fields: with Ctrl+S the attendees get an invitation from Exchange
+and the notes become the event's text.
 
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the

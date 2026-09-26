@@ -1561,17 +1561,20 @@ class EwstuiApp(App):
             if result is None:
                 return
             if result.get("teams"):
-                self._schedule_in_teams(result["subject"], result["start"], result["end"], location=result["location"])
+                self._schedule_in_teams(result["subject"], result["start"], result["end"], attendees=result["attendees"],
+                                        location=result["location"], content=result["notes"])
                 return
             try:
                 self.calendar_client.create_event(
-                    subject=result["subject"], start=result["start"], end=result["end"], location=result["location"]
+                    subject=result["subject"], start=result["start"], end=result["end"], location=result["location"],
+                    body=result["notes"], attendees=result["attendees"] or None,
                 )
             except Exception as e:  # noqa: BLE001 - surface any EWS error, never crash
                 log.warning("creating event failed", exc_info=True)
                 self.notify(f"Creating the event failed: {e}", severity="error", timeout=10)
                 return
-            self.notify("Event created")
+            n = len(result["attendees"])
+            self.notify(f"Event created — invitation sent to {n} attendee{'s' if n != 1 else ''}" if n else "Event created")
             self.load_calendar_range()
 
         self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
@@ -1640,7 +1643,8 @@ class EwstuiApp(App):
                     return
                 if details.get("teams"):  # a Teams meeting in the room(s): invited as attendees, which books them
                     self._schedule_in_teams(details["subject"], details["start"], details["end"],
-                                            attendees=[r.email for r in rooms], location=details["location"])
+                                            attendees=[*details["attendees"], *[r.email for r in rooms]],
+                                            location=details["location"], content=details["notes"])
                     return
                 try:
                     self.calendar_client.create_event(
@@ -1648,7 +1652,9 @@ class EwstuiApp(App):
                         start=details["start"],
                         end=details["end"],
                         location=details["location"],
+                        body=details["notes"],
                         resources=[r.email for r in rooms],
+                        attendees=details["attendees"] or None,
                     )
                 except Exception as e:  # noqa: BLE001 - surface any EWS error
                     self.notify(f"Booking failed: {e}", severity="error", timeout=10)

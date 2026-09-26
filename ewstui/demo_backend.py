@@ -443,7 +443,9 @@ class DemoCalendarClient:
             out.append(RoomAvailability(room=room, free=not busy, busy=busy))
         return RoomsDay(day=day, work_hours=None, rooms=out)  # None: UI falls back to 08:00-17:00
 
-    def create_event(self, subject, start, end, location="", body="", resources=None, is_all_day=False) -> None:
+    def create_event(self, subject, start, end, location="", body="", resources=None, is_all_day=False,
+                     attendees=None) -> None:
+        self.last_created_attendees = list(attendees or [])
         self._events.append(
             EventSummary(
                 id=f"e{len(self._events) + 1}", changekey="c1", subject=subject,

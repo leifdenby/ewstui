@@ -83,12 +83,50 @@ async def test_ctrl_t_in_the_new_event_screen(tmp_path, opened):
         assert isinstance(app.screen, NewEventScreen)
         app.screen.query_one("#event-subject").value = "Sprint planning"
         app.screen.query_one("#event-location").value = "Room 4B"
+        app.screen.query_one("#event-attendees").value = "a@corp.example; b@corp.example"
+        app.screen.query_one("#event-notes").text = "Bring estimates"
         before = len(app.calendar_client._events)
         await pilot.press("ctrl+t")
         await settle(app, pilot)
     subject, start, end, attendees, content = opened[0]
-    assert subject == "Sprint planning" and end > start and content == "Location: Room 4B"
+    assert subject == "Sprint planning" and end > start
+    assert attendees == ["a@corp.example", "b@corp.example"]
+    assert content == "Location: Room 4B\n\nBring estimates"
     assert len(app.calendar_client._events) == before  # Teams makes it, not ewstui
+
+
+async def test_ctrl_s_invites_the_attendees_with_the_notes(tmp_path, opened):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("3", "n")
+        await settle(app, pilot)
+        app.screen.query_one("#event-subject").value = "Sync"
+        app.screen.query_one("#event-attendees").value = "a@corp.example, b@corp.example"
+        app.screen.query_one("#event-notes").text = "Agenda: budget"
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+    assert opened == []
+    assert app.calendar_client._events[-1].subject == "Sync"
+    assert app.calendar_client.last_created_attendees == ["a@corp.example", "b@corp.example"]
+    assert app.calendar_client.last_created_body == "Agenda: budget"
+
+
+def test_live_create_event_invites_attendees(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import exchangelib
+    from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
+
+    from ewstui.ews_client import CalendarClient
+
+    item_cls = MagicMock()
+    monkeypatch.setattr(exchangelib, "CalendarItem", item_cls)
+    CalendarClient(SimpleNamespace(calendar="cal")).create_event("Sync", START, END, body="Agenda", attendees=["a@corp.example"])
+    item = item_cls.return_value
+    assert [a.mailbox.email_address for a in item.required_attendees] == ["a@corp.example"]
+    assert item_cls.call_args.kwargs["body"] == "Agenda"
+    item.save.assert_called_once_with(send_meeting_invitations=SEND_TO_ALL_AND_SAVE_COPY)
 
 
 async def test_ctrl_t_in_the_event_from_email_panel(tmp_path, opened):

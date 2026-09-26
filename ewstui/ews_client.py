@@ -872,13 +872,14 @@ class CalendarClient:
         body: str = "",
         resources: list[str] | None = None,
         is_all_day: bool = False,
+        attendees: list[str] | None = None,
     ) -> None:
-        """With `resources` (room addresses), the rooms are invited as
-        resource attendees and invitations are sent, which is what
-        actually books them (the room's booking assistant accepts or
-        declines). Without, it's a plain appointment in your calendar.
-        An all-day event runs from `start`'s day up to (not including)
-        `end`'s day.
+        """With `attendees` (addresses) and/or `resources` (room
+        addresses), it's a meeting: they're invited (rooms as resource
+        attendees, which is what books them — the room's booking assistant
+        accepts or declines) and invitations are sent. Without, it's a
+        plain appointment in your calendar. An all-day event runs from
+        `start`'s day up to (not including) `end`'s day.
         """
         from exchangelib import Attendee, CalendarItem, EWSDate, Mailbox
         from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
@@ -898,10 +899,14 @@ class CalendarClient:
             body=body,
             **when,
         )
+        def invitees(addresses):
+            return [Attendee(mailbox=Mailbox(email_address=email), response_type="Unknown") for email in addresses]
+
+        if attendees:
+            item.required_attendees = invitees(attendees)
         if resources:
-            item.resources = [
-                Attendee(mailbox=Mailbox(email_address=email), response_type="Unknown") for email in resources
-            ]
+            item.resources = invitees(resources)
+        if attendees or resources:
             item.save(send_meeting_invitations=SEND_TO_ALL_AND_SAVE_COPY)
         else:
             item.save()
