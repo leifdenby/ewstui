@@ -56,6 +56,24 @@ async def test_clicking_tab_switches_mode(app):
         assert_mode(app, "priority")
 
 
+async def test_back_in_mail_the_reading_pane_shows_the_email_not_a_calendar_event(app):
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("j")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        body = app.query_one("#preview-body")
+        email_text = str(body.render())
+        await pilot.press("3", "j")  # highlighting an event shows it in the same pane
+        await pilot.pause()
+        await pilot.press("1")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert str(body.render()) == email_text
+
+
 async def test_mode_bar_is_not_in_focus_cycle(app):
     async with app.run_test() as pilot:
         await pilot.pause()

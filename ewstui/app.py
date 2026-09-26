@@ -1201,6 +1201,12 @@ class EwstuiApp(App):
         self._set_mode_status(mode)
         if mode == "mail":
             self.query_one("#messages", MessageTable).focus()
+            # The calendar shows its events in the same reading pane: put
+            # the current email back.
+            if self.current_message_id:
+                self.open_message(self.current_message_id)
+            else:
+                self.query_one("#preview", PreviewPane).clear()
             if self._pending_jump is not None:  # from the priority view (Enter/o)
                 pending, self._pending_jump = self._pending_jump, None
                 self._jump_to_entry(*pending)
