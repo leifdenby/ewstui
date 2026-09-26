@@ -271,6 +271,14 @@ name, or your email address when no account profile is in use — and
 Re-downloading the same file never overwrites a previous copy — it's
 suffixed `(1)`, `(2)`, etc.
 
+To save somewhere else, press `s` on the attachment instead: a fuzzy
+folder picker opens on your home folder (folders a few levels deep,
+leaving out hidden ones, `Library`, `node_modules` and the like). Type
+a few letters of the folder (`invo` for `~/Documents/Work/Invoices`), or
+a full path (`~/…`, `/…`), and Enter saves it there (without opening
+it). Folders you saved to this session, and the usual attachment
+folder, are at the top.
+
 Only real file attachments are downloadable; an attachment that's
 itself an embedded email or calendar item (e.g. a forwarded message)
 shows up greyed out in the list since EWS represents those

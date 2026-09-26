@@ -36,6 +36,8 @@ from .screens import (
     NewEventScreen,
 )
 from .folder_picker import MoveToFolderScreen
+from .path_picker import PathPickerScreen
+from .path_picker import display as display_path
 from .links import LinkPickerScreen, extract_links, open_link
 from .message_cache import MessageCache
 from .room_grid import FindRoomScreen
@@ -233,6 +235,8 @@ class EwstuiApp(App):
         # Folders mail was moved to with `m` this session, most recent first
         # (shown first in the picker).
         self._recent_move_targets: list[str] = []
+        # Folders attachments were saved to with s this session, most recent first.
+        self._recent_save_dirs: list[Path] = []
         # (entry key, folder id, message id, Message-ID) to show once the Mail
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
@@ -1339,17 +1343,35 @@ class EwstuiApp(App):
             return
         detail = self.mail_client.get_message(folder_id, event.message_id)
 
-        def _on_result(attachment_id: str | None) -> None:
-            if attachment_id is None:
-                return
+        def _save(attachment_id: str, dest_dir) -> Path | None:
             try:
-                path = self.mail_client.save_attachment(
-                    folder_id, event.message_id, attachment_id, self.config.attachment_dir
-                )
+                return self.mail_client.save_attachment(folder_id, event.message_id, attachment_id, dest_dir)
             except Exception as e:  # noqa: BLE001
                 self.notify(f"Failed to save attachment: {e}", severity="error", timeout=10)
+                return None
+
+        def _on_result(choice: dict | None) -> None:
+            if choice is None:
                 return
-            self._open_with_system_default(path)
+            if choice["action"] == "open":
+                path = _save(choice["id"], self.config.attachment_dir)
+                if path is not None:
+                    self._open_with_system_default(path)
+                return
+            name = next((a.name for a in attachments if a.id == choice["id"]), "the attachment")
+
+            def _to_folder(folder: Path | None) -> None:
+                if folder is None:
+                    return
+                path = _save(choice["id"], folder)
+                if path is not None:
+                    self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
+                    self.notify(f"Saved to {display_path(path, Path.home())}")
+
+            self.push_screen(
+                PathPickerScreen(f"Save “{name}” to…", first=[*self._recent_save_dirs, self.config.attachment_dir]),
+                _to_folder,
+            )
 
         self.push_screen(AttachmentListScreen(detail.subject, attachments), _on_result)
 

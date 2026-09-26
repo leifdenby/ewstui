@@ -483,9 +483,10 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(yes)
 
 
-class AttachmentListScreen(ModalScreen[str | None]):
+class AttachmentListScreen(ModalScreen[dict | None]):
     """Lists a message's attachments; Enter/l saves + opens the selected
-    one, Esc cancels. Dismisses with the chosen attachment id, or None.
+    one, s saves it to a folder you pick, Esc cancels. Dismisses with
+    {"id": attachment id, "action": "open" | "save_to"}, or None.
     """
 
     BINDINGS = [
@@ -493,6 +494,7 @@ class AttachmentListScreen(ModalScreen[str | None]):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("l", "select_cursor", "Open", show=False),
+        Binding("s", "save_to", "Save to…", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -518,7 +520,7 @@ class AttachmentListScreen(ModalScreen[str | None]):
         from textual.widgets import ListItem, ListView
 
         with Vertical(id="attachment-box"):
-            yield Label(f"Attachments — {self._subject}  (Enter/l to save + open, Esc to cancel)")
+            yield Label(f"Attachments — {self._subject}  (Enter/l save + open · s save to… · Esc cancel)", markup=False)
             with ListView(id="attachment-items"):
                 for att in self._attachments:
                     note = "" if att.is_file else "  [dim](embedded item, not downloadable)[/dim]"
@@ -544,13 +546,16 @@ class AttachmentListScreen(ModalScreen[str | None]):
     def action_select_cursor(self) -> None:
         self._select_current()
 
+    def action_save_to(self) -> None:
+        self._select_current("save_to")
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
     def on_list_view_selected(self, event) -> None:
         self._select_current()
 
-    def _select_current(self) -> None:
+    def _select_current(self, action: str = "open") -> None:
         lv = self._list()
         if lv.index is None:
             return
@@ -558,7 +563,7 @@ class AttachmentListScreen(ModalScreen[str | None]):
         if not att.is_file:
             self.app.bell()
             return
-        self.dismiss(att.id)
+        self.dismiss({"id": att.id, "action": action})
 
 
 def _human_size(n: int) -> str:
