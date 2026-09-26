@@ -9,7 +9,10 @@ import pytest
 from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
-from ewstui.path_picker import PathPickerScreen, display, list_dirs, rank, typed_path
+import shutil
+
+from ewstui import path_picker
+from ewstui.path_picker import PathPickerScreen, display, fzf_filter, list_dirs, rank, typed_path
 from ewstui.screens import AttachmentListScreen
 
 
@@ -43,6 +46,28 @@ def test_rank(home):
     assert [display(p, home) for p in empty[:2]] == ["~/Downloads", "~"]  # recent first, then ~
 
 
+@pytest.mark.skipif(shutil.which("fzf") is None, reason="fzf not installed")
+def test_rank_with_fzf(home):
+    dirs = list_dirs(home)
+    assert display(rank(dirs, "invo", home, [], use_fzf=True)[0], home) == "~/Documents/Work/Invoices"
+    assert rank(dirs, "zzqqxx", home, [], use_fzf=True) == []
+    assert fzf_filter(["Documents/Work", "Downloads"], "dl") == ["Downloads"]
+
+
+def test_without_fzf_our_own_matching_is_used(home, monkeypatch):
+    monkeypatch.setattr(path_picker.shutil, "which", lambda name: None)
+    assert fzf_filter(["a"], "a") is None
+    assert display(rank(list_dirs(home), "invo", home, [], use_fzf=True)[0], home) == "~/Documents/Work/Invoices"
+
+
+def test_a_failing_fzf_falls_back(home, monkeypatch):
+    def broken(*a, **kw):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(path_picker.subprocess, "run", broken)
+    assert display(rank(list_dirs(home), "invo", home, [], use_fzf=True)[0], home) == "~/Documents/Work/Invoices"
+
+
 def test_typed_path(home):
     assert typed_path("~/Documents/Personal", home) == home / "Documents/Personal"
     assert typed_path(str(home / "code"), home) == home / "code"
@@ -69,9 +94,8 @@ async def test_s_saves_the_attachment_where_you_pick(home, tmp_path):
         await pilot.press("s")
         await settle(app, pilot)
         assert isinstance(app.screen, PathPickerScreen)
-        await pilot.press(*"invo")
-        await pilot.pause()
-        await pilot.press("enter")
+        await pilot.press(*"invo", "enter")  # straight away: even before fzf has answered
+        await settle(app, pilot)
         await settle(app, pilot)
         saved = home / "Documents/Work/Invoices/Q3-budget.xlsx"
         assert saved.exists()
