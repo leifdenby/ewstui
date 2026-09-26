@@ -79,6 +79,33 @@ class MessageSummary:
     depth: int = 0
     folder_id: str | None = None
     conversation_index: bytes | None = None
+    # "invite", "cancellation" or "response" for meeting items (see
+    # MeetingInfo), "mail" for everything else.
+    kind: str = "mail"
+
+
+@dataclass
+class MeetingInfo:
+    """The meeting an invite (MeetingRequest) or cancellation is about.
+    Times are naive local. `my_response` is Exchange's response type:
+    "Unknown"/"NoResponseReceived" (not answered), "Accept", "Tentative",
+    "Decline" or "Organizer". `calendar_item_id` is the meeting in your
+    calendar (Exchange puts an invite there as tentative on arrival).
+    """
+    kind: str  # "invite" / "cancellation" / "response"
+    start: datetime | None
+    end: datetime | None
+    is_all_day: bool = False
+    location: str = ""
+    organizer: str = ""
+    is_recurring: bool = False
+    my_response: str = "Unknown"
+    is_out_of_date: bool = False
+    calendar_item_id: str | None = None
+
+
+# How ewstui answers an invite -> the exchangelib method that does it.
+INVITE_RESPONSES = {"accept": "accept", "tentative": "tentatively_accept", "decline": "decline"}
 
 
 @dataclass
@@ -93,6 +120,7 @@ class MessageDetail(MessageSummary):
     # Display names of the sender and recipients, by address ("Jane Doe"),
     # for the reading pane; sender/to/cc stay plain addresses for replying.
     names: dict[str, str] = field(default_factory=dict)
+    meeting: MeetingInfo | None = None  # set for invites and cancellations
 
 
 @dataclass
@@ -287,6 +315,59 @@ def _to_local(value, tz) -> datetime:
     raise TypeError(f"expected a date or datetime, got {value!r}")
 
 
+def _kind(item) -> str:
+    """"invite" / "cancellation" / "response" for meeting items, else "mail"."""
+    from exchangelib.items import MeetingCancellation, MeetingRequest, MeetingResponse
+
+    if isinstance(item, MeetingRequest):
+        return "invite"
+    if isinstance(item, MeetingCancellation):
+        return "cancellation"
+    if isinstance(item, MeetingResponse):
+        return "response"
+    return "mail"
+
+
+def _meeting(item, tz, calendar=None) -> MeetingInfo | None:
+    """What an invite or cancellation says about its meeting (None for
+    everything else, including responses to your own meetings).
+
+    A cancellation carries no time or place, so those come from the
+    meeting in your `calendar` (one more request); if it's no longer
+    there, `calendar_item_id` is None.
+    """
+    from exchangelib.errors import ErrorItemNotFound
+
+    kind = _kind(item)
+    if kind not in ("invite", "cancellation"):
+        return None
+    calendar_item = getattr(item, "associated_calendar_item_id", None)
+    calendar_item_id = getattr(calendar_item, "id", None)
+    source = item
+    if kind == "cancellation":
+        source = None
+        if calendar_item_id and calendar is not None:
+            try:
+                source = calendar.get(id=calendar_item_id)
+            except ErrorItemNotFound:
+                pass
+        if source is None:
+            calendar_item_id = None  # already gone from your calendar
+    start, end = getattr(source, "start", None), getattr(source, "end", None)
+    return MeetingInfo(
+        kind=kind,
+        start=_to_local(start, tz) if start else None,
+        end=_to_local(end, tz) if end else None,
+        is_all_day=bool(getattr(source, "is_all_day", False)),
+        location=getattr(source, "location", None) or "",
+        organizer=_email(getattr(source, "organizer", None)) or _sender(item),
+        is_recurring=bool(getattr(source, "is_recurring", False) or getattr(source, "recurrence", None)),
+        my_response=getattr(item, "my_response_type", None) or "Unknown",
+        is_out_of_date=bool(getattr(item, "is_out_of_date", False)),
+        calendar_item_id=calendar_item_id,
+    )
+
+
 def _unique_path(path: Path) -> Path:
     """If `path` already exists, append " (1)", " (2)", ... before the
     extension until it doesn't — never silently overwrite a previous
@@ -311,6 +392,7 @@ class MailClient:
     def __init__(self, account: Account, page_size: int = 50):
         self.account = account
         self.page_size = page_size
+        self.tz = EWSTimeZone.localzone()
 
     @retry_on_dead_connection
     def list_folders(self) -> list[FolderSummary]:
@@ -381,6 +463,7 @@ class MailClient:
                     depth=_reply_depth(index),
                     folder_id=folder_id,
                     conversation_index=bytes(index) if index else None,
+                    kind=_kind(item),
                 )
             )
         return out
@@ -407,7 +490,36 @@ class MailClient:
             body_text=getattr(item, "text_body", None) or "",
             internet_message_id=getattr(item, "message_id", None),
             names=_names(item),
+            kind=_kind(item),
+            meeting=_meeting(item, self.tz, getattr(self.account, "calendar", None)),
         )
+
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+        """Accept / tentatively accept / decline an invite (`response` is a
+        key of INVITE_RESPONSES). With `send`, the organizer gets your
+        response (with `note` as its text); without, it's only recorded in
+        your calendar. Not retried: a repeat would answer twice.
+        """
+        from exchangelib.items import SAVE_ONLY, SEND_AND_SAVE_COPY
+
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        respond = getattr(item, INVITE_RESPONSES[response])
+        respond(message_disposition=SEND_AND_SAVE_COPY if send else SAVE_ONLY, body=note or None)
+
+    def remove_cancelled_meeting(self, folder_id: str, message_id: str) -> bool:
+        """Delete (to Deleted Items) the calendar entry of a cancelled
+        meeting. False if there was none left to remove."""
+        from exchangelib.errors import ErrorItemNotFound
+
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        calendar_item = getattr(item, "associated_calendar_item_id", None)
+        if calendar_item is None:
+            return False
+        try:
+            self.account.calendar.get(id=calendar_item.id).move_to_trash()
+        except ErrorItemNotFound:
+            return False
+        return True
 
     @retry_on_dead_connection
     def find_message(self, internet_message_id: str, hint_folder_id: str | None = None) -> MovedMessage | None:

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -22,11 +22,14 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore
+from .invites import when_text
 from .screens import (
     AddNoteScreen,
     AttachmentListScreen,
     ComposeScreen,
+    ConfirmScreen,
     HelpScreen,
+    InviteResponseScreen,
     NewEventScreen,
 )
 from .folder_picker import MoveToFolderScreen
@@ -49,6 +52,8 @@ PRIORITY_WATCH_SECONDS = 1.0
 # Prefetch the next few messages once the cursor has rested on one this long.
 PREFETCH_DELAY = 0.5  # seconds
 PREFETCH_COUNT = 2
+# What answering an invite did, for the notice afterwards.
+INVITE_DONE = {"accept": "Accepted", "tentative": "Tentatively accepted", "decline": "Declined"}
 
 
 def ews_guard(what: str):
@@ -173,6 +178,7 @@ class EwstuiApp(App):
         Binding("u", "undo", "Undo"),
         Binding("U", "show_links", "Links", show=False),
         Binding("e", "toggle_recipients", "All recipients", show=False),
+        Binding("i", "invite", "Answer invite", show=False),
         Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -198,6 +204,9 @@ class EwstuiApp(App):
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
         self._message_cache = MessageCache()  # fully loaded messages, this session (see message_cache.py)
+        # Your calendar on the days invites are for (the card's clashes and
+        # day strip), by day; dropped on Ctrl+l and after answering an invite.
+        self._invite_days: dict[date, list] = {}
         self._prefetch_timer = None
         # What's on screen, so a refresh can tell what changed.
         self._folder_unread: dict[str, int] = {}
@@ -347,6 +356,7 @@ class EwstuiApp(App):
         elif mode == "mode-priority":
             self.load_priority_list()
         else:
+            self._invite_days.clear()  # invites' clashes are looked up again
             self._refresh_mail(manual=True)
 
     # Not `_auto_refresh`: Textual's DOMNode already uses that attribute.
@@ -441,12 +451,134 @@ class EwstuiApp(App):
         # Cached for revisits, reply, links and add-to-priority.
         self._message_cache.put(message_id, detail)
         if message_id == self.current_message_id:  # ignore a message the cursor already left
-            self.query_one("#preview", PreviewPane).show_message(detail)
+            self.query_one("#preview", PreviewPane).show_message(detail, self._invite_day(detail))
             self._schedule_prefetch()
         # Priority entries added before ewstui stored Message-IDs get theirs
         # the first time the message is opened (no extra request needed).
         if getattr(detail, "internet_message_id", None):
             self.priority_store.remember_internet_id(message_id, detail.internet_message_id)
+
+    # -- invites: your calendar on the meeting's day ----------------------------------
+
+    def _invite_day(self, detail) -> list | None:
+        """Your events on an invite's day if already looked up; otherwise
+        None, and the lookup starts (the card fills in when it's back)."""
+        meeting = getattr(detail, "meeting", None)
+        if meeting is None or meeting.kind != "invite" or meeting.start is None:
+            return None
+        day = meeting.start.date()
+        if day in self._invite_days:
+            return self._invite_days[day]
+        self._load_invite_day(detail.id, day)
+        return None
+
+    @work(thread=True, exclusive=True, group="invite-day")
+    def _load_invite_day(self, message_id: str, day: date) -> None:
+        start = datetime.combine(day, time.min)
+        try:
+            events = self.calendar_client.list_events(start, start + timedelta(days=1))
+        except Exception as e:  # noqa: BLE001 - the invite still shows, just without clashes
+            log.warning("looking up the calendar for an invite failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Couldn't check your calendar: {e}", severity="warning", timeout=8)
+            return
+        self.call_from_thread(self._invite_day_loaded, message_id, day, events)
+
+    def _invite_day_loaded(self, message_id: str, day: date, events: list) -> None:
+        self._invite_days[day] = events
+        try:
+            self.query_one("#preview", PreviewPane).set_invite_events(message_id, events)
+        except NoMatches:  # shutting down
+            return
+        if isinstance(self.screen, InviteResponseScreen):
+            self.screen.set_events(events)
+
+    def action_invite(self) -> None:
+        """i: answer the invite in the reading pane (or remove a cancelled
+        meeting from your calendar)."""
+        if self.query_one(StatusBar).mode != "MAIL" or not self.current_message_id:
+            return
+        message_id = self.current_message_id
+        detail = self._previewed(message_id)
+        if detail is None:
+            self.notify("Still loading the email — try again in a moment")
+            return
+        meeting = getattr(detail, "meeting", None)
+        if meeting is None:
+            self.notify("Not a meeting invite")
+            return
+        folder_id = self._folder_of(message_id)
+        if meeting.kind == "cancellation":
+            if not meeting.calendar_item_id:
+                self.notify("That meeting is already gone from your calendar")
+                return
+            when = when_text(meeting)
+
+            def _on_confirm(yes: bool | None) -> None:
+                if yes:
+                    self._remove_cancelled(folder_id, detail)
+
+            self.push_screen(ConfirmScreen(f"Remove “{detail.subject}” ({when}) from your calendar?"), _on_confirm)
+            return
+
+        def _on_result(result: dict | None) -> None:
+            if result is not None:
+                self.notify("Sending your response…" if result["send"] else "Updating your calendar…", timeout=3)
+                self._respond_to_invite(folder_id, detail, result["response"], result["note"], result["send"])
+
+        organizer = detail.names.get(meeting.organizer, meeting.organizer) if getattr(detail, "names", None) else meeting.organizer
+        self.push_screen(
+            InviteResponseScreen(detail.subject, meeting, self._invite_day(detail), organizer_name=organizer), _on_result
+        )
+
+    @work(thread=True, group="invite-respond")
+    def _respond_to_invite(self, folder_id: str, detail, response: str, note: str, send: bool) -> None:
+        try:
+            self.mail_client.respond_to_invite(folder_id, detail.id, response, note=note, send=send)
+        except Exception as e:  # noqa: BLE001
+            log.warning("answering an invite failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Answering the invite failed: {e}", severity="error", timeout=10)
+            return
+        moved, error = self._archive_wherever(folder_id, detail)
+        self.call_from_thread(self._invite_done, detail, folder_id, INVITE_DONE[response], send, moved, error)
+
+    @work(thread=True, group="invite-respond")
+    def _remove_cancelled(self, folder_id: str, detail) -> None:
+        try:
+            removed = self.mail_client.remove_cancelled_meeting(folder_id, detail.id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("removing a cancelled meeting failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Removing the meeting failed: {e}", severity="error", timeout=10)
+            return
+        moved, error = self._archive_wherever(folder_id, detail)
+        done = "Removed from your calendar" if removed else "It was already gone from your calendar"
+        self.call_from_thread(self._invite_done, detail, folder_id, done, False, moved, error)
+
+    def _archive_wherever(self, folder_id: str, detail):
+        """Archive an answered invite / handled cancellation. Exchange may
+        already have moved it (e.g. to Deleted Items), so find it by its
+        Message-ID first. (worker thread) -> (MovedMessage | None, error)"""
+        try:
+            where = MovedMessage(folder_id, detail.id)
+            if detail.internet_message_id:
+                where = self.mail_client.find_message(detail.internet_message_id, folder_id) or where
+            return self.mail_client.archive_message(where.folder_id, where.message_id), None
+        except Exception as e:  # noqa: BLE001
+            log.warning("archiving an answered invite failed", exc_info=True)
+            return None, e
+
+    def _invite_done(self, detail, folder_id: str, done: str, sent: bool, moved, error) -> None:
+        self._invite_days.clear()  # your calendar changed
+        self._message_cache.forget(detail.id)
+        if sent:
+            organizer = detail.meeting.organizer
+            done += f" — response sent to {detail.names.get(organizer, organizer)}"
+        if moved is not None:
+            self.undo_stack.append(UndoEntry("archived", detail.subject, folder_id, moved))
+            self.priority_store.relocate(detail.id, moved.folder_id, moved.message_id)
+            self.notify(f"{done}. Email archived (u brings it back; the calendar change stays).", timeout=8)
+        else:
+            self.notify(f"{done}, but archiving the email failed: {error}", severity="warning", timeout=10)
+        self._refresh_keeping_row()
 
     def _previewed(self, message_id: str):
         """The full message from the in-memory cache, if it's there and its

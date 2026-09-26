@@ -323,6 +323,18 @@ long To or Cc list folded onto one line ("Anna Berg, Bo Christensen …
 line with their address; `e` again folds it. Each new email starts
 folded.
 
+**Invites** (`i`): meeting invites are tagged `invite ·` in the list,
+and the reading pane shows a card above the text: when, where, your
+answer so far, what it clashes with in your calendar, and your day as a
+strip of half-hour cells (`·` free, `█` busy, `▒` the meeting, `×` the
+meeting on top of something else). `i` opens the answer popup with the
+same availability: `a` accept, `t` tentative, `d` decline; `s` switches
+off sending your response to the organizer (only your calendar
+changes); `n` (or Tab) types an optional note to send with it. The
+invite email is then archived (`u` brings the email back; your answer
+stays). A cancellation (`cancelled ·`) shows the meeting's time and
+place, and `i` offers to remove it from your calendar.
+
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the
 status bar shows how many). Then `d` delete, `A` archive, `m` move

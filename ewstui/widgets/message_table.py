@@ -12,6 +12,9 @@ from ..ews_client import MessageSummary
 from ..threads import build_threads, topic, tree_rows
 
 
+MEETING_TAGS = {"invite": "invite · ", "cancellation": "cancelled · "}
+
+
 def _fmt_when(dt, now: datetime | None = None) -> str:
     """Compact local date + time: 'Thu 25 Sep 14:05', or '25 Sep 2025 14:05'
     for another year. EWS gives UTC; convert to the machine's timezone.
@@ -238,6 +241,10 @@ class MessageTable(DataTable):
             # A thread reply from Sent Items; after a bare tree guide ("└─ ")
             # no extra space is needed.
             subject += "(sent)" if subject.endswith(" ") else " (sent)"
+        tag = MEETING_TAGS.get(getattr(m, "kind", "mail"))
+        if tag:  # invites and cancellations: after any tree guide, before the subject
+            guide = subject[: len(subject) - len(subject.lstrip("│├└┌─ "))]
+            subject = Text.assemble(guide, (tag, "dim"), subject[len(guide):], end="", no_wrap=True)
         cells = (flag, self._pri_cell(m.id), _fmt_when(m.received), m.sender, subject)
         self._row_cells[m.id] = cells
         self.add_row(*cells, key=m.id)

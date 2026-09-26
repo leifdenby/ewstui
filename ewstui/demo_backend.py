@@ -12,6 +12,7 @@ from .ews_client import (
     AttachmentSummary,
     EventSummary,
     FolderSummary,
+    MeetingInfo,
     MessageDetail,
     MessageSummary,
     BLOCKING_BUSY_TYPES,
@@ -70,6 +71,41 @@ _NAMES = {
     **dict(zip(_STAFF_ADDRESSES, _STAFF)),
 }
 
+_INVITE = "Let's plan the next sprint. Bring your estimates.\n\nJoin: https://meet.corp.example/j/424242\n"
+
+
+def _today(now: datetime, hour: int, days: int = 0) -> datetime:
+    return (now + timedelta(days=days)).replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def _demo_invites(now: datetime) -> list[MessageDetail]:
+    """An invite clashing with the demo 1:1 at 14:00, and a cancellation
+    of the demo calendar's "Friday retro" (e4)."""
+    return [
+        MessageDetail(
+            id="inv1", changekey="c1", subject="Sprint planning",
+            sender="colleague@corp.example", received=now - timedelta(days=3),
+            is_read=True, has_attachments=False,
+            to=["you@corp.example", "team@corp.example"], cc=[], body_text=_INVITE, kind="invite",
+            meeting=MeetingInfo(
+                kind="invite", start=_today(now, 14), end=_today(now, 15), location="Room 4B",
+                organizer="colleague@corp.example",
+            ),
+        ),
+        MessageDetail(
+            id="can1", changekey="c1", subject="Canceled: Friday retro",
+            sender="colleague@corp.example", received=now - timedelta(days=4),
+            is_read=True, has_attachments=False,
+            to=["you@corp.example", "team@corp.example"], cc=[], body_text="This meeting has been cancelled.",
+            kind="cancellation",
+            meeting=MeetingInfo(
+                kind="cancellation", start=_today(now, 15, days=1), end=_today(now, 16, days=1),
+                location="Aquarium", organizer="colleague@corp.example", calendar_item_id="e4",
+            ),
+        ),
+    ]
+
+
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
     "(plus auth flags) to talk to a real Exchange mailbox over EWS.\n\n"
@@ -78,11 +114,17 @@ _LOREM = (
 
 
 class DemoMailClient:
-    def __init__(self, page_size: int = 50):
+    def __init__(self, page_size: int = 50, calendar: DemoCalendarClient | None = None, with_invites: bool = False):
+        """`with_invites` adds a meeting invite and a cancellation to the
+        Inbox (`--demo` does; most tests keep the plain four emails).
+        Answering the invite / removing the cancelled meeting changes
+        `calendar` (if given), like Exchange does."""
         self.page_size = page_size
         self.sent: list[dict] = []  # demo "outbox": what send_mail/reply would have sent
+        self.calendar = calendar
+        self.invite_responses: list[dict] = []  # what respond_to_invite would have done
         self._folders = [
-            FolderSummary(id="inbox", name="Inbox", total_count=4, unread_count=2, depth=0),
+            FolderSummary(id="inbox", name="Inbox", total_count=6 if with_invites else 4, unread_count=2, depth=0),
             FolderSummary(id="sent", name="Sent Items", total_count=2, unread_count=0, depth=0),
             FolderSummary(id="drafts", name="Drafts", total_count=1, unread_count=0, depth=0),
             FolderSummary(id="archive", name="Archive", total_count=1, unread_count=0, depth=0),
@@ -126,6 +168,7 @@ class DemoMailClient:
                     is_read=True, has_attachments=False,
                     to=["you@corp.example"], cc=[], body_text=_LOREM,
                 ),
+                *(_demo_invites(now) if with_invites else []),
             ],
             "sent": [
                 MessageDetail(
@@ -181,7 +224,7 @@ class DemoMailClient:
             MessageSummary(
                 m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
                 conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
-                conversation_index=m.conversation_index,
+                conversation_index=m.conversation_index, kind=m.kind,
             )
             for m in msgs[offset : offset + limit]
         ]
@@ -216,6 +259,22 @@ class DemoMailClient:
 
     def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
         return self.move_message(folder_id, message_id, "archive")
+
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+        m = self.get_message(folder_id, message_id)
+        if m.meeting is None or m.meeting.kind != "invite":
+            raise ValueError("not a meeting invite")
+        self.invite_responses.append({"id": message_id, "response": response, "note": note, "send": send})
+        m.meeting.my_response = {"accept": "Accept", "tentative": "Tentative", "decline": "Decline"}[response]
+        m.changekey += "+"
+        if self.calendar is not None:
+            self.calendar.answer_invite(m.id, m.subject, m.meeting, response)
+
+    def remove_cancelled_meeting(self, folder_id: str, message_id: str) -> bool:
+        m = self.get_message(folder_id, message_id)
+        if self.calendar is None or m.meeting is None or not m.meeting.calendar_item_id:
+            return False
+        return self.calendar.remove_event(m.meeting.calendar_item_id)
 
     def send_mail(self, to, subject, body, cc=None) -> None:
         self.sent.append({"to": to, "subject": subject, "body": body, "cc": cc or []})
@@ -273,6 +332,11 @@ class DemoCalendarClient:
                 start=today + timedelta(days=3), end=today + timedelta(days=4),
                 location="", organizer="hr@corp.example", is_all_day=True,
             ),
+            EventSummary(  # cancelled by the demo cancellation "can1"
+                id="e4", changekey="c4", subject="Friday retro",
+                start=today + timedelta(days=1, hours=15), end=today + timedelta(days=1, hours=16),
+                location="Aquarium", organizer="colleague@corp.example", is_all_day=False,
+            ),
         ]
 
         # Room bookings, keyed by room address. Room 4B is taken during the
@@ -286,6 +350,23 @@ class DemoCalendarClient:
 
     def list_events(self, start: datetime, end: datetime) -> list[EventSummary]:
         return [e for e in self._events if e.start < end and e.end > start]
+
+    def answer_invite(self, invite_id: str, subject: str, meeting: MeetingInfo, response: str) -> None:
+        """Accepted / tentative: the meeting is in the calendar; declined: it isn't."""
+        event_id = f"e-{invite_id}"
+        self._events = [e for e in self._events if e.id != event_id]
+        if response != "decline":
+            self._events.append(
+                EventSummary(
+                    id=event_id, changekey="c1", subject=subject, start=meeting.start, end=meeting.end,
+                    location=meeting.location, organizer=meeting.organizer, is_all_day=meeting.is_all_day,
+                )
+            )
+
+    def remove_event(self, event_id: str) -> bool:
+        before = len(self._events)
+        self._events = [e for e in self._events if e.id != event_id]
+        return len(self._events) < before
 
     def search_rooms(self, query: str) -> list[RoomMatch]:
         needle = query.strip().casefold()

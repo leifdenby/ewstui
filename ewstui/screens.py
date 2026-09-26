@@ -222,6 +222,156 @@ class AddNoteScreen(ModalScreen[str | None]):
         self.action_save()
 
 
+class InviteResponseScreen(ModalScreen[dict | None]):
+    """`i` on an invite: the meeting and your availability that day, then
+    a / t / d to accept, tentatively accept or decline. `s` toggles whether
+    the organizer is sent your response; `n` (or Tab) goes to an optional
+    note sent with it, Enter comes back. Dismisses with
+    {"response", "note", "send"}, or None.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("a", "respond('accept')", "Accept"),
+        Binding("t", "respond('tentative')", "Tentative"),
+        Binding("d", "respond('decline')", "Decline"),
+        Binding("s", "toggle_send", "Send response"),
+        Binding("n,tab", "note", "Note", show=False),
+    ]
+    AUTO_FOCUS = ""  # focus nothing: letters are answers, not typing, until n/Tab
+
+    DEFAULT_CSS = """
+    InviteResponseScreen {
+        align: center middle;
+    }
+    #invite-box {
+        width: 90%;
+        max-width: 110;
+        height: auto;
+        border: round $accent;
+        border-title-align: left;
+        padding: 1 2;
+        background: $surface;
+    }
+    #invite-choices {
+        margin-top: 1;
+    }
+    #invite-note {
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, subject: str, meeting, events=None, organizer_name: str = "") -> None:
+        super().__init__()
+        self._subject = subject
+        self._meeting = meeting
+        self._events = events  # your calendar that day; None while it's being looked up
+        self._organizer = organizer_name or meeting.organizer
+        self.send = True
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="invite-box") as box:
+            box.border_title = f"Respond to “{self._subject}”"
+            yield Static(id="invite-meeting")
+            yield Static(id="invite-choices")
+            yield Static(id="invite-send")
+            yield Input(placeholder="Note to send with your response (optional) — n or Tab to type, Enter when done",
+                        id="invite-note")
+
+    def on_mount(self) -> None:
+        self._draw()
+
+    def on_resize(self) -> None:
+        self._draw()
+
+    def set_events(self, events) -> None:
+        """The calendar lookup is back: show clashes and the day strip."""
+        self._events = events
+        self._draw()
+
+    def _draw(self) -> None:
+        from textual.content import Content
+
+        from .invites import availability_lines, response_line, when_text
+        from .widgets.message_header import LABEL_WIDTH
+
+        c = self.app.theme_variables
+        if not self.query("#invite-meeting"):  # a resize before the widgets are there
+            return
+        width = self.query_one("#invite-meeting").size.width or 80
+        label = lambda text: Content.from_markup(f"[{c['tux-dim']}]$t[/]", t=f"{text:<{LABEL_WIDTH}}")  # noqa: E731
+        m = self._meeting
+        lines = [label("When") + Content.from_markup("[b]$w[/]", w=when_text(m))]
+        if m.location:
+            lines.append(label("Where") + Content(m.location))
+        if m.my_response not in ("Unknown", "NoResponseReceived"):
+            lines.append(response_line(m, c))
+        lines += availability_lines(m, self._events, width, colors=c)
+        self.query_one("#invite-meeting", Static).update(Content("\n").join(lines))
+        key = lambda k, text: Content.from_markup(f"[b {c['tux-key']}]$k[/] $t   ", k=k, t=text)  # noqa: E731
+        self.query_one("#invite-choices", Static).update(
+            key("a", "accept") + key("t", "tentative") + key("d", "decline") + Content.from_markup(f"[{c['tux-dim']}]Esc cancel[/]")
+        )
+        box = "[x]" if self.send else "[ ]"
+        self.query_one("#invite-send", Static).update(
+            Content.from_markup(f"[b {c['tux-key']}]s[/] $box send your response to $who", box=box, who=self._organizer)
+            if self.send else
+            Content.from_markup(f"[b {c['tux-key']}]s[/] $box send your response (off: only your calendar changes)", box=box)
+        )
+
+    def action_toggle_send(self) -> None:
+        self.send = not self.send
+        self._draw()
+
+    def action_note(self) -> None:
+        self.query_one("#invite-note", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.set_focus(None)  # back to answering with a / t / d
+
+    def action_respond(self, response: str) -> None:
+        note = self.query_one("#invite-note", Input).value.strip()
+        self.dismiss({"response": response, "note": note if self.send else "", "send": self.send})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """A yes/no question: y confirms; n or Esc says no."""
+
+    BINDINGS = [
+        Binding("y", "answer(True)", "Yes"),
+        Binding("n,escape", "answer(False)", "No"),
+    ]
+
+    DEFAULT_CSS = """
+    ConfirmScreen {
+        align: center middle;
+    }
+    #confirm-box {
+        width: auto;
+        max-width: 90%;
+        height: auto;
+        border: round $accent;
+        padding: 1 3;
+        background: $surface;
+    }
+    """
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self._question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Label(self._question, markup=False)
+            yield Label("y yes · n / Esc no")
+
+    def action_answer(self, yes: bool) -> None:
+        self.dismiss(yes)
+
+
 class AttachmentListScreen(ModalScreen[str | None]):
     """Lists a message's attachments; Enter/l saves + opens the selected
     one, Esc cancels. Dismisses with the chosen attachment id, or None.

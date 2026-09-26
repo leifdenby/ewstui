@@ -7,6 +7,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from ..ews_client import EventSummary, MessageDetail
+from ..invites import render_invite_card
 from .message_header import render_header
 
 
@@ -56,12 +57,22 @@ class PreviewPane(VerticalScroll):
         super().__init__(*args, **kwargs)
         self._message: MessageDetail | None = None  # the email shown, if any
         self.recipients_expanded = False
+        # For an invite: your calendar on the meeting's day, once looked up.
+        self._invite_events: list[EventSummary] | None = None
 
-    def show_message(self, msg: MessageDetail) -> None:
+    def show_message(self, msg: MessageDetail, invite_events: list[EventSummary] | None = None) -> None:
         self._message = msg
+        self._invite_events = invite_events
         self.recipients_expanded = False  # every email starts with long To/Cc lists folded
         self._render_message()
         self.scroll_home(animate=False)
+
+    def set_invite_events(self, message_id: str, events: list[EventSummary]) -> None:
+        """The calendar lookup for an invite is back: fill in its clashes
+        and day strip (unless you've moved on to another email)."""
+        if self._message is not None and self._message.id == message_id:
+            self._invite_events = events
+            self._render_message()
 
     def toggle_recipients(self) -> None:
         """e: unfold / fold the To and Cc lists of the email shown."""
@@ -73,7 +84,10 @@ class PreviewPane(VerticalScroll):
     def _render_message(self) -> None:
         msg = self._message
         width = self.scrollable_content_region.width or 80  # 0 before the first layout
-        header = render_header(msg, width, self.recipients_expanded, self.app.theme_variables)
+        colors = self.app.theme_variables
+        header = render_header(msg, width, self.recipients_expanded, colors)
+        if getattr(msg, "meeting", None) is not None:
+            header += render_invite_card(msg.meeting, self._invite_events, width, colors)
         # The body is plain text: brackets in an email are never markup.
         self.query_one("#preview-body", Static).update(header + Content(msg.body_text or "(empty message)"))
 
