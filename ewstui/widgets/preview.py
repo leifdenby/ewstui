@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from textual.binding import Binding
 from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.message import Message
 from textual.widgets import Static
 
 from ..ews_client import EventSummary, MessageDetail
+from .message_header import render_header
 
 
 class PreviewPane(VerticalScroll):
@@ -24,6 +26,17 @@ class PreviewPane(VerticalScroll):
         Binding("space", "page_down", "Page down", show=False),
     ]
 
+    DEFAULT_CSS = """
+    PreviewPane #preview-body {
+        /* "+N more" in the header (click to show all recipients) */
+        link-color: $accent;
+        link-style: bold;
+        link-color-hover: $accent;
+        link-background-hover: $panel;
+        link-style-hover: bold underline;
+    }
+    """
+
     class FocusMessagesRequested(Message):
         """h: move keyboard focus back to the message list."""
 
@@ -39,29 +52,49 @@ class PreviewPane(VerticalScroll):
     def compose(self):
         yield Static(id="preview-body")
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._message: MessageDetail | None = None  # the email shown, if any
+        self.recipients_expanded = False
+
     def show_message(self, msg: MessageDetail) -> None:
-        body = self.query_one("#preview-body", Static)
-        when = msg.received.strftime("%Y-%m-%d %H:%M") if msg.received else "(no date)"
-        header = (
-            f"[b]{msg.subject}[/b]\n"
-            f"From: {msg.sender}\n"
-            f"To: {', '.join(msg.to) or '(none)'}\n"
-            + (f"Cc: {', '.join(msg.cc)}\n" if msg.cc else "")
-            + f"Date: {when}\n"
-            + ("[dim]has attachments[/dim]\n" if msg.has_attachments else "")
-            + "\n" + "-" * 40 + "\n\n"
-        )
-        body.update(header + (msg.body_text or "(empty message)"))
+        self._message = msg
+        self.recipients_expanded = False  # every email starts with long To/Cc lists folded
+        self._render_message()
         self.scroll_home(animate=False)
 
+    def toggle_recipients(self) -> None:
+        """e: unfold / fold the To and Cc lists of the email shown."""
+        if self._message is None:
+            return
+        self.recipients_expanded = not self.recipients_expanded
+        self._render_message()
+
+    def _render_message(self) -> None:
+        msg = self._message
+        width = self.scrollable_content_region.width or 80  # 0 before the first layout
+        header = render_header(msg, width, self.recipients_expanded, self.app.theme_variables)
+        # The body is plain text: brackets in an email are never markup.
+        self.query_one("#preview-body", Static).update(header + Content(msg.body_text or "(empty message)"))
+
+    def on_mount(self) -> None:
+        self.watch(self.app, "theme", self._rerender, init=False)  # colours come from the theme
+
+    def on_resize(self) -> None:
+        self._rerender()  # the folded To/Cc line and the rule follow the width
+
+    def _rerender(self, *_) -> None:
+        if self._message is not None:
+            self._render_message()
+
     def show_event(self, ev: EventSummary) -> None:
+        self._message = None
         body = self.query_one("#preview-body", Static)
         when = (
             "All day" if ev.is_all_day
             else f"{ev.start.strftime('%Y-%m-%d %H:%M')} \u2013 {ev.end.strftime('%H:%M')}"
         )
-        text = (
-            f"[b]{ev.subject}[/b]\n"
+        text = Content.from_markup("[b]$subject[/b]\n", subject=ev.subject) + Content(
             f"When: {when}\n"
             f"Organizer: {ev.organizer}\n"
             + (f"Location: {ev.location}\n" if ev.location else "")
@@ -70,8 +103,10 @@ class PreviewPane(VerticalScroll):
         self.scroll_home(animate=False)
 
     def show_loading(self) -> None:
+        self._message = None
         self.query_one("#preview-body", Static).update("[dim]Loading…[/dim]")
         self.scroll_home(animate=False)
 
     def clear(self) -> None:
+        self._message = None
         self.query_one("#preview-body", Static).update("")

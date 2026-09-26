@@ -317,6 +317,12 @@ can tell them apart). `j`/`k` and Enter — or just `1`–`9` — open one in
 your default browser; `Esc` cancels. Only `http(s)` and `mailto` links
 are ever opened.
 
+**Recipients** (`e`): the reading pane shows people by name, with a
+long To or Cc list folded onto one line ("Anna Berg, Bo Christensen …
++14 more"). `e` — or a click on "+14 more" — lists everyone, one per
+line with their address; `e` again folds it. Each new email starts
+folded.
+
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the
 status bar shows how many). Then `d` delete, `A` archive, `m` move

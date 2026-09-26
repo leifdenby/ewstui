@@ -52,6 +52,24 @@ _MAINTENANCE = (
     "Unsubscribe <https://lists.corp.example/unsubscribe?id=42>\n"
 )
 
+# Display names, and a long recipient list (for the folded To/Cc line, e).
+_STAFF = [
+    "Anna Berg", "Bo Christensen", "Carla Dahl", "David Eriksen", "Emma Frost", "Frederik Gram",
+    "Gitte Holm", "Henrik Iversen", "Ida Jensen", "Jonas Krogh", "Karen Lund", "Lars Madsen",
+    "Maja Nielsen", "Niels Olsen", "Olivia Poulsen", "Peter Quist", "Rikke Rasmussen", "Søren Svendsen",
+    "Tina Thomsen", "Ulrik Vang", "Vibeke Winther", "William Yde", "Zara Østergaard", "Åse Aagaard",
+]
+_STAFF_ADDRESSES = [f"{n.split()[0].lower()}.{n.split()[1].lower()}@corp.example" for n in _STAFF]
+_NAMES = {
+    "finance@corp.example": "Finance Team",
+    "colleague@corp.example": "Casey Colleague",
+    "it-notifications@corp.example": "IT Notifications",
+    "friend@corp.example": "Freddie Friend",
+    "you@corp.example": "You",
+    "team@corp.example": "Project Team",
+    **dict(zip(_STAFF_ADDRESSES, _STAFF)),
+}
+
 _LOREM = (
     "This is a demo message body. Run without --demo and with --email "
     "(plus auth flags) to talk to a real Exchange mailbox over EWS.\n\n"
@@ -99,7 +117,8 @@ class DemoMailClient:
                     id="m3", changekey="c3", subject="IT maintenance window this weekend",
                     sender="it-notifications@corp.example", received=now - timedelta(days=1),
                     is_read=True, has_attachments=False,
-                    to=["all-staff@corp.example"], cc=[], body_text=_MAINTENANCE,
+                    to=_STAFF_ADDRESSES[:20], cc=_STAFF_ADDRESSES[20:] + ["team@corp.example"],
+                    body_text=_MAINTENANCE,
                 ),
                 MessageDetail(
                     id="m4", changekey="c4", subject="Lunch Friday?",
@@ -139,6 +158,7 @@ class DemoMailClient:
         for msgs in self._messages.values():  # every demo message gets an Internet Message-ID
             for m in msgs:
                 m.internet_message_id = m.internet_message_id or f"<{m.id}@demo.corp.example>"
+                m.names = {a: _NAMES[a] for a in [m.sender, *m.to, *m.cc] if a in _NAMES}
 
     def list_folders(self) -> list[FolderSummary]:
         return list(self._folders)

@@ -90,6 +90,9 @@ class MessageDetail(MessageSummary):
     # stays the same when the message is moved, so the priority list uses
     # it to find a message again.
     internet_message_id: str | None = None
+    # Display names of the sender and recipients, by address ("Jane Doe"),
+    # for the reading pane; sender/to/cc stay plain addresses for replying.
+    names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -256,6 +259,20 @@ def _addresses(item, *attrs: str) -> list[str]:
     return []
 
 
+def _names(item) -> dict[str, str]:
+    """Address -> display name for the sender and all recipients."""
+    names = {}
+    people = [getattr(item, a, None) for a in ("sender", "author", "organizer")]
+    for attr in ("to_recipients", "cc_recipients", "required_attendees", "optional_attendees"):
+        people += getattr(item, attr, None) or []
+    for person in people:
+        mailbox = getattr(person, "mailbox", person)
+        address, name = getattr(mailbox, "email_address", None), getattr(mailbox, "name", None)
+        if address and name and name != address:
+            names.setdefault(str(address), str(name))
+    return names
+
+
 def _to_local(value, tz) -> datetime:
     """EWS returns timed events as tz-aware EWSDateTime (usually UTC) and
     all-day events as EWSDate. The UI works in naive local time, so
@@ -389,6 +406,7 @@ class MailClient:
             cc=_addresses(item, "cc_recipients", "optional_attendees"),
             body_text=getattr(item, "text_body", None) or "",
             internet_message_id=getattr(item, "message_id", None),
+            names=_names(item),
         )
 
     @retry_on_dead_connection

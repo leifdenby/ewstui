@@ -30,6 +30,7 @@ MAIL_KEYS = [
     ("t", "thread view on / off"),
     ("v", "attachments: save + open"),
     ("U", "open a link from the email in the browser"),
+    ("e", "all To / Cc recipients (e again folds)"),
     ("p / P", "add to priority list (+ note / none)"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
@@ -42,6 +43,7 @@ PREVIEW_KEYS = [
     ("g / G", "top / bottom of the message"),
     ("h", "back to the message list"),
     ("U", "links in this email"),
+    ("e", "all To / Cc recipients"),
 ]
 
 CALENDAR_KEYS = [

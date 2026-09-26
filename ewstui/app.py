@@ -172,6 +172,7 @@ class EwstuiApp(App):
         Binding("w", "compose_new", "Compose"),
         Binding("u", "undo", "Undo"),
         Binding("U", "show_links", "Links", show=False),
+        Binding("e", "toggle_recipients", "All recipients", show=False),
         Binding("ctrl+l", "refresh", "Refresh"),
         Binding("tab", "focus_next", "Next pane", show=False),
         Binding("shift+tab", "focus_previous", "Prev pane", show=False),
@@ -1258,6 +1259,13 @@ class EwstuiApp(App):
         self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent")
 
     # -- links in the current email (U) ----------------------------------------
+
+    def action_toggle_recipients(self) -> None:
+        """e (or a click on "+N more"): show every To/Cc recipient of the
+        email in the reading pane, one per line with address; e folds again."""
+        if self.query_one(StatusBar).mode != "MAIL":
+            return
+        self.query_one("#preview", PreviewPane).toggle_recipients()
 
     def action_show_links(self) -> None:
         """List the links in the email shown in the reading pane; the chosen
