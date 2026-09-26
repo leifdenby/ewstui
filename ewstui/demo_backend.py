@@ -332,6 +332,13 @@ class DemoMailClient:
         out.sort(key=lambda m: m.received or datetime.min, reverse=True)
         return out[:limit]
 
+    def search_everywhere(self, query: str, limit_per_folder: int = 25, workers: int = 3):
+        """Folder by folder, like the live client (Exchange can't search
+        several folders in one request)."""
+        folders = list(self._messages)
+        for done, fid in enumerate(folders, 1):
+            yield done, len(folders), self.search(query, fid, limit_per_folder)
+
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])
 

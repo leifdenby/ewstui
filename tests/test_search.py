@@ -53,37 +53,69 @@ def test_demo_search_in_a_folder_and_everywhere():
     assert mail.search("maintenance", "sent") == []
 
 
-def test_live_search_uses_exchange_search_and_says_the_folder():
+def live_folder(fid, items, calls, fail=False):
     from types import SimpleNamespace
-
-    from ewstui.ews_client import MailClient
-
-    calls = []
-    item = SimpleNamespace(
-        id="x1", changekey="c", subject="Budget", sender=None, datetime_received=datetime(2026, 9, 1),
-        is_read=True, has_attachments=False, conversation_id=None, conversation_index=None,
-        parent_folder_id=SimpleNamespace(id="archive"),
-    )
 
     class QS:
         def __init__(self, query):
-            calls.append(query)
+            calls.append((fid, query))
+            if fail:
+                raise RuntimeError("no index here")
 
         def order_by(self, *a):
             return self
 
         def only(self, *fields):
-            calls.append(fields)
             return self
 
         def __getitem__(self, s):
-            return [item][s]
+            return items[s]
 
-    inbox = SimpleNamespace(id="inbox", children=[], filter=QS)
+    return SimpleNamespace(id=fid, name=fid.title(), folder_class="IPF.Note", children=[], filter=QS)
+
+
+def live_item(iid, day):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=iid, changekey="c", subject=f"Budget {iid}", sender=None, datetime_received=datetime(2026, 9, day),
+        is_read=True, has_attachments=False, conversation_id=None, conversation_index=None,
+    )
+
+
+def test_live_search_in_one_folder_uses_exchange_search():
+    from types import SimpleNamespace
+
+    from ewstui.ews_client import MailClient
+
+    calls = []
+    inbox = live_folder("inbox", [live_item("x1", 1)], calls)
     client = MailClient(SimpleNamespace(msg_folder_root=SimpleNamespace(id="root", children=[inbox])))
     found = client.search("budget q3", "inbox")
-    assert calls[0] == "budget q3" and "parent_folder_id" in calls[1]
-    assert [(m.id, m.folder_id, m.subject) for m in found] == [("x1", "archive", "Budget")]
+    assert calls == [("inbox", "budget q3")]
+    assert [(m.id, m.folder_id) for m in found] == [("x1", "inbox")]
+
+
+def test_live_search_everywhere_is_one_request_per_folder():
+    """Exchange refuses one text search over several folders ("Shared folder
+    search cannot be performed on multiple folders")."""
+    from types import SimpleNamespace
+
+    from ewstui.ews_client import MailClient
+
+    calls = []
+    inbox = live_folder("inbox", [live_item("x1", 1)], calls)
+    archive = live_folder("archive", [live_item("x2", 5)], calls)
+    broken = live_folder("broken", [], calls, fail=True)
+    calendar = SimpleNamespace(id="cal", name="Calendar", folder_class="IPF.Appointment", children=[])
+    account = SimpleNamespace(msg_folder_root=SimpleNamespace(id="root", children=[archive, broken, calendar, inbox]),
+                              inbox=inbox)
+    client = MailClient(account)
+    progress = list(client.search_everywhere("budget"))
+    assert sorted(fid for fid, _ in calls) == ["archive", "broken", "inbox"]  # mail folders only, each on its own
+    assert [(done, total) for done, total, _ in progress] == [(1, 3), (2, 3), (3, 3)]
+    assert sorted(m.id for _, _, batch in progress for m in batch) == ["x1", "x2"]  # the broken folder skipped
+    assert [m.id for m in client.search("budget")] == ["x2", "x1"]  # merged, newest first
 
 
 def test_best_match_first():

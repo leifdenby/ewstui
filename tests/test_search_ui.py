@@ -86,6 +86,7 @@ async def test_search_all_folders_from_the_folder_pane(tmp_path):
         await pilot.pause()
         bar = app.query_one(SearchBar)
         assert bar.scope == "all" and rows(app) == []
+        assert bar.parent.id == "folder-pane"  # in the folder pane, above the folders
         await pilot.press(*"ews bridge")
         await settle(app, pilot)
         assert set(rows(app)) == {"m2", "s1"}  # the Inbox and Sent Items
@@ -116,7 +117,7 @@ async def test_acting_on_a_search_result_updates_the_results(tmp_path):
         await pilot.press("enter", "d")
         await settle(app, pilot)
         assert table.search == "lunch"  # still searching
-        assert str(table.get_row("m4")[-1]).startswith("Deleted Items · ")
+        assert rows(app) == []  # it left the folder it was found in
 
 
 async def test_background_refresh_leaves_all_folder_results_alone(tmp_path):

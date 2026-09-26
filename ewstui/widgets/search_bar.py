@@ -36,7 +36,7 @@ class SearchBar(Input):
                          id="search-bar", **kwargs)
         self.scope = scope  # "folder" (the current one) or "all" (every mail folder)
         self.border_title = "search this folder" if scope == "folder" else "search all folders"
-        self.border_subtitle = "Enter/↓ to the results · Esc end"
+        self.border_subtitle = "↓ results · Esc end"
 
     def action_close(self) -> None:
         self.post_message(self.Closed())
