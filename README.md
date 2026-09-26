@@ -8,6 +8,8 @@ Built with [Textual](https://textual.textualize.io/) for the UI and
 [`exchangelib`](https://github.com/ecederstrand/exchangelib) for the
 Exchange side.
 
+![ewstui --demo: mail, threads, links, moving, bulk selection, priority list, room finder, help and themes](docs/demo.gif)
+
 Every screen is fetched live from Exchange when you open it. Nothing
 is cached to disk except, optionally, an OAuth2 refresh token — that's
 auth-state, not mail-state; delete `~/.config/ewstui/token_cache.bin`
@@ -40,6 +42,8 @@ uv run ewstui --demo
 This runs the full UI against fake in-memory mail + calendar data —
 useful to check the keybindings and layout work in your terminal
 before you touch a real mailbox. See `ewstui/demo_backend.py`.
+The GIF above is recorded from demo mode by `uv run python scripts/demo_gif.py`
+(needs `rsvg-convert` and `ffmpeg`).
 
 ## Run against a real mailbox
 
