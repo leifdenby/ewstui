@@ -274,7 +274,7 @@ class FindRoomScreen(ModalScreen[dict | None]):
         padding: 1 1 0 0;
     }
     #room-date {
-        width: 16;
+        width: 18;
     }
     #room-duration {
         width: 8;

@@ -29,7 +29,7 @@ MAIL_KEYS = [
     ("Space", "toggle read / unread"),
     ("t", "thread view on / off"),
     ("v", "attachments: save + open"),
-    ("U", "links in the email: pick one to open in the browser"),
+    ("U", "open a link from the email in the browser"),
     ("p / P", "add to priority list (+ note / none)"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
