@@ -21,7 +21,7 @@ from textual.content import Content
 from textual.message import Message
 from textual.widgets import Checkbox, Input, Label, Static
 
-from .dates import find_dates, find_time_range, parse_date
+from .dates import find_date_ranges, find_dates, find_time_range, parse_date
 from .ews_client import MeetingInfo
 from .invites import availability_lines
 from .widgets.date_picker import DatePicker
@@ -94,9 +94,6 @@ class EventFromEmailPanel(Vertical):
     #ev-times Input {
         width: 11;
     }
-    #ev-days {
-        width: 8;
-    }
     #ev-day {
         margin-top: 1;
         height: auto;
@@ -123,9 +120,17 @@ class EventFromEmailPanel(Vertical):
         self.detail = detail
         self.today = today or date.today()
         text = f"{detail.subject}\n{detail.body_text or ''}"
+        ranges = find_date_ranges(text, self.today)
         self.found = find_dates(text, self.today)
+        for first, last in ranges:  # every day of a range counts as mentioned
+            days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+            self.found += [d for d in days if d not in self.found]
         upcoming = [d for d in self.found if d >= self.today]
         self._start_day = (upcoming or self.found or [self.today])[0]
+        self._anchor = None
+        upcoming_ranges = [r for r in ranges if r[1] >= self.today]
+        if upcoming_ranges:  # "14–16 October": start with those days selected
+            self._anchor, self._start_day = upcoming_ranges[0]
         self._times = find_time_range(text)
         self._events: dict[date, list] = {}  # your calendar, by day, once looked up
 
@@ -134,18 +139,17 @@ class EventFromEmailPanel(Vertical):
         self.border_subtitle = "Ctrl+S create · Esc close"
         yield self._titled(Input(value=event_subject(self.detail.subject), placeholder="Title", id="ev-subject"), "title")
         with Horizontal(id="ev-when"):
-            yield DatePicker(value=self._start_day, marked=self.found, today=self.today, id="ev-date")
+            yield DatePicker(value=self._start_day, marked=self.found, today=self.today, anchor=self._anchor, id="ev-date")
             with Vertical(id="ev-date-side"):
                 yield self._titled(Input(placeholder="fri, +3d, 14 oct", id="ev-date-text"), "type a date")
-                yield Label("h/l j/k move · [ ] month\nt today" + (" · n next date" if self.found else ""),
+                yield Label("h/l j/k move · [ ] month\nv select days · t today" + ("\nn next date" if self.found else ""),
                             id="ev-keys", markup=False)
         yield Label(self._found_text(), id="ev-found", markup=False)
         with Horizontal(id="ev-times"):
             start, end = self._times or (time(9), time(10))
             yield self._titled(Input(value=f"{start:%H:%M}", id="ev-start"), "start")
             yield self._titled(Input(value=f"{end:%H:%M}", id="ev-end"), "end")
-            yield Checkbox("All day", value=self._times is None, id="ev-allday")
-            yield self._titled(Input(value="1", id="ev-days"), "days")
+            yield Checkbox("All day", value=self._times is None or self._anchor is not None, id="ev-allday")
         yield self._titled(Input(placeholder="optional", id="ev-location"), "location")
         yield Static(id="ev-day")
 
@@ -189,7 +193,7 @@ class EventFromEmailPanel(Vertical):
             self.screen.focus_next()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id in ("ev-start", "ev-end", "ev-days"):
+        if event.input.id in ("ev-start", "ev-end"):
             self._draw_day()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
@@ -201,7 +205,6 @@ class EventFromEmailPanel(Vertical):
         all_day = self.query_one("#ev-allday", Checkbox).value
         self.query_one("#ev-start").disabled = all_day
         self.query_one("#ev-end").disabled = all_day
-        self.query_one("#ev-days").display = all_day
 
     def set_day_events(self, day: date, events: list) -> None:
         """Your calendar for `day`, looked up by the app."""
@@ -213,37 +216,37 @@ class EventFromEmailPanel(Vertical):
             values = self.values()
         except ValueError:
             values = None
-        day = self.query_one(DatePicker).value
-        start = values["start"] if values else datetime.combine(day, time(9))
+        first, last = self.query_one(DatePicker).days
+        start = values["start"] if values else datetime.combine(first, time(9))
         end = values["end"] if values else start + timedelta(hours=1)
         info = MeetingInfo(kind="invite", start=start, end=end, is_all_day=bool(values and values["is_all_day"]))
-        lines = availability_lines(info, self._events.get(day), self.query_one("#ev-day").size.width or 50,
+        lines = availability_lines(info, self._events.get(first), self.query_one("#ev-day").size.width or 50,
                                    colors=self.app.theme_variables)
-        header = Content.from_markup("[b]$d[/]", d=f"{day:%A %d %B %Y}")
+        if first == last:
+            title = f"{first:%A %d %B %Y}"
+        else:  # your calendar is shown for the first day
+            n = (last - first).days + 1
+            title = f"{first:%a %d %b} – {last:%a %d %b %Y} ({n} days; your calendar on the first)"
+        header = Content.from_markup("[b]$d[/]", d=title)
         self.query_one("#ev-day", Static).update(Content("\n").join([header, *lines]))
 
     # -- the result --------------------------------------------------------------
 
     def values(self) -> dict:
         """The event as entered; ValueError (with what's wrong) if it can't be made."""
-        day = self.query_one(DatePicker).value
+        first, last = self.query_one(DatePicker).days  # several days if selected with v
         subject = self.query_one("#ev-subject", Input).value.strip() or event_subject(self.detail.subject)
         location = self.query_one("#ev-location", Input).value.strip()
         if self.query_one("#ev-allday", Checkbox).value:
-            try:
-                days = int(self.query_one("#ev-days", Input).value or "1")
-            except ValueError:
-                raise ValueError("days must be a number") from None
-            if days < 1:
-                raise ValueError("days must be at least 1")
-            start = datetime.combine(day, time.min)
-            return {"subject": subject, "start": start, "end": start + timedelta(days=days),
+            return {"subject": subject, "start": datetime.combine(first, time.min),
+                    "end": datetime.combine(last + timedelta(days=1), time.min),
                     "location": location, "is_all_day": True}
         start_t = parse_time(self.query_one("#ev-start", Input).value)
         end_t = parse_time(self.query_one("#ev-end", Input).value)
         if start_t is None or end_t is None:
             raise ValueError("times are like 9:30 or 14")
-        start, end = datetime.combine(day, start_t), datetime.combine(day, end_t)
+        # Over several days: from the start time on the first to the end time on the last.
+        start, end = datetime.combine(first, start_t), datetime.combine(last, end_t)
         if end <= start:
             raise ValueError("the end must be after the start")
         return {"subject": subject, "start": start, "end": end, "location": location, "is_all_day": False}
@@ -258,4 +261,6 @@ class EventFromEmailPanel(Vertical):
         self.post_message(self.Submitted(values))
 
     def action_close(self) -> None:
+        if self.query_one(DatePicker).clear_range():  # Esc first ends a selection of days
+            return
         self.post_message(self.Closed())

@@ -544,7 +544,7 @@ class EwstuiApp(App):
         panel = event.control if isinstance(event.control, EventFromEmailPanel) else self.screen.query_one(EventFromEmailPanel)
         detail = panel.detail
         received = f", {_local(detail.received):%a %d %b %Y %H:%M}" if detail.received else ""
-        body = f"From the email “{detail.subject}” ({detail.sender}{received}):\n\n{(detail.body_text or '')[:4000]}"
+        body = f"From the email “{detail.subject}” ({detail.sender}{received}):\n\n{detail.body_text or ''}"
         self._create_event_from_email({**event.values, "body": body})
 
     @work(thread=True, group="event-create")

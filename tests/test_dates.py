@@ -5,7 +5,7 @@ from datetime import date, time
 
 import pytest
 
-from ewstui.dates import find_dates, find_time_range, parse_date
+from ewstui.dates import find_date_ranges, find_dates, find_time_range, parse_date
 
 TODAY = date(2026, 9, 26)  # a Saturday
 
@@ -33,6 +33,15 @@ def test_find_dates_forms(text, expected):
 
 def test_the_same_date_twice_is_found_once():
     assert find_dates("14 Oct ... again 14/10", TODAY) == [date(2026, 10, 14)]
+
+
+def test_find_date_ranges():
+    text = "The conference runs 14–16 October 2026, with a hackathon Nov 2-3 and dinner on 20 Oct."
+    assert find_date_ranges(text, TODAY) == [(date(2026, 10, 14), date(2026, 10, 16)), (date(2026, 11, 2), date(2026, 11, 3))]
+    assert find_date_ranges("14.-16. oktober", TODAY) == [(date(2026, 10, 14), date(2026, 10, 16))]
+    assert find_date_ranges("October 20 to 22, 2027", TODAY) == [(date(2027, 10, 20), date(2027, 10, 22))]
+    assert find_date_ranges("16-14 October", TODAY) == []  # backwards: not a range
+    assert find_date_ranges("from 10:00-12:00", TODAY) == []
 
 
 def test_find_time_range():

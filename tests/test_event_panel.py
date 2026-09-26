@@ -116,12 +116,69 @@ async def test_typed_date_and_all_day(tmp_path):
         await pilot.pause()
         assert panel.query_one(DatePicker).value == date.today() + timedelta(days=1)
         panel.query_one("#ev-allday").value = True
-        panel.query_one("#ev-days").value = "2"
+        await pilot.press("v", "l")  # and the day after: two days
         await pilot.press("ctrl+s")
         await settle(app, pilot)
         created = app.calendar_client._events[-1]
         start = datetime.combine(date.today() + timedelta(days=1), time.min)
         assert created.is_all_day and (created.start, created.end) == (start, start + timedelta(days=2))
+
+
+async def test_timed_event_over_selected_days(tmp_path):
+    app = make_app(tmp_path)
+    workshop = date.today() + timedelta(days=18)
+    async with app.run_test(size=(160, 45)) as pilot:
+        panel = await open_panel(app, pilot)  # 10:00–16:00 from the email
+        await pilot.press("v", "l", "l")
+        await pilot.pause()
+        picker = panel.query_one(DatePicker)
+        assert picker.days == (workshop, workshop + timedelta(days=2))
+        assert "(3 days" in str(panel.query_one("#ev-day").render())
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        created = app.calendar_client._events[-1]
+        assert (created.start, created.end) == (datetime.combine(workshop, time(10)),
+                                                datetime.combine(workshop + timedelta(days=2), time(16)))
+        body = app.calendar_client.last_created_body
+        assert body.endswith("A proper invite follows later.\n")  # the whole email text
+
+
+async def test_selecting_backwards_and_escape_ends_the_selection_first(tmp_path):
+    app = make_app(tmp_path)
+    workshop = date.today() + timedelta(days=18)
+    async with app.run_test(size=(160, 45)) as pilot:
+        panel = await open_panel(app, pilot)
+        await pilot.press("v", "k")  # a week back: the range is still first..last
+        await pilot.pause()
+        picker = panel.query_one(DatePicker)
+        assert picker.days == (workshop - timedelta(days=7), workshop)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.query(EventFromEmailPanel)  # still open
+        assert picker.anchor is None and picker.days == (workshop - timedelta(days=7),) * 2
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.screen.query(EventFromEmailPanel)
+
+
+async def test_a_date_range_in_the_email_is_selected(tmp_path):
+    mail_app = make_app(tmp_path)
+    conference = date.today() + timedelta(days=40)
+    end = conference + timedelta(days=2)
+    detail = mail_app.mail_client.get_message("inbox", "std1")
+    if end.month != conference.month:  # keep the range within a month, as written in emails
+        conference, end = conference.replace(day=1), conference.replace(day=3)
+    detail.body_text = f"The conference runs {conference.day}–{end.day} {conference:%B %Y}. Registration opens soon."
+    async with mail_app.run_test(size=(160, 45)) as pilot:
+        panel = await open_panel(mail_app, pilot)
+        picker = panel.query_one(DatePicker)
+        assert picker.days == (conference, end)
+        assert panel.query_one("#ev-allday").value
+        assert conference + timedelta(days=1) in picker.marked
+        await pilot.press("ctrl+s")
+        await settle(mail_app, pilot)
+        created = mail_app.calendar_client._events[-1]
+        assert created.is_all_day and created.start.date() == conference and created.end.date() == end + timedelta(days=1)
 
 
 async def test_bad_times_keep_the_panel_open(tmp_path):

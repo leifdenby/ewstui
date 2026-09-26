@@ -358,9 +358,13 @@ month, `t` today) and a field to type one (`tomorrow`, `fri`, `+3d`,
 `in 2 weeks`, `14 oct`, `2026-10-14`). Dates the email mentions are
 marked, the first upcoming one is picked, and `n` jumps to the next; a
 time range in the text ("10:00–16:00") fills in the times, otherwise
-it's all day (with a number of days). Below, your calendar that day.
-Ctrl+S adds the event to your calendar (no invitations), with the
-email's text in its notes; Esc closes the panel.
+it's all day. For several days, `v` in the calendar starts selecting
+days (the same keys extend it, `v` or Esc ends it): all day covers those
+days, a timed event runs from the start time on the first to the end
+time on the last; a range in the email ("14–16 October") is selected to
+start with. Below, your calendar that day. Ctrl+S adds the event to
+your calendar (no invitations), with the email's text in its notes;
+Esc closes the panel.
 
 **Several at once** (`V`): starts a selection at the current email;
 `j`/`k` grow or shrink it (selected rows are highlighted, and the

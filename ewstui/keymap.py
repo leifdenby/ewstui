@@ -120,7 +120,7 @@ STATUS_HINTS = {
     # pane is to the right, "o" when the email sits below the list.
     "folders": "j/k folder · {open} open · V move · H hide · . show hidden · ? help",
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
-    "event": "new event · h/l j/k [ ] pick a day · n next date from the email · Tab next field · Ctrl+S create · Esc close",
+    "event": "new event · h/l j/k [ ] pick a day · v select days · n next date from the email · Tab next field · Ctrl+S create · Esc close",
     "messages": "{open} open · r reply · d delete · m move · A archive · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · [ ] earlier/later · ? help",

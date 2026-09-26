@@ -77,6 +77,30 @@ def find_dates(text: str, today: date) -> list[date]:
     return out
 
 
+_DASH = r"\s*(?:-|–|—|to|til)\s*"
+_RANGES = [
+    # 14–16 October 2026, 14.-16. oktober
+    (re.compile(rf"\b(\d{{1,2}})\.?{_DASH}(\d{{1,2}}){_ORD}\s+(?:of\s+)?({_MONTH})\.?,?(?:\s+(\d{{4}}))?\b", re.I),
+     lambda m: (m[4] and int(m[4]), MONTHS[m[3].lower()], int(m[1]), int(m[2]))),
+    # October 14–16, 2026 / Oct 14-16
+    (re.compile(rf"\b({_MONTH})\.?\s+(\d{{1,2}}){_ORD}{_DASH}(\d{{1,2}}){_ORD}(?:,?\s+(\d{{4}}))?\b", re.I),
+     lambda m: (m[4] and int(m[4]), MONTHS[m[1].lower()], int(m[2]), int(m[3]))),
+]
+
+
+def find_date_ranges(text: str, today: date) -> list[tuple[date, date]]:
+    """Ranges of days within a month ("14–16 October"), in text order."""
+    out: list[tuple[int, date, date]] = []
+    for pattern, parts in _RANGES:
+        for m in pattern.finditer(text):
+            year, month, first_day, last_day = parts(m)
+            first = _make(year, month, first_day, today)
+            last = _make(year or (first.year if first else None), month, last_day, today)
+            if first and last and first < last:
+                out.append((m.start(), first, last))
+    return [(first, last) for _, first, last in sorted(out)]
+
+
 def find_time_range(text: str) -> tuple[time, time] | None:
     """The first "10:00–12:00" style range in the text."""
     for m in _TIME_RANGE.finditer(text):
