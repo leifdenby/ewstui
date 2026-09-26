@@ -824,35 +824,70 @@ class EwstuiApp(App):
                 reply_all=event.reply_all,
             )
 
+        def _save_draft(result: dict) -> None:
+            self.mail_client.save_reply_draft(
+                folder_id,
+                event.message_id,
+                subject=result["subject"],
+                body=result["body"],
+                to=_split_addresses(result["to"]),
+                reply_all=event.reply_all,
+            )
+
         self._compose_and_send(
             ComposeScreen(to=detail.sender, subject=f"Re: {detail.subject}", body=prefill_body, context=context),
             _send,
             sent_message="Reply sent",
+            save_draft=_save_draft,
         )
 
-    def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str) -> None:
-        """Show `screen`; on Ctrl+S call `send(result)`. If sending fails,
-        say why and reopen the compose screen with the draft intact, so
-        a server error never throws away what the user wrote.
+    def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str, save_draft) -> None:
+        """Show `screen`; on Ctrl+S call `send(result)`, on Esc (with
+        something written) `save_draft(result)`. If either fails, say why
+        and reopen the compose screen with the text intact, so a server
+        error never throws away what the user wrote.
         """
+
+        def _reopen(result: dict) -> None:
+            self._compose_and_send(
+                ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"],
+                              context=screen.context, unsaved=True),
+                send, sent_message, save_draft,
+            )
 
         def _on_result(result: dict | None) -> None:
             if result is None:
+                return
+            if result.get("draft"):
+                try:
+                    save_draft(result)
+                except Exception as e:  # noqa: BLE001 - keep the text
+                    log.exception("saving a draft failed")
+                    self.notify(f"Saving to Drafts failed: {e} — still here", severity="error", timeout=10)
+                    _reopen(result)
+                    return
+                self.notify("Saved to Drafts")
+                self._drafts_changed()
                 return
             try:
                 send(result)
             except Exception as e:  # noqa: BLE001 - surface any EWS error, keep the draft
                 log.exception("send failed")
                 self.notify(f"Send failed: {e} — draft kept", severity="error", timeout=10)
-                self._compose_and_send(
-                    ComposeScreen(to=result["to"], subject=result["subject"], body=result["body"], context=screen.context),
-                    send,
-                    sent_message,
-                )
+                _reopen(result)
                 return
             self.notify(sent_message)
 
         self.push_screen(screen, _on_result)
+
+    def _drafts_changed(self) -> None:
+        """A draft was saved: show it if Drafts is the folder on screen."""
+        try:
+            drafts_id = self.mail_client.drafts_folder_id()
+        except Exception:  # noqa: BLE001 - only a refresh
+            return
+        if self.current_folder_id == drafts_id:
+            self._refresh_keeping_row()
 
     def on_message_table_delete_requested(self, event: MessageTable.DeleteRequested) -> None:
         if not self.current_folder_id:
@@ -1540,7 +1575,12 @@ class EwstuiApp(App):
                 to=_split_addresses(result["to"]), subject=result["subject"], body=result["body"]
             )
 
-        self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent")
+        def _save_draft(result: dict) -> None:
+            self.mail_client.save_draft(
+                to=_split_addresses(result["to"]), subject=result["subject"], body=result["body"]
+            )
+
+        self._compose_and_send(ComposeScreen(), _send, sent_message="Message sent", save_draft=_save_draft)
 
     # -- links in the current email (U) ----------------------------------------
 

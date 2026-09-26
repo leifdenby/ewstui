@@ -120,6 +120,82 @@ async def test_failed_send_keeps_the_reply_context(app, mail, monkeypatch):
         assert "Replying to Finance Team" in str(app.screen.query_one("#compose-context").render())
 
 
+def test_live_drafts_are_saved_to_the_drafts_folder(monkeypatch):
+    from exchangelib import Account
+
+    from ewstui import ews_client
+
+    account = create_autospec(Account, instance=True)
+    message_cls = create_autospec(Message)
+    monkeypatch.setattr(ews_client, "Message", message_cls)
+    MailClient(account).save_draft(to=["a@x.test"], subject="Hi", body="Hello")
+    message_cls.assert_called_once_with(
+        account=account, folder=account.drafts, subject="Hi", body="Hello", to_recipients=["a@x.test"], cc_recipients=None,
+    )
+    message_cls.return_value.save.assert_called_once_with()  # saved, not sent
+
+
+def test_live_reply_drafts_stay_replies(live):
+    client, item = live
+    client.account.drafts = "drafts-folder"
+    client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="later", to=["a@x.test"])
+    item.create_reply.assert_called_once_with(subject="Re: Hi", body="later", to_recipients=["a@x.test"])
+    item.create_reply.return_value.save.assert_called_once_with("drafts-folder")
+    client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="all", reply_all=True)
+    item.create_reply_all.return_value.save.assert_called_once_with("drafts-folder")
+
+
+def drafts(mail) -> list:
+    return mail.list_messages("drafts")
+
+
+async def test_escape_saves_a_reply_to_drafts(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Half-written thought")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen)
+    assert mail.sent == []
+    draft = mail.get_message("drafts", drafts(mail)[0].id)
+    assert draft.subject == "Re: Q3 budget review" and draft.body_text.startswith("Half-written thought")
+    assert draft.to == ["finance@corp.example"]
+
+
+async def test_escape_saves_a_new_email_to_drafts_and_untouched_ones_just_close(app, mail):
+    before = len(drafts(mail))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("w")
+        await pilot.pause()
+        await pilot.press("escape")  # nothing written
+        await pilot.pause()
+        assert len(drafts(mail)) == before
+        await pilot.press("w")
+        await pilot.pause()
+        app.screen.query_one("#compose-subject", Input).value = "Idea"
+        await pilot.press("escape")
+        await pilot.pause()
+    assert len(drafts(mail)) == before + 1 and drafts(mail)[0].subject == "Idea"
+
+
+async def test_a_failed_draft_save_keeps_the_text(app, mail, monkeypatch):
+    def fail(*a, **kw):
+        raise RuntimeError("server said no")
+
+    monkeypatch.setattr(mail, "save_reply_draft", fail)
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Precious words")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ComposeScreen)
+        assert app.screen.query_one("#compose-body", TextArea).text.startswith("Precious words")
+        monkeypatch.undo()
+        await pilot.press("escape")  # unchanged since reopening, but still saved
+        await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen)
+    assert mail.get_message("drafts", drafts(mail)[0].id).body_text.startswith("Precious words")
+
+
 async def test_cmd_enter_sends(app, mail):
     async with app.run_test() as pilot:
         await open_reply(pilot, app, "Via Cmd+Enter")

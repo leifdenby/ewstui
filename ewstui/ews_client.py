@@ -507,6 +507,10 @@ class MailClient:
         return self.account.sent.id
 
     @retry_on_dead_connection
+    def drafts_folder_id(self) -> str:
+        return self.account.drafts.id
+
+    @retry_on_dead_connection
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         folder = self._folder_by_id(folder_id)
         item = folder.get(id=message_id)
@@ -688,6 +692,30 @@ class MailClient:
             cc_recipients=cc or None,
         )
         msg.send_and_save()  # sends and keeps a copy in Sent Items
+
+    def save_draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> None:
+        """An unsent new email, saved to Drafts (Esc in the compose view)."""
+        Message(
+            account=self.account,
+            folder=self.account.drafts,
+            subject=subject,
+            body=body,
+            to_recipients=to or None,
+            cc_recipients=cc or None,
+        ).save()
+
+    def save_reply_draft(
+        self, folder_id: str, message_id: str, subject: str, body: str,
+        to: list[str] | None = None, reply_all: bool = False,
+    ) -> None:
+        """An unsent reply, saved to Drafts — still a reply to the email
+        (Outlook/OWA show it threaded and send it as a reply)."""
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        if reply_all:
+            draft = item.create_reply_all(subject=subject, body=body)
+        else:
+            draft = item.create_reply(subject=subject, body=body, to_recipients=to or None)
+        draft.save(self.account.drafts)
 
     def reply(
         self,

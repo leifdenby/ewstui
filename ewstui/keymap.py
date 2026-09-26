@@ -90,7 +90,7 @@ COMPOSE_KEYS = [
     ("Tab", "next field"),
     ("Ctrl+s", "send / save"),
     ("Cmd+Enter", "send (if the terminal passes Cmd)"),
-    ("Esc", "discard and close"),
+    ("Esc", "save to Drafts and close"),
 ]
 
 # The help overlay's two columns (tuxedo-style), per view: the view's own

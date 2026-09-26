@@ -13,12 +13,13 @@ from . import keymap
 
 
 class ComposeScreen(ModalScreen[dict | None]):
-    """New message / reply. Dismisses with a dict of field values, or
-    None if the user cancelled.
+    """New message / reply. Ctrl+S dismisses with the field values to
+    send; Esc with the same plus "draft": True (saved to Drafts), or None
+    if nothing was changed from how the window opened.
     """
 
     BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape", "cancel", "Close (save to Drafts)"),
         Binding("ctrl+s", "send", "Send"),
         # Cmd+Enter only arrives in terminals that report the Cmd key
         # (kitty keyboard protocol: Ghostty, kitty, WezTerm, iTerm2 with
@@ -47,30 +48,41 @@ class ComposeScreen(ModalScreen[dict | None]):
     }
     """
 
-    def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "") -> None:
+    def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False) -> None:
         super().__init__()
         self._to = to
         self._subject = subject
         self._body = body
         self.context = context  # for a reply: who sent the email and when
+        # Opened with text that isn't saved anywhere (reopened after a failed
+        # send): Esc saves it even if it's unchanged.
+        self.unsaved = unsaved
 
     def compose(self) -> ComposeResult:
         with Vertical(id="compose-box"):
-            yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to cancel)")
+            yield Label("Compose  (Ctrl+S or Cmd+Enter to send, Esc to save to Drafts and close)")
             if self.context:
                 yield Label(self.context, id="compose-context", markup=False)
             yield Input(value=self._to, placeholder="To", id="compose-to")
             yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
             yield TextArea(self._body, id="compose-body")
 
+    def _fields(self) -> dict:
+        return {
+            "to": self.query_one("#compose-to", Input).value,
+            "subject": self.query_one("#compose-subject", Input).value,
+            "body": self.query_one("#compose-body", TextArea).text,
+        }
+
     def action_cancel(self) -> None:
-        self.dismiss(None)
+        fields = self._fields()
+        if not self.unsaved and fields == {"to": self._to, "subject": self._subject, "body": self._body}:
+            self.dismiss(None)  # nothing written: just close
+        else:
+            self.dismiss({**fields, "draft": True})
 
     def action_send(self) -> None:
-        to = self.query_one("#compose-to", Input).value
-        subject = self.query_one("#compose-subject", Input).value
-        body = self.query_one("#compose-body", TextArea).text
-        self.dismiss({"to": to, "subject": subject, "body": body})
+        self.dismiss(self._fields())
 
 
 class NewEventScreen(ModalScreen[dict | None]):

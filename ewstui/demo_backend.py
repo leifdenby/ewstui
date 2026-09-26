@@ -246,6 +246,9 @@ class DemoMailClient:
     def sent_folder_id(self) -> str:
         return "sent"
 
+    def drafts_folder_id(self) -> str:
+        return "drafts"
+
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         for m in self._messages.get(folder_id, []):
             if m.id == message_id:
@@ -306,6 +309,24 @@ class DemoMailClient:
         self.sent.append(
             {"in_reply_to": message_id, "to": to, "subject": subject, "body": body, "reply_all": reply_all}
         )
+
+    def save_draft(self, to, subject, body, cc=None) -> None:
+        self._add_draft(subject, body, to or [], cc or [])
+
+    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False) -> None:
+        original = self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
+        recipients = to or [original.sender]
+        if reply_all:
+            recipients = [original.sender, *original.to]
+        self._add_draft(subject, body, recipients, list(original.cc) if reply_all else [])
+
+    def _add_draft(self, subject, body, to, cc) -> None:
+        n = len(self._messages["drafts"]) + 1
+        self._messages["drafts"].insert(0, MessageDetail(
+            id=f"d{n}-{len(self.sent)}", changekey="c1", subject=subject or "(no subject)", sender="you@corp.example",
+            received=datetime.now(), is_read=True, has_attachments=False, to=list(to), cc=list(cc), body_text=body,
+            internet_message_id=f"<draft{n}@demo.corp.example>",
+        ))
 
     def list_attachments(self, folder_id: str, message_id: str) -> list[AttachmentSummary]:
         out = []
