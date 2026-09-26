@@ -113,35 +113,65 @@ def typed_path(query: str, root: Path) -> Path | None:
         return None
 
 
-def rank(dirs: list[Path], query: str, root: Path, first: list[Path], use_fzf: bool = False) -> list[Path]:
-    """Display order: `first` (recent / usual folders) and ~ itself, then
-    the rest; with a query, best fuzzy match first (a typed existing path
-    at the very top). `use_fzf`: let fzf rank (falls back to our own
-    matching if it can't)."""
+def split_input(text: str, home: Path) -> tuple[Path, str]:
+    """What's typed, as (folder to search in, fuzzy query): "~/Nextcloud/wo"
+    is "wo" inside ~/Nextcloud (Tab completes a folder that way); plain
+    words search from ~. A leading "~" on its own is just ~ ("~N": "N")."""
+    t = text.strip()
+    if t == "~":
+        return home, ""
+    if "/" in t and (t.startswith("~/") or t.startswith("/")):
+        head, _, tail = t.rpartition("/")
+        base = home / head[2:] if head.startswith("~/") else home if head == "~" else Path(head or "/")
+        try:
+            if base.is_dir():
+                return base, tail
+        except OSError:
+            pass
+    if t.startswith("~") and "/" not in t:
+        return home, t[1:]
+    return home, t
+
+
+def _depth(path: Path, base: Path) -> int:
+    try:
+        return len(path.relative_to(base).parts)
+    except ValueError:
+        return 0
+
+
+def rank(dirs: list[Path], query: str, base: Path, first: list[Path], use_fzf: bool = False,
+         home: Path | None = None) -> list[Path]:
+    """Display order for the folders under `base` (`dirs`): with nothing
+    typed, `first` (recent / usual folders, when searching from ~), `base`
+    itself, then the rest shallow first; with a query, the matches —
+    shallowest first, then best fuzzy match (by fzf with `use_fzf`, which
+    falls back to our own matching if it can't) — matched on their path
+    inside `base`. A folder typed out in full comes first."""
+    home = home or base
     if not query.strip():
         seen, out = set(), []
-        for path in [*first, root, *dirs]:
+        for path in [*(first if base == home else []), base, *dirs]:
             if path not in seen:
                 seen.add(path)
                 out.append(path)
         return out[:SHOWN]
-    candidates = [root, *dirs]
+    by_text = {str(p.relative_to(base)): p for p in dirs if _depth(p, base)}
     ranked = None
     if use_fzf:
-        by_text = {display(p, root): p for p in candidates}
         matches = fzf_filter(list(by_text), query)
         if matches is not None:
             ranked = [by_text[m] for m in matches if m in by_text]
     if ranked is None:
         boost = {p: i for i, p in enumerate(first)}
         scored = []
-        for i, path in enumerate(candidates):
-            score = fuzzy_score(query, display(path, root))
+        for i, (text, path) in enumerate(by_text.items()):
+            score = fuzzy_score(query, text)
             if score is not None:
                 scored.append((-score, boost.get(path, len(boost)), i, path))
         ranked = [path for *_, path in sorted(scored)]
-    out = ranked
-    exact = typed_path(query, root)
+    out = sorted(ranked, key=lambda p: _depth(p, base))  # stable: best match first within a depth
+    exact = typed_path(query, home)
     if exact is not None:
         out = [exact, *[p for p in out if p != exact]]
     return out[:SHOWN]
@@ -149,12 +179,17 @@ def rank(dirs: list[Path], query: str, root: Path, first: list[Path], use_fzf: b
 
 class PathPickerScreen(ModalScreen[Path | None]):
     """Dismisses with the chosen folder, or None. Letters go to the search
-    box; ↓/↑ or Ctrl+n/p move in the list, Enter chooses."""
+    box; ↓/↑ or Ctrl+n/p move in the list, Enter chooses. Tab completes the
+    highlighted folder into the box ("~/Nextcloud/"): the list is then that
+    folder's own subfolders (listed afresh, so there's no depth limit going
+    down this way) and typing searches inside it; backspacing over the "/"
+    goes back up."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("down,ctrl+n", "cursor(1)", "Next", show=False),
         Binding("up,ctrl+p", "cursor(-1)", "Previous", show=False),
+        Binding("tab", "complete", "Into this folder", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -186,7 +221,8 @@ class PathPickerScreen(ModalScreen[Path | None]):
         self._first = [p for p in (first or []) if p.is_dir()]
         self._loader = loader
         self.use_fzf = fzf_available() if use_fzf is None else use_fzf
-        self._dirs: list[Path] = []
+        self._listings: dict[Path, list[Path]] = {}  # base folder -> the folders under it, once listed
+        self._base = self.root  # the folder being searched in (Tab goes deeper)
         self._shown: list[Path] = []
         self._shown_for: str | None = None  # the text the shown list was ranked for
 
@@ -195,47 +231,74 @@ class PathPickerScreen(ModalScreen[Path | None]):
             yield Label(self._title, markup=False)
             yield Input(placeholder="Type to find a folder under ~ (or type a path)", id="path-query")
             yield ListView(id="path-results")
-            yield Label("↓/↑ or Ctrl+n/p choose · Enter save here · Esc cancel"
+            yield Label("↓/↑ or Ctrl+n/p choose · Tab into the folder · Enter save here · Esc cancel"
                     + (" · matching by fzf" if self.use_fzf else ""), id="path-help", markup=False)
 
     def on_mount(self) -> None:
-        self._show(self._query(), rank(self._dirs, "", self.root, self._first))
         self.query_one("#path-query", Input).focus()
-
-        def load() -> None:
-            if self.use_fzf:
-                dirs = self._loader(self.root, FZF_MAX_DEPTH, FZF_MAX_DIRS)
-            else:
-                dirs = self._loader(self.root)
-            self.app.call_from_thread(self._loaded, dirs)
-
-        self.run_worker(load, thread=True, exclusive=True, group="path-picker")
+        self._refresh_list("")
 
     def _query(self) -> str:
         return self.query_one("#path-query", Input).value
 
-    def _loaded(self, dirs: list[Path]) -> None:
-        self._dirs = dirs
-        self._refresh_list(self._query())
+    def _dirs(self, base: Path) -> list[Path]:
+        """The folders under `base`, listing them (in a thread) the first time."""
+        if base in self._listings:
+            return self._listings[base]
+        self._listings[base] = []  # (listing on its way)
+
+        def load() -> None:
+            if self.use_fzf:
+                dirs = self._loader(base, FZF_MAX_DEPTH, FZF_MAX_DIRS)
+            else:
+                dirs = self._loader(base)
+            self.app.call_from_thread(self._loaded, base, dirs)
+
+        self.run_worker(load, thread=True, group="path-picker")
+        return []
+
+    def _loaded(self, base: Path, dirs: list[Path]) -> None:
+        self._listings[base] = dirs
+        if base == self._base:
+            self._refresh_list(self._query())
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self._refresh_list(event.value)
 
-    def _refresh_list(self, query: str) -> None:
+    def _ranking(self, text: str, use_fzf: bool) -> list[Path]:
+        base, query = split_input(text, self.root)
+        return rank(self._dirs(base), query, base, self._first, use_fzf=use_fzf, home=self.root)
+
+    def _refresh_list(self, text: str) -> None:
+        base, query = split_input(text, self.root)
+        self._base = base
+        dirs = self._dirs(base)
         if not (self.use_fzf and query.strip()):
-            self._show(query, rank(self._dirs, query, self.root, self._first))
+            self._show(text, rank(dirs, query, base, self._first, home=self.root))
             return
-        dirs, first = list(self._dirs), list(self._first)
+        dirs, first = list(dirs), list(self._first)
 
         def ranked_by_fzf() -> None:  # a process per keystroke: off the UI thread
             try:
-                shown = rank(dirs, query, self.root, first, use_fzf=True)
+                shown = rank(dirs, query, base, first, use_fzf=True, home=self.root)
             except Exception:  # noqa: BLE001 - never take the app down over a ranking
                 log.warning("ranking folders with fzf failed", exc_info=True)
-                shown = rank(dirs, query, self.root, first)
-            self.app.call_from_thread(self._show, query, shown)
+                shown = rank(dirs, query, base, first, home=self.root)
+            self.app.call_from_thread(self._show, text, shown)
 
         self.run_worker(ranked_by_fzf, thread=True, exclusive=True, group="path-rank")
+
+    def action_complete(self) -> None:
+        """Tab: into the highlighted folder — its path in the box, ending in
+        "/", the list now its subfolders."""
+        index = self.query_one("#path-results", ListView).index
+        if not self._shown or index is None:
+            self.app.bell()
+            return
+        field = self.query_one("#path-query", Input)
+        path = display(self._shown[index], self.root)
+        field.value = path + ("" if path.endswith("/") else "/")
+        field.cursor_position = len(field.value)
 
     def _show(self, query: str, shown: list[Path]) -> None:
         if query != self._query():
@@ -248,6 +311,8 @@ class PathPickerScreen(ModalScreen[Path | None]):
             label = Text(display(path, self.root))
             if path in self._first and not query.strip():
                 label.append("  recent", style="italic dim")
+            elif path == self._base and not split_input(query, self.root)[1]:
+                label.append("  save here, or Tab into a folder below", style="italic dim")
             results.append(ListItem(Label(label)))
         if self._shown:
             results.index = 0
@@ -267,7 +332,7 @@ class PathPickerScreen(ModalScreen[Path | None]):
 
     def _choose(self) -> None:
         if self._shown_for != self._query():  # Enter before fzf answered: rank now
-            self._show(self._query(), rank(self._dirs, self._query(), self.root, self._first, use_fzf=self.use_fzf))
+            self._show(self._query(), self._ranking(self._query(), self.use_fzf))
         index = self.query_one("#path-results", ListView).index
         if not self._shown or index is None:
             self.app.bell()

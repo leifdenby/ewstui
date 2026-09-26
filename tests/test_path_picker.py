@@ -12,7 +12,16 @@ from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 import shutil
 
 from ewstui import path_picker
-from ewstui.path_picker import PathPickerScreen, display, fzf_filter, list_dirs, rank, typed_path
+from ewstui.path_picker import (
+    PathPickerScreen,
+    display,
+    fzf_available,
+    fzf_filter,
+    list_dirs,
+    rank,
+    split_input,
+    typed_path,
+)
 from ewstui.screens import AttachmentListScreen
 
 
@@ -75,8 +84,31 @@ def test_typed_path(home):
     assert typed_path("~", home) == home
     # "~N" is on the way to "~/Nextcloud", not user N's home (that used to crash the app)
     assert typed_path("~N", home) is None and typed_path("~nobody-here/x", home) is None
-    assert rank(list_dirs(home), "~D", home, []) != []  # still a fuzzy search
-    assert rank(list_dirs(home), "~D", home, [], use_fzf=True) != []
+    assert split_input("~D", home) == (home, "D")  # still a fuzzy search, from ~
+
+
+def test_split_input(home):
+    assert split_input("", home) == (home, "")
+    assert split_input("invo", home) == (home, "invo")
+    assert split_input("~/Documents/", home) == (home / "Documents", "")
+    assert split_input("~/Documents/wo", home) == (home / "Documents", "wo")
+    assert split_input("~/nope/wo", home) == (home, "~/nope/wo")  # not a folder: a plain search
+    assert split_input(f"{home}/code/pro", home) == (home / "code", "pro")
+
+
+def test_shortest_path_first(home):
+    (home / "Documents" / "Personal" / "Work notes").mkdir()
+    shown = [display(p, home) for p in rank(list_dirs(home), "work", home, [])]
+    assert shown[0] == "~/Documents/Work"  # two levels down, before the three-level one
+    assert shown.index("~/Documents/Work") < shown.index("~/Documents/Personal/Work notes")
+    shown = [display(p, home) for p in rank(list_dirs(home), "work", home, [], use_fzf=fzf_available())]
+    assert shown[0] == "~/Documents/Work"
+
+
+def test_matching_is_inside_the_base_folder(home):
+    base = home / "Documents"
+    shown = rank(list_dirs(base), "w", base, [])
+    assert shown[0] == base / "Work"  # "Documents" itself doesn't count as a match for the letters
     assert rank(list_dirs(home), "~/code/project", home, [])[0] == home / "code/project"
 
 
@@ -101,6 +133,52 @@ async def test_typing_a_tilde_and_letters_does_not_crash(home, tmp_path):
         await settle(app, pilot)
         assert isinstance(app.screen, PathPickerScreen)
         assert app.screen._shown  # found something, no crash
+
+
+async def test_tab_goes_into_the_folder_and_searches_from_there(home, tmp_path):
+    deep = home / "Documents" / "Work" / "Invoices" / "2026" / "Q3" / "Supplier" / "Acme"
+    deep.mkdir(parents=True)  # deeper than the listing from ~ goes
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        screen = app.screen
+        field = screen.query_one("#path-query")
+        await pilot.press(*"doc")
+        await settle(app, pilot)
+        assert screen._shown[0] == home / "Documents"  # the shortest match first
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert field.value == "~/Documents/"
+        assert screen._shown[0] == home / "Documents" and home / "Documents" / "Work" in screen._shown
+        for step in ("wo", "inv", "20", "q3", "sup", "acm"):  # all the way down, a Tab at a time
+            await pilot.press(*step)
+            await settle(app, pilot)
+            await pilot.press("tab")
+            await settle(app, pilot)
+        assert field.value == "~/Documents/Work/Invoices/2026/Q3/Supplier/Acme/"
+        assert screen._shown[0] == deep
+        await pilot.press("enter")
+        await settle(app, pilot)
+    assert (deep / "Q3-budget.xlsx").exists()
+
+
+async def test_backspacing_over_the_slash_goes_back_up(home, tmp_path):
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        screen = app.screen
+        await pilot.press(*"~/Documents/")
+        await settle(app, pilot)
+        assert screen._base == home / "Documents"
+        await pilot.press("backspace")
+        await settle(app, pilot)
+        assert screen._base == home and screen._shown[0] == home / "Documents"
 
 
 async def test_s_saves_the_attachment_where_you_pick(home, tmp_path):

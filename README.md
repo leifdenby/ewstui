@@ -276,9 +276,13 @@ folder picker opens on your home folder (folders a few levels deep,
 leaving out hidden ones, `Library`, `node_modules` and the like). Type
 a few letters of the folder (`invo` for `~/Documents/Work/Invoices`), or
 a full path (`~/…`, `/…`), and Enter saves it there (without opening
-it). If [fzf](https://github.com/junegunn/fzf) is installed, it does the
+it). Matches are shown shortest path first. Tab goes into the
+highlighted folder: its path goes in the box (`~/Nextcloud/`), the list
+becomes that folder's subfolders and typing searches inside it — so any
+depth is a few Tabs away; backspacing over the `/` goes back up. If
+[fzf](https://github.com/junegunn/fzf) is installed, it does the
 matching (`fzf --filter`), which is fast enough to list folders deeper
-(6 levels instead of 4). Folders you saved to this session, and the usual attachment
+(6 levels below the folder searched instead of 4). Folders you saved to this session, and the usual attachment
 folder, are at the top.
 
 Several at once: `V` starts a selection in the list, `j`/`k` extend it;
