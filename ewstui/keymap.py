@@ -84,7 +84,7 @@ FOLDER_KEYS = [
     ("V", "pick up a folder: j/k move it, Enter/V put down"),
     ("Esc", "put it back where it was"),
     ("H", "hide / unhide the folder"),
-    ("/", "search all folders"),
+    ("/", "find a folder by name"),
     (".", "show hidden folders (dimmed)"),
 ]
 
@@ -122,9 +122,10 @@ INVITE_HINTS = {"invite": "i answer invite", "cancellation": "i remove from cale
 STATUS_HINTS = {
     # {open}: the key the layout makes natural — "l" (right) when the next
     # pane is to the right, "o" when the email sits below the list.
-    "folders": "j/k folder · {open} open · / search all folders · V move · H hide · . show hidden · ? help",
+    "folders": "j/k folder · {open} open · / find a folder · V move · H hide · . show hidden · ? help",
     "moving": "moving folder · j/k move it · Enter/V put down · Esc cancel",
     "search": "type to search · Enter/↓ to the results · Esc end the search",
+    "find-folder": "type part of a folder's name · Enter open the top match · ↓ choose · Esc all folders",
     "event": "new event · h/l j/k [ ] pick a day · v select days · n next date from the email · Tab next field · Ctrl+S create · Esc close",
     "messages": "{open} open · r reply · d delete · m move · A archive · / search · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",

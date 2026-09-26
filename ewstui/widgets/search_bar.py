@@ -29,21 +29,27 @@ class SearchBar(Input):
         pass
 
     class ToResults(Message):
-        pass
+        def __init__(self, open: bool) -> None:
+            self.open = open  # Enter (open the best match) rather than ↓ (go choose)
+            super().__init__()
 
     def __init__(self, scope: str, **kwargs) -> None:
-        super().__init__(placeholder="words from the subject or sender (fuzzy); Exchange also searches the text",
-                         id="search-bar", **kwargs)
-        self.scope = scope  # "folder" (the current one) or "all" (every mail folder)
-        self.border_title = "search this folder" if scope == "folder" else "search all folders"
-        self.border_subtitle = "↓ results · Esc end"
+        # "folder": this folder's emails; "folders": find a folder by name.
+        placeholder = (
+            "part of a folder's name or path (fuzzy)" if scope == "folders"
+            else "words from the subject or sender (fuzzy); Exchange also searches the text"
+        )
+        super().__init__(placeholder=placeholder, id="search-bar", **kwargs)
+        self.scope = scope
+        self.border_title = "find a folder" if scope == "folders" else "search this folder"
+        self.border_subtitle = "Enter open · ↓ choose · Esc" if scope == "folders" else "↓ results · Esc end"
 
     def action_close(self) -> None:
         self.post_message(self.Closed())
 
     def action_to_results(self) -> None:
-        self.post_message(self.ToResults())
+        self.post_message(self.ToResults(open=False))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
-        self.post_message(self.ToResults())
+        self.post_message(self.ToResults(open=True))

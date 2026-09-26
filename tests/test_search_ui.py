@@ -78,55 +78,13 @@ async def test_exchange_finds_older_emails_and_text_matches(tmp_path):
         assert "kangaroo" in str(app.query_one("#preview-body").render())
 
 
-async def test_search_all_folders_from_the_folder_pane(tmp_path):
-    app = make_app(tmp_path)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await settle(app, pilot)
-        await pilot.press("h", "slash")
-        await pilot.pause()
-        bar = app.query_one(SearchBar)
-        assert bar.scope == "all" and rows(app) == []
-        assert bar.parent.id == "folder-pane"  # in the folder pane, above the folders
-        await pilot.press(*"ews bridge")
-        await settle(app, pilot)
-        assert set(rows(app)) == {"m2", "s1"}  # the Inbox and Sent Items
-        table = app.query_one("#messages", MessageTable)
-        subjects = [str(table.get_row(r)[-1]) for r in rows(app)]
-        assert any(s.startswith("Sent Items · ") for s in subjects) and any(s.startswith("Inbox · ") for s in subjects)
-        assert "Search all folders" in str(app.query_one("#topbar").render())
-        await pilot.press("escape")
-        await pilot.pause()
-        assert rows(app) == ["m1", "m2", "m3", "m4"] and app.current_folder_id == "inbox"
-
-
 async def test_acting_on_a_search_result_updates_the_results(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
-        await pilot.press("slash", *"lunch")  # this folder
+        await pilot.press("slash", *"lunch")
         await settle(app, pilot)
         await pilot.press("enter", "A")
         await settle(app, pilot)
         assert rows(app) == []  # archived: no longer in this folder's results
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("h", "slash", *"lunch")  # all folders: found again, now in the Archive
-        await settle(app, pilot)
-        table = app.query_one("#messages", MessageTable)
-        assert rows(app) == ["m4"] and str(table.get_row("m4")[-1]).startswith("Archive · ")
-        await pilot.press("enter", "d")
-        await settle(app, pilot)
-        assert table.search == "lunch"  # still searching
-        assert rows(app) == []  # it left the folder it was found in
-
-
-async def test_background_refresh_leaves_all_folder_results_alone(tmp_path):
-    app = make_app(tmp_path)
-    async with app.run_test(size=(160, 40)) as pilot:
-        await settle(app, pilot)
-        await pilot.press("h", "slash", *"ews bridge")
-        await settle(app, pilot)
-        before = rows(app)
-        app._apply_refresh("inbox", app.mail_client.list_folders(), app.mail_client.list_messages("inbox"), manual=False)
-        await pilot.pause()
-        assert rows(app) == before
+        assert app.query_one("#messages", MessageTable).search == "lunch"  # still searching

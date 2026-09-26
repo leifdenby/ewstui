@@ -43,24 +43,21 @@ def test_empty_query_keeps_everything_in_order():
     assert ids(rank(MESSAGES, "  ")) == ["m1", "m2", "m3", "m4"]
 
 
-def test_demo_search_in_a_folder_and_everywhere():
+def test_demo_search_in_a_folder():
     from ewstui.demo_backend import DemoMailClient
 
     mail = DemoMailClient()
     assert [(m.id, m.folder_id) for m in mail.search("budg", "inbox")] == [("m1", "inbox")]
-    everywhere = mail.search("ews bridge")
-    assert {(m.id, m.folder_id) for m in everywhere} == {("m2", "inbox"), ("s1", "sent")}
+    assert [(m.id, m.folder_id) for m in mail.search("ews bridge", "sent")] == [("s1", "sent")]
     assert mail.search("maintenance", "sent") == []
 
 
-def live_folder(fid, items, calls, fail=False):
+def live_folder(fid, items, calls):
     from types import SimpleNamespace
 
     class QS:
         def __init__(self, query):
             calls.append((fid, query))
-            if fail:
-                raise RuntimeError("no index here")
 
         def order_by(self, *a):
             return self
@@ -94,28 +91,6 @@ def test_live_search_in_one_folder_uses_exchange_search():
     found = client.search("budget q3", "inbox")
     assert calls == [("inbox", "budget q3")]
     assert [(m.id, m.folder_id) for m in found] == [("x1", "inbox")]
-
-
-def test_live_search_everywhere_is_one_request_per_folder():
-    """Exchange refuses one text search over several folders ("Shared folder
-    search cannot be performed on multiple folders")."""
-    from types import SimpleNamespace
-
-    from ewstui.ews_client import MailClient
-
-    calls = []
-    inbox = live_folder("inbox", [live_item("x1", 1)], calls)
-    archive = live_folder("archive", [live_item("x2", 5)], calls)
-    broken = live_folder("broken", [], calls, fail=True)
-    calendar = SimpleNamespace(id="cal", name="Calendar", folder_class="IPF.Appointment", children=[])
-    account = SimpleNamespace(msg_folder_root=SimpleNamespace(id="root", children=[archive, broken, calendar, inbox]),
-                              inbox=inbox)
-    client = MailClient(account)
-    progress = list(client.search_everywhere("budget"))
-    assert sorted(fid for fid, _ in calls) == ["archive", "broken", "inbox"]  # mail folders only, each on its own
-    assert [(done, total) for done, total, _ in progress] == [(1, 3), (2, 3), (3, 3)]
-    assert sorted(m.id for _, _, batch in progress for m in batch) == ["x1", "x2"]  # the broken folder skipped
-    assert [m.id for m in client.search("budget")] == ["x2", "x1"]  # merged, newest first
 
 
 def test_best_match_first():

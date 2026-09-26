@@ -313,31 +313,21 @@ class DemoMailClient:
 
     my_address = "you@corp.example"
 
-    def search(self, query: str, folder_id: str | None = None, limit: int = 50) -> list[MessageSummary]:
-        """Like Exchange's: every word in the subject, sender or text,
-        also as the start of a longer word."""
+    def search(self, query: str, folder_id: str, limit: int = 50) -> list[MessageSummary]:
+        """Like Exchange's, in one folder: every word in the subject, sender
+        or text, also as the start of a longer word."""
         words = query.casefold().split()
         out = []
-        for fid, msgs in self._messages.items():
-            if folder_id is not None and fid != folder_id:
-                continue
-            for m in msgs:
-                haystack = f"{m.subject} {m.sender} {m.body_text}".casefold()
-                if words and all(any(w.startswith(word) for w in haystack.split()) or word in haystack for word in words):
-                    out.append(MessageSummary(
-                        m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
-                        conversation_id=m.conversation_id, depth=m.depth, folder_id=fid,
-                        conversation_index=m.conversation_index, kind=m.kind,
-                    ))
+        for m in self._messages.get(folder_id, []):
+            haystack = f"{m.subject} {m.sender} {m.body_text}".casefold()
+            if words and all(any(w.startswith(word) for w in haystack.split()) or word in haystack for word in words):
+                out.append(MessageSummary(
+                    m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
+                    conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
+                    conversation_index=m.conversation_index, kind=m.kind,
+                ))
         out.sort(key=lambda m: m.received or datetime.min, reverse=True)
         return out[:limit]
-
-    def search_everywhere(self, query: str, limit_per_folder: int = 25, workers: int = 3):
-        """Folder by folder, like the live client (Exchange can't search
-        several folders in one request)."""
-        folders = list(self._messages)
-        for done, fid in enumerate(folders, 1):
-            yield done, len(folders), self.search(query, fid, limit_per_folder)
 
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])

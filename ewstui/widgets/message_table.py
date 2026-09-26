@@ -149,12 +149,10 @@ class MessageTable(DataTable):
         self._anchor: int | None = None
         self._row_cells: dict[str, tuple] = {}  # message id -> cells as added (to un-highlight)
         self._painted: set[str] = set()  # rows currently drawn as selected
-        # Search (/): the fuzzy filter on the rows, matches Exchange's search
-        # found beyond the loaded rows, and folder names to tag rows with
-        # (all-folder search).
+        # Search (/): the fuzzy filter on the rows, and matches Exchange's
+        # search found beyond the loaded rows.
         self.search = ""
         self._extra: list[MessageSummary] = []
-        self.folder_names: dict[str, str] = {}
         # Ids Exchange's search returned: shown even when the words were in
         # the text rather than the subject/sender (after the fuzzy matches).
         self.server_matches: set[str] = set()
@@ -282,14 +280,11 @@ class MessageTable(DataTable):
 
     def _add_message_row(self, m: MessageSummary, subject: str) -> None:
         flag = "" if m.is_read else "●"
-        if self._home_folder and m.folder_id and m.folder_id != self._home_folder and not self.folder_names:
+        if self._home_folder and m.folder_id and m.folder_id != self._home_folder:
             # A thread reply from Sent Items; after a bare tree guide ("└─ ")
             # no extra space is needed.
             subject += "(sent)" if subject.endswith(" ") else " (sent)"
-        tag = MEETING_TAGS.get(getattr(m, "kind", "mail"), "")
-        folder = self.folder_names.get(m.folder_id or "")
-        if folder:  # all-folder search: which folder it's in
-            tag = f"{folder} · {tag}"
+        tag = MEETING_TAGS.get(getattr(m, "kind", "mail"))
         if tag:  # invites and cancellations: after any tree guide, before the subject
             guide = subject[: len(subject) - len(subject.lstrip("│├└┌─ "))]
             subject = Text.assemble(guide, (tag, "dim"), subject[len(guide):], end="", no_wrap=True)

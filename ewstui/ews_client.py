@@ -399,11 +399,6 @@ SUMMARY_FIELDS = (
 )
 
 
-def _newest_first(m: MessageSummary) -> float:
-    """Sort key: newest first, undated last."""
-    return -m.received.timestamp() if m.received else float("inf")
-
-
 def _summary(item, folder_id: str | None) -> MessageSummary:
     """A row of the message list, from an item fetched with SUMMARY_FIELDS."""
     conversation = getattr(item, "conversation_id", None)
@@ -509,51 +504,15 @@ class MailClient:
         return [_summary(item, folder_id) for item in qs[offset : offset + limit]]
 
     @retry_on_dead_connection
-    def search(self, query: str, folder_id: str | None = None, limit: int = 50) -> list[MessageSummary]:
-        """Exchange's own search (words in the subject, body, people; a word
-        also matches as the start of a longer one): in one folder, or (no
-        `folder_id`) in every mail folder (see search_everywhere). Newest
-        first; each result says its folder."""
-        if folder_id is None:
-            found = [m for _, _, batch in self.search_everywhere(query) for m in batch]
-            return sorted(found, key=_newest_first)[:limit]
-        return self._search_folder(self._folder_by_id(folder_id), query, limit)
-
-    def _search_folder(self, folder, query: str, limit: int) -> list[MessageSummary]:
+    def search(self, query: str, folder_id: str, limit: int = 50) -> list[MessageSummary]:
+        """Exchange's own search in one folder (words in the subject, body,
+        people; a word also matches as the start of a longer one), newest
+        first. One folder only: Exchange won't run a text search over
+        several folders in one request ("Shared folder search cannot be
+        performed on multiple folders")."""
+        folder = self._folder_by_id(folder_id)
         qs = folder.filter(query).order_by("-datetime_received").only(*SUMMARY_FIELDS)
         return [_summary(item, folder.id) for item in qs[:limit]]
-
-    def search_everywhere(self, query: str, limit_per_folder: int = 25, workers: int = 3):
-        """Search every mail folder, yielding (folders done, folders in all,
-        that folder's matches) as each one answers. Exchange won't run a
-        text search over several folders in one request ("Shared folder
-        search cannot be performed on multiple folders"), so it's one
-        request per folder, `workers` at a time (the connection pool's
-        size), the Inbox, Sent Items and Drafts first. A folder that can't
-        be searched is skipped (logged). Stopping early (closing the
-        generator) cancels the folders not yet started.
-        """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        folders = [f for f in self._all_folders() if _is_mail_folder(f)]
-        first = {getattr(self.account, name).id: i for i, name in enumerate(("inbox", "sent", "drafts"))
-                 if getattr(self.account, name, None) is not None}
-        folders.sort(key=lambda f: first.get(f.id, len(first)))
-
-        def one(folder):
-            try:
-                return self._search_folder(folder, query, limit_per_folder)
-            except Exception:  # noqa: BLE001 - one folder failing doesn't spoil the search
-                log.info("searching %s failed", getattr(folder, "name", folder), exc_info=True)
-                return []
-
-        pool = ThreadPoolExecutor(max_workers=workers)
-        try:
-            futures = [pool.submit(one, f) for f in folders]
-            for done, future in enumerate(as_completed(futures), 1):
-                yield done, len(folders), future.result()
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
 
     @retry_on_dead_connection
     def sent_folder_id(self) -> str:
