@@ -264,6 +264,8 @@ class EventSummary:
     location: str
     organizer: str
     is_all_day: bool
+    # Exchange's "show as": Free, Tentative, Busy, OOF, WorkingElsewhere, NoData.
+    show_as: str = "Busy"
 
 
 @dataclass
@@ -824,7 +826,7 @@ class CalendarClient:
         start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
         end_ews = EWSDateTime.from_datetime(end).astimezone(self.tz)
         qs = self.account.calendar.view(start=start_ews, end=end_ews).only(
-            "subject", "start", "end", "location", "organizer", "is_all_day"
+            "subject", "start", "end", "location", "organizer", "is_all_day", "legacy_free_busy_status"
         )
         out = []
         for item in qs:
@@ -838,6 +840,7 @@ class CalendarClient:
                     location=item.location or "",
                     organizer=str(item.organizer.email_address) if item.organizer else "",
                     is_all_day=bool(item.is_all_day),
+                    show_as=getattr(item, "legacy_free_busy_status", None) or "Busy",
                 )
             )
         return out
@@ -933,6 +936,7 @@ class CalendarClient:
             location=item.location or "",
             organizer=_email(item.organizer),
             is_all_day=bool(item.is_all_day),
+            show_as=getattr(item, "legacy_free_busy_status", None) or "Busy",
             attendees=_addresses(item, "required_attendees") + _addresses(item, "optional_attendees"),
             resources=_addresses(item, "resources"),
             body_text=getattr(item, "text_body", None) or "",

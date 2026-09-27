@@ -113,6 +113,74 @@ async def test_the_keys_are_shown_at_the_bottom_like_the_other_views(tmp_path):
         assert app.query_one(StatusBar) is main_bar  # the app still finds its own status bar
 
 
+async def test_pick_days_and_enter_puts_your_free_times_in_the_email(tmp_path):
+    from ewstui.availability import availability_on
+
+    app = make_app(tmp_path)
+    async with app.run_test(size=(180, 45)) as pilot:
+        await pilot.pause()
+        await pilot.press("r")
+        await settle(app, pilot)
+        screen = app.screen
+        body = screen.query_one("#compose-body", TextArea)
+        body.focus()
+        await pilot.press(*"Hi,", "enter")  # the cursor: after this line
+        await pilot.press("ctrl+o")  # into the calendar
+        await settle(app, pilot)
+        calendar = screen.query_one(WeekCalendar)
+        assert calendar.has_focus and "Space pick day" in str(screen.query_one("#compose-hints").render())
+        first = calendar.cursor
+        await pilot.press("space", "l", "l", "space")  # two days, one skipped
+        await pilot.pause()
+        chosen = calendar.chosen()
+        assert len(chosen) == 2 and chosen[0] == first
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert body.has_focus
+        expected = availability_on(app.calendar_client.list_events(
+            datetime.combine(chosen[0], datetime.min.time()),
+            datetime.combine(chosen[-1] + timedelta(days=1), datetime.min.time())), chosen)
+        assert body.text.startswith("Hi,\n" + expected)
+        assert calendar.picked == set()  # used up
+
+
+async def test_v_selects_a_run_of_days_and_escape_drops_it_first(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(180, 45)) as pilot:
+        await pilot.pause()
+        await pilot.press("w")
+        await settle(app, pilot)
+        screen = app.screen
+        await pilot.press("ctrl+o")
+        await settle(app, pilot)
+        calendar = screen.query_one(WeekCalendar)
+        await pilot.press("v", "j")  # a week's run: the working days only
+        await pilot.pause()
+        days = calendar.chosen()
+        assert len(days) == 6 and all(d.weekday() < 5 for d in days)
+        await pilot.press("escape")  # drops the choice, stays in the calendar
+        await pilot.pause()
+        assert calendar.has_focus and calendar.anchor is None
+        await pilot.press("escape")  # back to writing, the email still open
+        await pilot.pause()
+        assert isinstance(app.screen, ComposeScreen) and screen.query_one("#compose-body", TextArea).has_focus
+
+
+async def test_moving_past_the_weeks_shown_pages_them(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(180, 45)) as pilot:
+        await pilot.pause()
+        await pilot.press("w")
+        await settle(app, pilot)
+        await pilot.press("ctrl+o")
+        await settle(app, pilot)
+        calendar = app.screen.query_one(WeekCalendar)
+        first = calendar.first
+        await pilot.press("j", "j", "j")  # three weeks down: past the three shown
+        await settle(app, pilot)
+        assert calendar.first == first + timedelta(weeks=1) and calendar.first <= calendar.cursor <= calendar.last
+
+
 async def test_typing_still_works_with_the_calendar_open(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(180, 45)) as pilot:

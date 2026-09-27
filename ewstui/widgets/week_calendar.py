@@ -7,7 +7,9 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
+from textual.binding import Binding
 from textual.content import Content
+from textual.message import Message
 from textual.widget import Widget
 
 WORKDAYS = 5
@@ -39,13 +41,42 @@ def slot_text(e, width: int) -> str:
     return text if len(text) <= width else text[: max(0, width - 1)] + "…"
 
 
-class WeekCalendar(Widget):
+class WeekCalendar(Widget, can_focus=True):
+    """With focus: a cursor day (h/l a working day, j/k a week; going past
+    the weeks shown pages them); Space picks / unpicks the day, v selects
+    a run of days; Enter asks for your free time on the chosen days (or the
+    cursor day), Esc drops the choice, then gives focus back."""
+
+    BINDINGS = [
+        Binding("h,left", "move(-1)", "Previous day", show=False),
+        Binding("l,right", "move(1)", "Next day", show=False),
+        Binding("k,up", "move(-5)", "Previous week", show=False),
+        Binding("j,down", "move(5)", "Next week", show=False),
+        Binding("space", "toggle_day", "Pick day", show=False),
+        Binding("v", "toggle_range", "Select days", show=False),
+        Binding("enter", "availability", "Free times into the email", show=False),
+        Binding("escape", "leave", "Back to the email", show=False),
+    ]
+
     DEFAULT_CSS = """
     WeekCalendar {
         width: 1fr;
         height: 1fr;
     }
     """
+
+    class AvailabilityRequested(Message):
+        """Enter: your free time on these days, into the email."""
+
+        def __init__(self, days: list[date]) -> None:
+            self.days = days
+            super().__init__()
+
+    class WeeksChanged(Message):
+        """The cursor paged the weeks shown: their events are needed."""
+
+    class Left(Message):
+        """Esc with nothing chosen: back to writing."""
 
     def __init__(self, weeks: int = 3, today: date | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -54,6 +85,9 @@ class WeekCalendar(Widget):
         # This week; at the weekend (this week's working days are over) the next.
         self.first = monday_of(self.today) + (timedelta(weeks=1) if self.today.weekday() >= WORKDAYS else timedelta())
         self.events: list | None = None  # None while being looked up
+        self.cursor = self.today if self.today.weekday() < WORKDAYS else self.first
+        self.picked: set[date] = set()  # days chosen with Space
+        self.anchor: date | None = None  # where v started a run of days
 
     @property
     def last(self) -> date:
@@ -62,12 +96,70 @@ class WeekCalendar(Widget):
     def shift(self, weeks: int) -> None:
         self.first += timedelta(weeks=weeks)
         self.events = None
+        if not self.first <= self.cursor <= self.last:  # (Ctrl+B/F) the cursor goes along
+            self.cursor += timedelta(weeks=weeks)
         self.refresh()
+
+    # -- choosing days --------------------------------------------------------------
+
+    def chosen(self) -> list[date]:
+        """The days chosen: picked ones and the v run (working days), in
+        order; none chosen: the cursor day."""
+        days = set(self.picked)
+        if self.anchor is not None:
+            lo, hi = sorted((self.anchor, self.cursor))
+            days |= {lo + timedelta(days=i) for i in range((hi - lo).days + 1)}
+        days = {d for d in days if d.weekday() < WORKDAYS}
+        return sorted(days) or [self.cursor]
+
+    def action_move(self, workdays: int) -> None:
+        """Along the working days (Mon-Fri); a week is 5 of them."""
+        day, step = self.cursor, (1 if workdays > 0 else -1)
+        for _ in range(abs(workdays)):
+            day += timedelta(days=step)
+            while day.weekday() >= WORKDAYS:
+                day += timedelta(days=step)
+        self.cursor = day
+        if day < self.first or day > self.last:  # page the weeks along
+            self.first += timedelta(weeks=1 if day > self.last else -1)
+            self.events = None
+            self.post_message(self.WeeksChanged())
+        self.refresh()
+
+    def action_toggle_day(self) -> None:
+        self.picked ^= {self.cursor}
+        self.refresh()
+
+    def action_toggle_range(self) -> None:
+        if self.anchor is None:
+            self.anchor = self.cursor
+        else:  # the run stays chosen, as picked days
+            self.picked |= set(self.chosen())
+            self.anchor = None
+        self.refresh()
+
+    def action_availability(self) -> None:
+        self.post_message(self.AvailabilityRequested(self.chosen()))
+        self.picked, self.anchor = set(), None
+        self.refresh()
+
+    def action_leave(self) -> None:
+        if self.picked or self.anchor is not None:  # Esc first drops the choice
+            self.picked, self.anchor = set(), None
+            self.refresh()
+            return
+        self.post_message(self.Left())
 
     def set_events(self, first: date, events: list) -> None:
         if first == self.first:  # not an answer for weeks since moved away from
             self.events = events
             self.refresh()
+
+    def on_focus(self) -> None:
+        self.refresh()  # the cursor shows only with focus
+
+    def on_blur(self) -> None:
+        self.refresh()
 
     def render(self) -> Content:
         c = self.app.theme_variables
@@ -82,9 +174,15 @@ class WeekCalendar(Widget):
             week_days = [monday + timedelta(days=i) for i in range(WORKDAYS)]
             lines.append(Content.from_markup(f"[{dim}]$r[/]", r="─" * (col * WORKDAYS + WORKDAYS - 1)))
             header = Content("")
+            chosen = set(self.chosen()) if (self.picked or self.anchor is not None) else set()
             for i, day in enumerate(week_days):
-                label = f"{day:%a %d %b}".ljust(col)[:col]
+                mark = "✓ " if day in chosen else ""
+                label = f"{mark}{day:%a %d %b}".ljust(col)[:col]
                 style = f"b reverse {accent}" if day == self.today else f"b {dim}" if day < self.today else "b"
+                if day in chosen:
+                    style = f"b {c.get('tux-mode-fg', 'black')} on {c.get('tux-mode-bg', 'blue')}"
+                if self.has_focus and day == self.cursor:
+                    style += " underline reverse"
                 header += Content.from_markup(f"[{style}]$l[/]", l=label) + (gap if i < WORKDAYS - 1 else Content(""))
             lines.append(header)
             if self.events is None:

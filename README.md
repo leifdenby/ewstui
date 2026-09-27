@@ -332,7 +332,22 @@ window comes back with your text. Ctrl+O shows your calendar beside the
 email, to check when you're free: the working days (Mon–Fri) as columns,
 three weeks as rows (from this week, or next week at the weekend), each
 day listing its booked time slots; Ctrl+B / Ctrl+F go three weeks back
-or forward, Ctrl+O hides it again.
+or forward.
+
+Offering times: Ctrl+O puts you in that calendar (Ctrl+O or Esc takes
+you back to writing). `h`/`l` move a working day, `j`/`k` a week (past
+the weeks shown, it pages on), Space picks or unpicks a day, `v` selects
+a run of days. Enter pastes your free time on the chosen days (or the
+day under the cursor) into the email where your cursor was:
+
+    I am currently available these times (CEST):
+    - Monday 5th Oct, 1000-1200
+    - Tuesday 6th Oct, 1200-1300
+
+Free means within 08:00–17:00, in whole hours (at least one), not
+already past, and not overlapping anything shown as Busy, Tentative or
+Out of office — an all-day one (a holiday) takes the whole day, while
+Free / Working-elsewhere entries don't count.
 
 **Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,

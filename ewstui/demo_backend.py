@@ -386,7 +386,7 @@ class DemoCalendarClient:
             EventSummary(
                 id="e3", changekey="c3", subject="Company holiday",
                 start=today + timedelta(days=3), end=today + timedelta(days=4),
-                location="", organizer="hr@corp.example", is_all_day=True,
+                location="", organizer="hr@corp.example", is_all_day=True, show_as="OOF",
             ),
             EventSummary(  # cancelled by the demo cancellation "can1"
                 id="e4", changekey="c4", subject="Friday retro",

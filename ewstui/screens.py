@@ -89,10 +89,24 @@ class ComposeScreen(ModalScreen[dict | None]):
         self.fetch_events = fetch_events
 
     def _hints(self) -> str:
+        from .widgets.week_calendar import WeekCalendar
+
+        if isinstance(self.focused, WeekCalendar):
+            return ("h/l day · j/k week · Space pick day · v select days · Enter free times into the email · "
+                    "Ctrl+B/F weeks · Esc/Ctrl+O back to writing")
         hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
         if self.fetch_events:
-            hints.append("Ctrl+B/F weeks · Ctrl+O hide calendar" if self.calendar_shown else "Ctrl+O your calendar")
+            hints.append("Ctrl+O to the calendar (free times) · Ctrl+B/F weeks" if self.calendar_shown
+                         else "Ctrl+O your calendar")
         return " · ".join(hints)
+
+    def _update_hints(self) -> None:
+        from .widgets.chrome import HintBar
+
+        self.query_one(HintBar).set_hints(self._hints())
+
+    def on_descendant_focus(self, event) -> None:
+        self._update_hints()
 
     def compose(self) -> ComposeResult:
         from .widgets.chrome import HintBar
@@ -113,24 +127,61 @@ class ComposeScreen(ModalScreen[dict | None]):
     # -- the calendar beside the email (Ctrl+O) ------------------------------------
 
     def on_mount(self) -> None:
-        from .widgets.chrome import HintBar
-
-        self.query_one(HintBar).set_hints(self._hints())
+        self._update_hints()
 
     @property
     def calendar_shown(self) -> bool:
         return self.query_one("#compose-box").has_class("with-calendar")
 
     def action_toggle_calendar(self) -> None:
-        from .widgets.chrome import HintBar
+        """Ctrl+O: show the calendar and go to it; from the calendar, back
+        to writing (and hide it)."""
+        from .widgets.week_calendar import WeekCalendar
 
         if self.fetch_events is None:
             return
         box = self.query_one("#compose-box")
-        box.toggle_class("with-calendar")
-        self.query_one(HintBar).set_hints(self._hints())
-        if self.calendar_shown:
+        calendar = self.query_one(WeekCalendar)
+        if not self.calendar_shown:
+            box.add_class("with-calendar")
             self._load_calendar()
+            calendar.focus()
+        elif calendar.has_focus:
+            box.remove_class("with-calendar")
+            self.query_one("#compose-body", TextArea).focus()
+        else:
+            calendar.focus()
+        self._update_hints()
+
+    def on_week_calendar_weeks_changed(self, event) -> None:
+        self._load_calendar()
+
+    def on_week_calendar_left(self, event) -> None:
+        self.query_one("#compose-body", TextArea).focus()
+
+    def on_week_calendar_availability_requested(self, event) -> None:
+        """Enter on the chosen days: your free times, as text, into the email
+        where its cursor was."""
+        from .availability import availability_on
+
+        days = event.days
+        start = datetime.combine(min(days), datetime.min.time())
+        end = datetime.combine(max(days) + timedelta(days=1), datetime.min.time())
+
+        def work() -> None:
+            try:
+                events = self.fetch_events(start, end)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, f"Couldn't check your calendar: {e}", severity="error")
+                return
+            self.app.call_from_thread(self._insert_into_body, availability_on(events, days))
+
+        self.run_worker(work, thread=True, group="compose-availability")
+
+    def _insert_into_body(self, text: str) -> None:
+        body = self.query_one("#compose-body", TextArea)
+        body.focus()
+        body.insert(text)  # at the cursor, which stayed where you left it
 
     def action_calendar_weeks(self, weeks: int) -> None:
         if not self.calendar_shown:
