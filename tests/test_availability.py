@@ -62,6 +62,28 @@ def test_text():
     )
 
 
+def test_the_zone_is_the_one_on_the_date_offered(monkeypatch):
+    import time as time_module
+
+    monkeypatch.setenv("TZ", "Europe/Copenhagen")
+    time_module.tzset()
+    try:
+        summer, winter = date(2026, 10, 23), date(2026, 10, 26)  # CEST ends on 25 Oct 2026
+        assert availability_text({summer: [(at(summer, 10), at(summer, 12))]}).startswith(
+            "I am currently available these times (CEST):")
+        assert availability_text({winter: [(at(winter, 10), at(winter, 12))]}).startswith(
+            "I am currently available these times (CET):")
+        both = availability_text({summer: [(at(summer, 10), at(summer, 12))], winter: [(at(winter, 9), at(winter, 11))]})
+        assert both == (
+            "I am currently available these times:\n"
+            "- Friday 23rd Oct, 1000-1200 (CEST)\n"
+            "- Monday 26th Oct, 0900-1100 (CET)\n"
+        )
+    finally:
+        monkeypatch.undo()  # TZ as it was
+        time_module.tzset()
+
+
 def test_availability_skips_weekends_past_days_and_full_days():
     events = [ev(at(MON, 8), at(MON, 17))]  # Monday fully booked
     text = availability(events, date(2026, 10, 3), date(2026, 10, 6), now=at(date(2026, 10, 1), 9), tz_name="CEST")

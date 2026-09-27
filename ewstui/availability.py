@@ -63,17 +63,30 @@ def ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
+def zone_name(when: datetime) -> str:
+    """This machine's time zone name at that (local) time: CEST in summer,
+    CET in winter — for the date offered, not today."""
+    return when.astimezone().tzname() or ""
+
+
 def availability_text(slots_by_day: dict[date, list[tuple[datetime, datetime]]], tz_name: str | None = None) -> str:
-    """The text to paste: one line per free stretch, day by day."""
-    tz_name = tz_name if tz_name is not None else (datetime.now().astimezone().tzname() or "")
-    lines = []
-    for day in sorted(slots_by_day):
-        for s, f in slots_by_day[day]:
-            lines.append(f"- {day:%A} {ordinal(day.day)} {day:%b}, {s:%H%M}-{f:%H%M}")
-    if not lines:
+    """The text to paste: one line per free stretch, day by day. The time
+    zone (`tz_name`, else the local one on each slot's own date) goes in
+    the heading, or on every line if the slots straddle the switch between
+    summer and winter time."""
+    slots = [(day, s, f) for day in sorted(slots_by_day) for s, f in slots_by_day[day]]
+    if not slots:
         return "I don't have any free time on those days, unfortunately.\n"
-    heading = f"I am currently available these times ({tz_name}):" if tz_name else "I am currently available these times:"
-    return "\n".join([heading, *lines]) + "\n"
+    zones = [tz_name if tz_name is not None else zone_name(s) for _, s, _ in slots]
+    one_zone = len(set(zones)) == 1
+    lines = [
+        f"- {day:%A} {ordinal(day.day)} {day:%b}, {s:%H%M}-{f:%H%M}" + ("" if one_zone or not zone else f" ({zone})")
+        for (day, s, f), zone in zip(slots, zones)
+    ]
+    heading = "I am currently available these times"
+    if one_zone and zones[0]:
+        heading += f" ({zones[0]})"
+    return "\n".join([heading + ":", *lines]) + "\n"
 
 
 def availability_on(events: list, days: list[date], hours: tuple[time, time] = DEFAULT_WORK_HOURS,
