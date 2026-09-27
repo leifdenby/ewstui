@@ -329,9 +329,9 @@ thread, and the cursor and open message stay where they were.
 its bottom right. It starts in INSERT (type straight away); Esc goes to
 NORMAL, where Esc again does what it does below (save to Drafts and
 close). NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
-`2dd`), `x X`, `dd dw de D`, `cc cw C s S`, `yy yw p P`, `J`, `u` /
-Ctrl+R, `i a I A o O` into INSERT, `v` / `V` into VISUAL / V-LINE (move
-to select; `d`/`x`, `y`, `c`). Yanked and deleted text also goes to the
+`2dd`), `x X`, `r`{char} (`3rx`), `dd dw de D`, `cc cw C s S`,
+`yy yw p P`, `J`, `u` / Ctrl+R, `i a I A o O` into INSERT, `v` / `V`
+into VISUAL / V-LINE (move to select; `d`/`x`, `y`, `c`, `r`{char}). Yanked and deleted text also goes to the
 system clipboard. Ctrl+S, Tab and Ctrl+O work in every mode.
 
 **Writing**: Ctrl+S (or Cmd+Enter) sends; Esc saves what you've written

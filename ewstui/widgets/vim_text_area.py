@@ -5,9 +5,9 @@ Starts in INSERT (type straight away); Esc goes to NORMAL; Esc in NORMAL
 is left to the screen (in the compose view: save to Drafts and close).
 
 NORMAL:  h j k l · w b e · 0 ^ $ · gg G (counts: 3j, 2dd, …)
-         x X · dd dw de D · cc cw ce C s S · yy yw ye · p P · J · u, Ctrl+R
+         x X · r{char} · dd dw de D · cc cw ce C s S · yy yw ye · p P · J · u, Ctrl+R
          i a I A o O (to INSERT) · v V (to VISUAL / V-LINE)
-VISUAL:  the motions extend the selection; d/x delete, y yank, c change,
+VISUAL:  the motions extend the selection; d/x delete, y yank, c change, r{char} replace,
          Esc or v/V back to NORMAL
 Yanked and deleted text also goes to the system clipboard.
 """
@@ -178,8 +178,17 @@ class VimTextArea(TextArea):
         return key.isdigit() and (key != "0" or self._pending[-1:].isdigit())
 
     def _normal_key(self, key: str) -> None:
+        replacing = re.fullmatch(r"(\d*)r", self._pending)
+        if replacing:  # r{char}: this key is the character
+            self._pending = ""
+            if len(key) == 1:
+                self._replace_chars(key, int(replacing[1] or 1))
+            return
         if self._counting(key):
             self._pending += key
+            return
+        if key == "r" and re.fullmatch(r"\d*", self._pending):
+            self._pending += "r"
             return
         count, op, g = self._parse_pending()
         if g:  # the second g of gg (dgg, ygg too); anything else cancels
@@ -347,6 +356,16 @@ class VimTextArea(TextArea):
         self.insert(text, at)
         self.move_cursor(self._location(self._offset(at) + len(text) - 1))
 
+    def _replace_chars(self, char: str, count: int) -> None:
+        """r{char}: the `count` characters from the cursor become `char`
+        (nothing if the line hasn't that many, as in vim)."""
+        row, col = self.cursor_location
+        line = self._lines()[row]
+        if col + count > len(line):
+            return
+        self.replace(char * count, (row, col), (row, col + count))
+        self.move_cursor((row, col + count - 1))
+
     def _join(self) -> None:
         row, _ = self.cursor_location
         lines = self._lines()
@@ -373,6 +392,17 @@ class VimTextArea(TextArea):
         end = (end[0], min(len(self._lines()[end[0]]), end[1] + 1))  # the character under the cursor is in
         self.selection = Selection(start, end) if cursor >= self._anchor else Selection(end, start)
 
+    def _replace_selection(self, char: str) -> None:
+        if self.mode == VLINE:
+            first, last = self._visual_range()
+            start, end = (first, 0), (last, len(self._lines()[last]))
+        else:
+            start, end = self._visual_range()
+        text = self.get_text_range(start, end)
+        self._set_mode(NORMAL)
+        self.replace("".join(ch if ch == "\n" else char for ch in text), start, end)  # (line breaks stay)
+        self.move_cursor(start)
+
     def _visual_range(self):
         cursor = self._vcursor
         if self.mode == VLINE:
@@ -382,6 +412,14 @@ class VimTextArea(TextArea):
         return start, (end[0], min(len(self._lines()[end[0]]), end[1] + 1))
 
     def _visual_key(self, key: str) -> None:
+        if self._pending == "r":  # r{char}: every selected character becomes it
+            self._pending = ""
+            if len(key) == 1:
+                self._replace_selection(key)
+            return
+        if key == "r":
+            self._pending = "r"
+            return
         if self._counting(key):
             self._pending += key
             return

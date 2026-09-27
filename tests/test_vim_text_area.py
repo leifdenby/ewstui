@@ -180,6 +180,26 @@ async def test_in_the_compose_view_esc_twice_saves_to_drafts(tmp_path):
     assert mail.get_message("drafts", mail.list_messages("drafts")[0].id).body_text.startswith("Thanks!")
 
 
+async def test_r_replaces_characters():
+    async with Host().run_test() as pilot:
+        area = await normal(pilot, "r", "J")
+        assert area.text.startswith("Jello") and area.mode == NORMAL and area.cursor_location == (0, 0)
+        await pilot.press("w", "3", "r", "x")
+        assert area.text.startswith("Jello xxxre") and area.cursor_location == (0, 8)
+        await pilot.press("dollar_sign", "5", "r", "z")  # not that many characters left: nothing
+        assert area.text.startswith("Jello xxxre world\n")
+        await pilot.press("r", "space")  # r then a space
+        assert area.text.startswith("Jello xxxre worl \n")
+
+
+async def test_r_in_visual_replaces_the_selection():
+    async with Host().run_test() as pilot:
+        area = await normal(pilot, "v", "e", "r", "-")
+        assert area.text.startswith("----- there") and area.mode == NORMAL
+        await pilot.press("V", "j", "r", "=")
+        assert area.text == "=================\n================\nthird"  # line breaks stay
+
+
 async def test_normal_mode_keys_are_not_typed():
     async with Host().run_test() as pilot:
         area = await normal(pilot, "q", "z")
