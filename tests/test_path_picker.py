@@ -165,6 +165,30 @@ async def test_tab_goes_into_the_folder_and_searches_from_there(home, tmp_path):
     assert (deep / "Q3-budget.xlsx").exists()
 
 
+async def test_tab_completes_even_with_the_list_focused_and_never_moves_focus(home, tmp_path):
+    from textual.widgets import Input, ListView
+
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        screen = app.screen
+        await pilot.press(*"docu", "tab")
+        await settle(app, pilot)
+        assert isinstance(app.focused, Input)  # completed, focus stays in the box
+        screen.query_one(ListView).focus()
+        screen.query_one(ListView).index = screen._shown.index(home / "Documents" / "Work")
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert screen.query_one("#path-query").value == "~/Documents/Work/"
+        assert isinstance(app.focused, Input)
+        await pilot.press(*"in")  # typing goes to the box again
+        await settle(app, pilot)
+        assert screen.query_one("#path-query").value == "~/Documents/Work/in"
+
+
 async def test_backspacing_over_the_slash_goes_back_up(home, tmp_path):
     cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
     app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)

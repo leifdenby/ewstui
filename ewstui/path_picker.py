@@ -229,7 +229,9 @@ class PathPickerScreen(ModalScreen[Path | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="path-box"):
             yield Label(self._title, markup=False)
-            yield Input(placeholder="Type to find a folder under ~ (or type a path)", id="path-query")
+            # (no select-on-focus: after Tab, typing goes on after the completed path)
+            yield Input(placeholder="Type to find a folder under ~ (or type a path)", id="path-query",
+                        select_on_focus=False)
             yield ListView(id="path-results")
             yield Label("↓/↑ or Ctrl+n/p choose · Tab into the folder · Enter save here · Esc cancel"
                     + (" · matching by fzf" if self.use_fzf else ""), id="path-help", markup=False)
@@ -298,6 +300,7 @@ class PathPickerScreen(ModalScreen[Path | None]):
         field = self.query_one("#path-query", Input)
         path = display(self._shown[index], self.root)
         field.value = path + ("" if path.endswith("/") else "/")
+        field.focus()  # (Tab never moves on to the list: back to typing, whatever had focus)
         field.cursor_position = len(field.value)
 
     def _show(self, query: str, shown: list[Path]) -> None:
