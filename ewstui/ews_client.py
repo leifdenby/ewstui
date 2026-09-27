@@ -735,6 +735,27 @@ class MailClient:
             cc_recipients=cc or None,
         ).save()
 
+    def _updated_draft(self, folder_id: str, message_id: str, to: list[str], cc: list[str], subject: str, body: str):
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        item.to_recipients = to or None
+        item.cc_recipients = cc or None
+        item.subject = subject
+        item.body = body
+        item.save(update_fields=["to_recipients", "cc_recipients", "subject", "body"])
+        return item
+
+    def update_draft(self, folder_id: str, message_id: str, to: list[str], cc: list[str], subject: str,
+                     body: str) -> None:
+        """A draft edited in the compose view (Esc): the same draft, updated
+        (a draft reply stays a reply)."""
+        self._updated_draft(folder_id, message_id, to, cc, subject, body)
+
+    def send_draft(self, folder_id: str, message_id: str, to: list[str], cc: list[str], subject: str,
+                   body: str) -> None:
+        """Send a draft as edited (Ctrl+S): Exchange sends it, keeps a copy
+        in Sent Items and removes the draft."""
+        self._updated_draft(folder_id, message_id, to, cc, subject, body).send(save_copy=True)
+
     def save_reply_draft(
         self, folder_id: str, message_id: str, subject: str, body: str,
         to: list[str] | None = None, reply_all: bool = False, cc: list[str] | None = None,

@@ -328,7 +328,11 @@ thread, and the cursor and open message stay where they were.
 **Writing**: Ctrl+S (or Cmd+Enter) sends; Esc saves what you've written
 to your Drafts folder and closes (a reply stays a reply to its email;
 an untouched window just closes). If sending or saving fails, the
-window comes back with your text. Ctrl+O shows your calendar beside the
+window comes back with your text. To go on with a draft, open Drafts
+and press Enter / `o` on it: the compose view opens with it filled in;
+Ctrl+S sends that draft (a copy goes to Sent Items), Esc saves your
+changes into it. (Drafts are edited as plain text: formatting from
+Outlook doesn't survive an edit here.) Ctrl+O shows your calendar beside the
 email, to check when you're free: the working days (Mon–Fri) as columns,
 three weeks as rows (from this week, or next week at the weekend), each
 day listing its booked time slots; Ctrl+B / Ctrl+F go three weeks back

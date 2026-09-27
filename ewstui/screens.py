@@ -74,8 +74,9 @@ class ComposeScreen(ModalScreen[dict | None]):
     """
 
     def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False,
-                 fetch_events=None, cc: str = "") -> None:
+                 fetch_events=None, cc: str = "", title: str | None = None) -> None:
         super().__init__()
+        self.title_text = title or ("Reply" if context else "New email")
         self._to = to
         self._cc = cc
         self._subject = subject
@@ -115,7 +116,7 @@ class ComposeScreen(ModalScreen[dict | None]):
         yield HintBar("WRITE", "", id="compose-hints")  # the keys, where the status bar is in the other views
         with Horizontal(id="compose-box"):
             with Vertical(id="compose-fields"):
-                yield Label("Reply" if self.context else "New email", id="compose-title")
+                yield Label(self.title_text, id="compose-title")
                 if self.context:
                     yield Label(self.context, id="compose-context", markup=False)
                 yield Input(value=self._to, placeholder="To", id="compose-to")

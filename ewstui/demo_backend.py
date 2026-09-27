@@ -341,6 +341,19 @@ class DemoMailClient:
             cc = list(original.cc) if reply_all else []
         self._add_draft(subject, body, to or [], cc or [])
 
+    def update_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
+        m = self.get_message(folder_id, message_id)
+        m.to, m.cc, m.subject, m.body_text = list(to), list(cc), subject or "(no subject)", body
+        m.changekey += "+"
+
+    def send_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
+        self.update_draft(folder_id, message_id, to, cc, subject, body)
+        m = self.get_message(folder_id, message_id)
+        self._messages[folder_id] = [x for x in self._messages[folder_id] if x.id != message_id]
+        m.received = datetime.now()
+        self._messages["sent"].insert(0, m)
+        self.sent.append({"draft": message_id, "to": list(to), "cc": list(cc), "subject": subject, "body": body})
+
     def _add_draft(self, subject, body, to, cc) -> None:
         n = len(self._messages["drafts"]) + 1
         self._messages["drafts"].insert(0, MessageDetail(

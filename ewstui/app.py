@@ -337,6 +337,7 @@ class EwstuiApp(App):
 
     def select_folder(self, folder_id: str) -> None:
         self.current_folder_id = folder_id
+        self._drafts_folder_id()  # (known from here on: "edit draft" in Drafts)
         try:
             messages = self._fetch_messages(folder_id)
         except Exception as e:  # noqa: BLE001
@@ -948,8 +949,47 @@ class EwstuiApp(App):
 
     def on_message_table_message_opened(self, event: MessageTable.MessageOpened) -> None:
         self.open_message(event.message_id)
+        if event.explicit and self._folder_of(event.message_id) == self._drafts_folder_id():
+            self._edit_draft(event.message_id)  # a draft: go on writing it
+            return
         if event.explicit:
             self.query_one("#preview", PreviewPane).focus()
+
+    def _drafts_folder_id(self) -> str | None:
+        if not hasattr(self, "_drafts_id"):
+            try:
+                self._drafts_id = self.mail_client.drafts_folder_id()
+            except Exception:  # noqa: BLE001 - then drafts just open like any email
+                log.warning("couldn't find the Drafts folder", exc_info=True)
+                self._drafts_id = None
+        return self._drafts_id
+
+    @ews_guard("Opening the draft")
+    def _edit_draft(self, message_id: str) -> None:
+        """Enter / o on a draft: the compose view with it filled in; Ctrl+S
+        sends that draft, Esc saves the changes into it."""
+        folder_id = self._folder_of(message_id)
+        detail = self._previewed(message_id) or self.mail_client.get_message(folder_id, message_id)
+
+        def _fields(result: dict) -> dict:
+            return {"to": _split_addresses(result["to"]), "cc": _split_addresses(result["cc"]),
+                    "subject": result["subject"], "body": result["body"]}
+
+        def _send(result: dict) -> None:
+            self.mail_client.send_draft(folder_id, message_id, **_fields(result))
+            self._message_cache.forget(message_id)
+            self._refresh_keeping_row()
+
+        def _save(result: dict) -> None:  # (the Drafts list is refreshed after it)
+            self.mail_client.update_draft(folder_id, message_id, **_fields(result))
+            self._message_cache.forget(message_id)
+
+        subject = "" if detail.subject == "(no subject)" else detail.subject
+        self._compose_and_send(
+            ComposeScreen(to=", ".join(detail.to), cc=", ".join(detail.cc), subject=subject,
+                          body=detail.body_text or "", context="Ctrl+S sends it, Esc keeps it in Drafts", title="Draft"),
+            _send, sent_message="Draft sent", save_draft=_save,
+        )
 
     def on_message_table_focus_folders_requested(self, event: MessageTable.FocusFoldersRequested) -> None:
         self.query_one("#folders", FolderList).focus()
@@ -1036,7 +1076,7 @@ class EwstuiApp(App):
         def _reopen(result: dict) -> None:
             self._compose_and_send(
                 ComposeScreen(to=result["to"], cc=result.get("cc", ""), subject=result["subject"], body=result["body"],
-                              context=screen.context, unsaved=True),
+                              context=screen.context, unsaved=True, title=screen.title_text),
                 send, sent_message, save_draft,
             )
 
@@ -1764,6 +1804,8 @@ class EwstuiApp(App):
         # folder pane always opens rightwards.
         open_key = "o" if pane == "messages" and self.config.layout == "stacked" else "l"
         status.hints = STATUS_HINTS.get(pane, STATUS_HINTS.get(mode, "")).format(open=open_key)
+        if pane == "messages" and self.current_folder_id and self.current_folder_id == getattr(self, "_drafts_id", None):
+            status.hints = status.hints.replace(f"{open_key} open", f"{open_key} edit draft", 1)
         if pane == "folders" and focused.moving is not None:
             status.hints = STATUS_HINTS["moving"]
         table = self.query_one("#messages", MessageTable)
