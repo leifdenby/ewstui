@@ -1409,15 +1409,26 @@ class EwstuiApp(App):
             names = [a.name for a in attachments if a.id in ids]
             title = f"Save “{names[0]}” to…" if len(names) == 1 else f"Save {len(names)} attachments to…"
 
-            def _to_folder(folder: Path | None) -> None:
-                if folder is None:
+            def _to_folder(picked) -> None:
+                if picked is None:
                     return
+                folder = picked.path
                 saved = [p for p in (_save(i, folder) for i in ids) if p is not None]
-                if saved:
-                    self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
-                    shown = display_path(saved[0], Path.home()) if len(saved) == 1 else \
-                        f"{len(saved)} files to {display_path(folder, Path.home())}"
-                    self.notify(f"Saved {shown}" if len(saved) > 1 else f"Saved to {shown}")
+                if not saved:
+                    return
+                self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
+                shown = display_path(saved[0], Path.home()) if len(saved) == 1 else \
+                    f"{len(saved)} files to {display_path(folder, Path.home())}"
+                message = f"Saved {shown}" if len(saved) > 1 else f"Saved to {shown}"
+                if picked.open:  # Cmd+Enter / Ctrl+O: and show the folder (Finder)
+                    try:
+                        open_with_default_app(folder)
+                    except OpenError as e:
+                        log.warning("opening folder %s failed: %s", folder, e)
+                        self.notify(f"{message}, but couldn't open the folder: {e}", severity="warning", timeout=10)
+                        return
+                    message += " — opening the folder"
+                self.notify(message)
 
             self.push_screen(
                 PathPickerScreen(title, first=[*self._recent_save_dirs, self.config.attachment_dir]),

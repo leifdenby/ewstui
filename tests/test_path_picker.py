@@ -189,6 +189,41 @@ async def test_tab_completes_even_with_the_list_focused_and_never_moves_focus(ho
         assert screen.query_one("#path-query").value == "~/Documents/Work/in"
 
 
+@pytest.mark.parametrize("key", ["ctrl+o", "super+enter"])
+async def test_cmd_enter_saves_and_opens_the_folder(home, tmp_path, monkeypatch, key):
+    from ewstui import app as app_module
+
+    opened = []
+    monkeypatch.setattr(app_module, "open_with_default_app", lambda path: opened.append(Path(path)))
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        await pilot.press(*"invo", key)
+        await settle(app, pilot)
+    folder = home / "Documents" / "Work" / "Invoices"
+    assert (folder / "Q3-budget.xlsx").exists()
+    assert opened == [folder]  # the folder, not the file
+
+
+async def test_plain_enter_does_not_open_the_folder(home, tmp_path, monkeypatch):
+    from ewstui import app as app_module
+
+    opened = []
+    monkeypatch.setattr(app_module, "open_with_default_app", lambda path: opened.append(Path(path)))
+    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("v", "s")
+        await settle(app, pilot)
+        await pilot.press(*"invo", "enter")
+        await settle(app, pilot)
+    assert opened == []
+
+
 async def test_backspacing_over_the_slash_goes_back_up(home, tmp_path):
     cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
     app = EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)

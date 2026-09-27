@@ -279,7 +279,9 @@ a full path (`~/…`, `/…`), and Enter saves it there (without opening
 it). Matches are shown shortest path first. Tab goes into the
 highlighted folder: its path goes in the box (`~/Nextcloud/`), the list
 becomes that folder's subfolders and typing searches inside it — so any
-depth is a few Tabs away; backspacing over the `/` goes back up. If
+depth is a few Tabs away; backspacing over the `/` goes back up.
+Cmd+Enter (in terminals that pass Cmd on) or Ctrl+O saves there and
+then opens the folder (Finder on macOS). If
 [fzf](https://github.com/junegunn/fzf) is installed, it does the
 matching (`fzf --filter`), which is fast enough to list folders deeper
 (6 levels below the folder searched instead of 4). Folders you saved to this session, and the usual attachment

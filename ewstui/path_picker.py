@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -177,19 +178,28 @@ def rank(dirs: list[Path], query: str, base: Path, first: list[Path], use_fzf: b
     return out[:SHOWN]
 
 
-class PathPickerScreen(ModalScreen[Path | None]):
+class PickedFolder(NamedTuple):
+    path: Path
+    open: bool = False  # Cmd+Enter / Ctrl+O: open the folder afterwards (Finder)
+
+
+class PathPickerScreen(ModalScreen[PickedFolder | None]):
     """Dismisses with the chosen folder, or None. Letters go to the search
-    box; ↓/↑ or Ctrl+n/p move in the list, Enter chooses. Tab completes the
-    highlighted folder into the box ("~/Nextcloud/"): the list is then that
-    folder's own subfolders (listed afresh, so there's no depth limit going
-    down this way) and typing searches inside it; backspacing over the "/"
-    goes back up."""
+    box; ↓/↑ or Ctrl+n/p move in the list, Enter chooses (Cmd+Enter or
+    Ctrl+O: and open the folder afterwards). Tab completes the highlighted
+    folder into the box ("~/Nextcloud/"): the list is then that folder's
+    own subfolders (listed afresh, so there's no depth limit going down
+    this way) and typing searches inside it; backspacing over the "/" goes
+    back up."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("down,ctrl+n", "cursor(1)", "Next", show=False),
         Binding("up,ctrl+p", "cursor(-1)", "Previous", show=False),
         Binding("tab", "complete", "Into this folder", show=False, priority=True),
+        # Cmd+Enter only reaches us in terminals that report Cmd (kitty
+        # keyboard protocol); Ctrl+O does the same everywhere.
+        Binding("super+enter,ctrl+o", "choose_and_open", "Save here and open the folder", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -233,7 +243,8 @@ class PathPickerScreen(ModalScreen[Path | None]):
             yield Input(placeholder="Type to find a folder under ~ (or type a path)", id="path-query",
                         select_on_focus=False)
             yield ListView(id="path-results")
-            yield Label("↓/↑ or Ctrl+n/p choose · Tab into the folder · Enter save here · Esc cancel"
+            yield Label("↓/↑ or Ctrl+n/p choose · Tab into the folder · Enter save here · "
+                        "Cmd+Enter/Ctrl+O save and open the folder · Esc cancel"
                     + (" · matching by fzf" if self.use_fzf else ""), id="path-help", markup=False)
 
     def on_mount(self) -> None:
@@ -333,14 +344,17 @@ class PathPickerScreen(ModalScreen[Path | None]):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self._choose()
 
-    def _choose(self) -> None:
+    def action_choose_and_open(self) -> None:
+        self._choose(open_after=True)
+
+    def _choose(self, open_after: bool = False) -> None:
         if self._shown_for != self._query():  # Enter before fzf answered: rank now
             self._show(self._query(), self._ranking(self._query(), self.use_fzf))
         index = self.query_one("#path-results", ListView).index
         if not self._shown or index is None:
             self.app.bell()
             return
-        self.dismiss(self._shown[index])
+        self.dismiss(PickedFolder(self._shown[index], open_after))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
