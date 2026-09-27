@@ -92,10 +92,20 @@ class ComposeScreen(ModalScreen[dict | None]):
     def _hints(self) -> str:
         from .widgets.week_calendar import WeekCalendar
 
+        from .widgets.vim_text_area import INSERT, VimTextArea
+
         if isinstance(self.focused, WeekCalendar):
             return ("h/l day · j/k week · Space pick day · v select days · Enter free times into the email · "
                     "Ctrl+B/F weeks · Esc/Ctrl+O back to writing")
-        hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
+        if isinstance(self.focused, VimTextArea):
+            if self.focused.mode == INSERT:
+                hints = ["Ctrl+S send", "Esc normal mode (vim)", "Tab next field"]
+            elif self.focused.mode == "NORMAL":
+                hints = ["Ctrl+S send", "i/a/o insert · v/V visual · dd yy p u", "Esc save to Drafts & close"]
+            else:
+                hints = ["move to select · d delete · y yank · c change", "Esc/v back to normal"]
+        else:
+            hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
         if self.fetch_events:
             hints.append("Ctrl+O to the calendar (free times) · Ctrl+B/F weeks" if self.calendar_shown
                          else "Ctrl+O your calendar")
@@ -109,8 +119,12 @@ class ComposeScreen(ModalScreen[dict | None]):
     def on_descendant_focus(self, event) -> None:
         self._update_hints()
 
+    def on_vim_text_area_mode_changed(self, event) -> None:
+        self._update_hints()
+
     def compose(self) -> ComposeResult:
         from .widgets.chrome import HintBar
+        from .widgets.vim_text_area import VimTextArea
         from .widgets.week_calendar import WeekCalendar
 
         yield HintBar("WRITE", "", id="compose-hints")  # the keys, where the status bar is in the other views
@@ -122,7 +136,7 @@ class ComposeScreen(ModalScreen[dict | None]):
                 yield Input(value=self._to, placeholder="To", id="compose-to")
                 yield Input(value=self._cc, placeholder="Cc", id="compose-cc")
                 yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
-                yield TextArea(self._body, id="compose-body")
+                yield VimTextArea(self._body, id="compose-body")  # vim modes, shown bottom right
             yield WeekCalendar(id="compose-calendar")
 
     # -- the calendar beside the email (Ctrl+O) ------------------------------------

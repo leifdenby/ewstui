@@ -325,6 +325,15 @@ background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it
 off) and shows e.g. "New mail: Inbox (+2)". Fetching happens off the UI
 thread, and the cursor and open message stay where they were.
 
+**vim in the text box**: the email's text box has vim's modes, shown at
+its bottom right. It starts in INSERT (type straight away); Esc goes to
+NORMAL, where Esc again does what it does below (save to Drafts and
+close). NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
+`2dd`), `x X`, `dd dw de D`, `cc cw C s S`, `yy yw p P`, `J`, `u` /
+Ctrl+R, `i a I A o O` into INSERT, `v` / `V` into VISUAL / V-LINE (move
+to select; `d`/`x`, `y`, `c`). Yanked and deleted text also goes to the
+system clipboard. Ctrl+S, Tab and Ctrl+O work in every mode.
+
 **Writing**: Ctrl+S (or Cmd+Enter) sends; Esc saves what you've written
 to your Drafts folder and closes (a reply stays a reply to its email;
 an untouched window just closes). If sending or saving fails, the
