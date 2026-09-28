@@ -23,6 +23,7 @@ GLOBAL_KEYS = [
 
 MAIL_KEYS = [
     ("r / R", "reply / reply all"),
+    ("f", "forward (with its attachments)"),
     ("d", "delete (to Deleted Items)"),
     ("A", "archive"),
     ("m", "move to folder (type to filter)"),
@@ -47,7 +48,8 @@ PREVIEW_KEYS = [
     ("h", "back to the message list"),
     ("U", "links in this email"),
     ("e", "all To / Cc recipients"),
-    ("r R d A m", "reply / all, delete, archive, move"),
+    ("r R f", "reply / all, forward"),
+    ("d A m", "delete, archive, move"),
     ("P / p v", "priority (+ note), attachments"),
     ("i", "answer the invite"),
     ("c", "calendar event from the email"),
@@ -128,7 +130,7 @@ STATUS_HINTS = {
     "search": "type to search · Enter/↓ to the results · Esc end the search",
     "find-folder": "type part of a folder's name · Enter open the top match · ↓ choose · Esc all folders",
     "event": "new event · h/l j/k [ ] pick a day · v select days · n next date · Tab next field · Ctrl+S create · Ctrl+T in Teams · Esc close",
-    "messages": "{open} open · r reply · d delete · m move · A archive · / search · t threads · ? help",
+    "messages": "{open} open · r reply · f forward · d delete · m move · A archive · / search · t threads · ? help",
     "preview": "j/k scroll · Ctrl+d/u half page · r reply · m move · A archive · P priority · h back · ? help",
     "calendar": "j/k event · n new · f find a room · T open in Teams · [ ] earlier/later · ? help",
     "priority": "A-Z priority · V select · x done · Enter jump to email · ? help",

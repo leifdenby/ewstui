@@ -362,12 +362,13 @@ already past, and not overlapping anything shown as Busy, Tentative or
 Out of office — an all-day one (a holiday) takes the whole day, while
 Free / Working-elsewhere entries don't count.
 
-**Mail**: `r` reply, `R` reply-all, `w` compose new, `d` delete,
+**Mail**: `r` reply, `R` reply-all, `f` forward (the original and its
+attachments go along below what you write), `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note (on an email that's
 already listed, `p` edits that entry's note instead), `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
-undo. `r` `R` `d` `A` `m` `P` `p` `v` also work while you're reading the
+undo. `r` `R` `f` `d` `A` `m` `P` `p` `v` also work while you're reading the
 email (focus in the reading pane), on that email; after a move, archive
 or delete you stay in the reading pane, on the next email.
 

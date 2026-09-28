@@ -29,6 +29,7 @@ class PreviewPane(VerticalScroll):
         # Space pages here, so toggling read stays a list key).
         Binding("r", "email('reply')", "Reply", show=False),
         Binding("R", "email('reply_all')", "Reply all", show=False),
+        Binding("f", "email('forward')", "Forward", show=False),
         Binding("d", "email('delete')", "Delete", show=False),
         Binding("A", "email('archive')", "Archive", show=False),
         Binding("m", "email('move')", "Move", show=False),
@@ -47,6 +48,7 @@ class PreviewPane(VerticalScroll):
         request = {
             "reply": lambda: MessageTable.ReplyRequested(message_id, reply_all=False),
             "reply_all": lambda: MessageTable.ReplyRequested(message_id, reply_all=True),
+            "forward": lambda: MessageTable.ForwardRequested(message_id),
             "delete": lambda: MessageTable.DeleteRequested(message_id),
             "archive": lambda: MessageTable.ArchiveRequested(message_id),
             "move": lambda: MessageTable.MoveRequested(message_id),

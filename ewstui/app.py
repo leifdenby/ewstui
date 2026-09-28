@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import dataclass
@@ -1001,22 +1002,62 @@ class EwstuiApp(App):
         if not self.current_folder_id:
             return
         folder_id = self._folder_of(event.message_id)
-        cached = self._previewed(event.message_id)
+        self._with_message(folder_id, event.message_id, "Reply",
+                           lambda detail: self._open_reply(folder_id, event.message_id, event.reply_all, detail))
+
+    def on_message_table_forward_requested(self, event: MessageTable.ForwardRequested) -> None:
+        if not self.current_folder_id:
+            return
+        folder_id = self._folder_of(event.message_id)
+        self._with_message(folder_id, event.message_id, "Forward",
+                           lambda detail: self._open_forward(folder_id, event.message_id, detail))
+
+    def _with_message(self, folder_id: str, message_id: str, what: str, then) -> None:
+        """`then(detail)` with the email: at once if the reading pane has
+        it, else once it's fetched (without blocking the UI)."""
+        cached = self._previewed(message_id)
         if cached is not None:
-            # Already loaded in the reading pane: no server round trip.
-            self._open_reply(folder_id, event.message_id, event.reply_all, cached)
+            then(cached)
             return
         self.notify("Loading the message…", timeout=3)
-        self._fetch_for_reply(folder_id, event.message_id, event.reply_all)
+        self._fetch_then(folder_id, message_id, what, then)
 
     @work(thread=True, exclusive=True, group="reply")
-    def _fetch_for_reply(self, folder_id: str, message_id: str, reply_all: bool) -> None:
+    def _fetch_then(self, folder_id: str, message_id: str, what: str, then) -> None:
         try:
             detail = self.mail_client.get_message(folder_id, message_id)
         except Exception as e:  # noqa: BLE001
-            self.call_from_thread(self.notify, f"Reply failed: couldn't load the message: {e}", severity="error", timeout=10)
+            self.call_from_thread(self.notify, f"{what} failed: couldn't load the message: {e}", severity="error", timeout=10)
             return
-        self.call_from_thread(self._open_reply, folder_id, message_id, reply_all, detail)
+        self.call_from_thread(then, detail)
+
+    def _open_forward(self, folder_id: str, message_id: str, detail) -> None:
+        """The compose view for a forward: To empty (and focused), your note
+        in the body. Exchange adds the original below it, with its
+        attachments, so it isn't pasted in here too."""
+        name = (getattr(detail, "names", None) or {}).get(detail.sender)
+        who = f"{name} <{detail.sender}>" if name else detail.sender
+        context = f"Forwarding {who}'s email — it goes along below what you write" + (
+            ", with its attachments" if detail.has_attachments else ""
+        )
+        subject = detail.subject if re.match(r"(?i)\s*(fw|fwd)\s*:", detail.subject) else f"Fwd: {detail.subject}"
+
+        def _fields(result: dict) -> dict:
+            return {"subject": result["subject"], "body": result["body"],
+                    "to": _split_addresses(result["to"]), "cc": _split_addresses(result["cc"])}
+
+        def _send(result: dict) -> None:
+            fields = _fields(result)
+            if not fields["to"] and not fields["cc"]:
+                raise ValueError("who to? Put an address in To")
+            self.mail_client.forward(folder_id, message_id, **fields)
+
+        self._compose_and_send(
+            ComposeScreen(subject=subject, context=context, title="Forward"),
+            _send,
+            sent_message="Forwarded",
+            save_draft=lambda result: self.mail_client.save_forward_draft(folder_id, message_id, **_fields(result)),
+        )
 
     def _open_reply(self, folder_id: str, message_id: str, reply_all: bool, detail) -> None:
         event = SimpleNamespace(message_id=message_id, reply_all=reply_all)

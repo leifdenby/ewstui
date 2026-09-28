@@ -44,6 +44,7 @@ class MessageTable(DataTable):
         Binding("h", "focus_folders", "Focus folders", show=False),
         Binding("r", "reply", "Reply"),
         Binding("R", "reply_all", "Reply all"),
+        Binding("f", "forward", "Forward"),
         Binding("d", "delete", "Delete"),
         Binding("space", "toggle_read", "Toggle read", show=False),
         Binding("P", "add_to_priority", "Add to priority (unset)"),
@@ -71,6 +72,11 @@ class MessageTable(DataTable):
         def __init__(self, message_id: str, reply_all: bool) -> None:
             self.message_id = message_id
             self.reply_all = reply_all
+            super().__init__()
+
+    class ForwardRequested(Message):
+        def __init__(self, message_id: str) -> None:
+            self.message_id = message_id
             super().__init__()
 
     class DeleteRequested(Message):
@@ -421,6 +427,11 @@ class MessageTable(DataTable):
         mid = self._current_message_id()
         if mid:
             self.post_message(self.ReplyRequested(mid, reply_all=True))
+
+    def action_forward(self) -> None:
+        mid = self._current_message_id()
+        if mid:
+            self.post_message(self.ForwardRequested(mid))
 
     def action_delete(self) -> None:
         if self._bulk("delete"):

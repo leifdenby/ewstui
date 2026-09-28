@@ -790,6 +790,23 @@ class MailClient:
             return
         item.reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
 
+    def forward(self, folder_id: str, message_id: str, subject: str, body: str, to: list[str],
+                cc: list[str] | None = None) -> None:
+        """Forwarded to `to` / `cc`: `body` on top, and Exchange puts the
+        original below it (its From / Sent / To / Subject header and text)
+        with its attachments."""
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        item.forward(subject=subject, body=body, to_recipients=to, cc_recipients=cc or None)
+
+    def save_forward_draft(self, folder_id: str, message_id: str, subject: str, body: str,
+                           to: list[str] | None = None, cc: list[str] | None = None) -> None:
+        """An unsent forward, saved to Drafts — the original and its
+        attachments stay with it (see forward)."""
+        item = self._folder_by_id(folder_id).get(id=message_id)
+        item.create_forward(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None).save(
+            self.account.drafts
+        )
+
     @property
     def my_address(self) -> str:
         """Your own address (left out of reply-all's recipients)."""

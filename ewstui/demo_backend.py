@@ -313,6 +313,15 @@ class DemoMailClient:
             {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body, "reply_all": reply_all}
         )
 
+    def forward(self, folder_id, message_id, subject, body, to, cc=None) -> None:
+        self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
+        self.sent.append({"forward_of": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body})
+
+    def save_forward_draft(self, folder_id, message_id, subject, body, to=None, cc=None) -> None:
+        original = self.get_message(folder_id, message_id)
+        # As Exchange saves it: the original below what you wrote.
+        self._add_draft(subject, f"{body}\n\n{original.body_text}", to or [], cc or [])
+
     my_address = "you@corp.example"
 
     def search(self, query: str, folder_id: str, limit: int = 50) -> list[MessageSummary]:
