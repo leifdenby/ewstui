@@ -245,6 +245,10 @@ class DemoMailClient:
             for m in msgs[offset : offset + limit]
         ]
 
+    def message_position(self, folder_id: str, message_id: str) -> int | None:
+        ids = [m.id for m in self._messages.get(folder_id, [])]
+        return ids.index(message_id) if message_id in ids else None
+
     def sent_folder_id(self) -> str:
         return "sent"
 

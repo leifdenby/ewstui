@@ -1,6 +1,8 @@
 """Enter / o in the priority view jumps to that email in the mail view."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from textual.widgets import Tabs
 
@@ -49,6 +51,40 @@ async def test_jump_to_email_in_another_folder(tmp_path):
     app = make_app(tmp_path, "(B) 2026-09-24 Weekly report @email id:s2 folder:sent from:you@corp.example\n")
     async with app.run_test(size=(160, 40)) as pilot:
         await jump(app, pilot)
+        assert_on(app, "sent", "s2", "Weekly report")
+
+
+def make_paged_app(tmp_path, lines: str, page_size: int) -> EwstuiApp:
+    todo = tmp_path / "todo.txt"
+    todo.write_text(lines)
+    cfg = config_from_args(["--demo", "--priority-file", str(todo), "--page-size", str(page_size)])
+    return EwstuiApp(DemoMailClient(page_size=page_size), DemoCalendarClient(), cfg)
+
+
+async def test_jump_to_email_older_than_the_loaded_page(tmp_path):
+    """Older than the first page of its folder: it's added to the list and
+    the cursor put on it, not left on the top email."""
+    app = make_paged_app(
+        tmp_path, "(A) 2026-09-24 Lunch Friday? @email id:m4 folder:inbox msgid:<m4@demo.corp.example>\n", page_size=2
+    )
+    async with app.run_test(size=(160, 40)) as pilot:
+        await jump(app, pilot)
+        await pilot.pause()
+        assert_on(app, "inbox", "m4", "Lunch Friday?")
+        assert app.current_message_id == "m4"
+        # the background refresh lists it too, until another folder is picked
+        assert "m4" in {m.id for m in app._fetch_messages("inbox")}
+        app.on_folder_list_folder_selected(SimpleNamespace(folder=SimpleNamespace(id="inbox")))
+        assert "m4" not in {m.id for m in app._fetch_messages("inbox")}
+
+
+async def test_jump_to_old_email_in_another_folder(tmp_path):
+    app = make_paged_app(
+        tmp_path, "(A) 2026-09-24 Report @email id:s2 folder:sent msgid:<s2@demo.corp.example>\n", page_size=1
+    )
+    async with app.run_test(size=(160, 40)) as pilot:
+        await jump(app, pilot)
+        await pilot.pause()
         assert_on(app, "sent", "s2", "Weekly report")
 
 

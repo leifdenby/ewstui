@@ -245,6 +245,9 @@ class EwstuiApp(App):
         # (entry key, folder id, message id, Message-ID) to show once the Mail
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
+        # (folder id, how many messages to list) when a jump needed more than
+        # a page of that folder; kept (refreshes too) until another folder is picked.
+        self._deeper_listing: tuple[str, int] | None = None
         self._message_cache = MessageCache()  # fully loaded messages, this session (see message_cache.py)
         # Your calendar on the days invites are for (the card's clashes and
         # day strip), by day; dropped on Ctrl+l and after answering an invite.
@@ -355,7 +358,10 @@ class EwstuiApp(App):
         Sent Items that belong to those conversations (Outlook-style).
         Safe to call from the refresh worker thread.
         """
-        messages = self.mail_client.list_messages(folder_id, limit=self.config.page_size)
+        limit = self.config.page_size
+        if self._deeper_listing and self._deeper_listing[0] == folder_id:
+            limit = max(limit, self._deeper_listing[1])
+        messages = self.mail_client.list_messages(folder_id, limit=limit)
         if not self.query_one("#messages", MessageTable).threaded:
             return messages
         try:
@@ -945,6 +951,7 @@ class EwstuiApp(App):
 
     def on_folder_list_folder_selected(self, event: FolderList.FolderSelected) -> None:
         self._close_search(refocus=False)  # another folder: a new start
+        self._deeper_listing = None  # back to one page
         self.select_folder(event.folder.id)
         self.query_one("#messages", MessageTable).focus()
 
@@ -1627,12 +1634,27 @@ class EwstuiApp(App):
         if folder_id not in {f.id for f in folder_list.folders}:
             return False
         folder_list.highlight_folder(folder_id)
+        self._deeper_listing = None
         self.select_folder(folder_id)
         table = self.query_one("#messages", MessageTable)
         try:
             row = table.get_row_index(message_id)
         except RowDoesNotExist:
-            return False
+            # Older than the first page: list the folder down to it.
+            try:
+                position = self.mail_client.message_position(folder_id, message_id)
+            except Exception:  # noqa: BLE001 - then it's looked for by Message-ID
+                log.warning("couldn't find the message's position", exc_info=True)
+                position = None
+            if position is None:
+                return False
+            # A few extra: messages received in the same second sort either way.
+            self._deeper_listing = (folder_id, position + 10)
+            self.select_folder(folder_id)
+            try:
+                row = table.get_row_index(message_id)
+            except RowDoesNotExist:
+                return False
         table.move_cursor(row=row)
         self.query_one("#preview", PreviewPane).focus()
         return True

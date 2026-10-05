@@ -522,6 +522,19 @@ class MailClient:
         return [_summary(item, folder_id) for item in qs[offset : offset + limit]]
 
     @retry_on_dead_connection
+    def message_position(self, folder_id: str, message_id: str) -> int | None:
+        """How many messages come before this one in list_messages' order
+        (newest first): how far to load to show it. None if it's not there."""
+        from exchangelib.errors import DoesNotExist
+
+        folder = self._folder_by_id(folder_id)
+        try:
+            item = folder.all().only("datetime_received").get(id=message_id)
+        except DoesNotExist:
+            return None
+        return folder.filter(datetime_received__gt=item.datetime_received).count()
+
+    @retry_on_dead_connection
     def search(self, query: str, folder_id: str, limit: int = 50) -> list[MessageSummary]:
         """Exchange's own search in one folder (words in the subject, body,
         people; a word also matches as the start of a longer one), newest
