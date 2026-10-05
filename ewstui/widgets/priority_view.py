@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from datetime import date
+
+from rich.text import Text
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
 
-from ..priority_store import PriorityEntry
+from ..priority_store import PriorityEntry, due_status
 
 _ASCII_A = ord("A")
 
 
 class PriorityView(DataTable):
-    """The local, todo.txt-backed priority list.
+    """The local, todo.txt-backed priority list, grouped by priority under
+    header rows (the cursor skips them); overdue items are red, items due
+    soon yellow.
 
     Normal mode: j/k/g/G to move, a capital letter (A-Z) sets the
     priority of the row under the cursor.
@@ -57,9 +62,12 @@ class PriorityView(DataTable):
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
-        self.add_columns("Pri", "Sel", "Created", "Subject", "From")
+        self.add_columns("Pri", "Sel", "Due", "Created", "Subject", "From")
         self._entries: list[PriorityEntry] = []
+        # What each table row shows: an entry, or None for a group header.
+        self._rows: list[PriorityEntry | None] = []
         self._visual_anchor: int | None = None
+        self.watch(self.app, "theme", self._redraw, init=False)  # colours come from the theme
 
     @property
     def in_visual_mode(self) -> bool:
@@ -86,26 +94,55 @@ class PriorityView(DataTable):
                 return e.message_id == entry.message_id
             return e.description == entry.description
 
-        for row, e in enumerate(self._entries):
-            if same(e):
+        for row, e in enumerate(self._rows):
+            if e is not None and same(e):
                 self.move_cursor(row=row)
                 return
 
     def _redraw(self) -> None:
+        """The entries grouped by priority (they come sorted A..Z, then
+        unprioritized), each group under a header row, tuxedo style.
+        Overdue items are red, items due soon yellow."""
         # Capture cursor position and selection *before* clear(), since
         # DataTable.clear() resets the cursor coordinate as a side effect
         # — reading self.cursor_row after that would silently compute the
         # wrong selection range for the '*' markers below.
         cursor_row = self.cursor_row if self.row_count else 0
         selected = self._selected_indices()
+        colours = self.app.theme_variables
+        status_style = {"overdue": colours.get("error", "red"), "soon": colours.get("warning", "yellow")}
+        header_style = f"bold {colours.get('accent', '')}"
+        today = date.today()
         self.clear()
-        for i, e in enumerate(self._entries):
-            pri = f"({e.priority})" if e.priority else "  -"
-            mark = "x" if e.completed else ("*" if i in selected else " ")
-            subject = e.description + ("  [dim](done)[/dim]" if e.completed else "")
-            self.add_row(pri, mark, e.creation_date or "", subject, e.kv.get("from", ""), key=e.key)
+        self._rows = []
+        group: object = object()  # no group yet
+        for e in self._entries:
+            if e.priority != group:
+                group = e.priority
+                label = f"({e.priority})" if e.priority else "(-)"
+                self.add_row(Text(label, style=header_style), "", "", "", "", "", key=f"group:{label}")
+                self._rows.append(None)
+            style = status_style.get(due_status(e, today), "")
+            mark = "x" if e.completed else ("*" if len(self._rows) in selected else " ")
+            subject = Text(e.description, style=style)
+            if e.completed:
+                subject.append("  (done)", style="dim")
+            due = Text(e.kv.get("due", ""), style=style)
+            self.add_row("", mark, due, e.creation_date or "", subject, e.kv.get("from", ""), key=e.key)
+            self._rows.append(e)
         if self.row_count:
-            self.move_cursor(row=min(cursor_row, self.row_count - 1))
+            self.move_cursor(row=self._entry_row(min(cursor_row, self.row_count - 1), 1))
+
+    def _entry_row(self, row: int, step: int) -> int:
+        """`row`, or if that's a group header the nearest entry row going in
+        direction `step` (+1 down, -1 up), or the other way if there's none."""
+        for direction in (step, -step):
+            r = row
+            while 0 <= r < len(self._rows):
+                if self._rows[r] is not None:
+                    return r
+                r += direction
+        return row
 
     def _selected_indices(self) -> set[int]:
         if self._visual_anchor is None:
@@ -114,40 +151,42 @@ class PriorityView(DataTable):
         return set(range(lo, hi + 1))
 
     def _selected_keys(self) -> set[str]:
-        return {self._entries[i].key for i in self._selected_indices() if i < len(self._entries)}
+        rows = [self._rows[i] for i in self._selected_indices() if i < len(self._rows)]
+        return {e.key for e in rows if e is not None}
 
     def _current_key(self) -> str | None:
         if self.row_count == 0:
             return None
-        try:
-            cell_key = self.coordinate_to_cell_key(self.cursor_coordinate)
-        except Exception:
-            return None
-        return cell_key.row_key.value
+        e = self._rows[self.cursor_row] if self.cursor_row < len(self._rows) else None
+        return e.key if e is not None else None
 
-    # -- navigation (extends selection live when in visual mode) ----------
+    # -- navigation (skips group headers; extends selection live in visual mode)
+
+    def _move_to(self, row: int, step: int) -> None:
+        if self.row_count:
+            self.move_cursor(row=self._entry_row(max(0, min(row, self.row_count - 1)), step))
+        if self.in_visual_mode:
+            self._redraw()
 
     def action_cursor_down(self) -> None:
-        super().action_cursor_down()
-        if self.in_visual_mode:
-            self._redraw()
+        self._move_to(self.cursor_row + 1, 1)
 
     def action_cursor_up(self) -> None:
-        super().action_cursor_up()
-        if self.in_visual_mode:
-            self._redraw()
+        self._move_to(self.cursor_row - 1, -1)
 
     def action_cursor_top(self) -> None:
-        if self.row_count:
-            self.move_cursor(row=0)
-        if self.in_visual_mode:
-            self._redraw()
+        self._move_to(0, 1)
 
     def action_cursor_bottom(self) -> None:
-        if self.row_count:
-            self.move_cursor(row=self.row_count - 1)
-        if self.in_visual_mode:
-            self._redraw()
+        self._move_to(self.row_count - 1, -1)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        # A click or page up/down can land on a header: step off it. (Look
+        # at where the cursor is now: the event may be stale, e.g. from the
+        # clear() in a redraw.)
+        row = self.cursor_row
+        if 0 <= row < len(self._rows) and self._rows[row] is None:
+            self.move_cursor(row=self._entry_row(row, 1))
 
     # -- visual selection ---------------------------------------------
 

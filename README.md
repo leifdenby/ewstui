@@ -224,8 +224,11 @@ way it's an unprioritized todo.txt line (no `(X)` prefix); set its
 priority later from the priority view.
 
 **Work the list**: press `2` (or click the **Priority** tab) to
-switch to the priority view. It's sorted `A` first through `Z`, then
-unprioritized, then by the date added.
+switch to the priority view. It's grouped by priority, tuxedo style —
+`(A)` first through `(Z)`, then unprioritized `(-)`, each under a
+header row the cursor skips — and by the date added within a group.
+Items whose `due:` date has passed are red; items due within two days
+are yellow.
 
 - `A`–`Z` on the row under your cursor — reprioritizes just that item.
 - `V` — start a visual selection at the current row (vim visual-line

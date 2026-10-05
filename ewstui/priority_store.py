@@ -451,6 +451,24 @@ def split_date_fields(note: str) -> tuple[str, dict[str, str]]:
     return " ".join(words), fields
 
 
+DUE_SOON_DAYS = 2  # due today, tomorrow or the day after: due soon
+
+
+def due_status(entry: PriorityEntry, today: date | None = None) -> str | None:
+    """'overdue' (due date passed), 'soon' (due within DUE_SOON_DAYS) or
+    None (no due date, a later one, or done)."""
+    due = entry.kv.get("due")
+    if entry.completed or not due:
+        return None
+    try:
+        days = (date.fromisoformat(due) - (today or date.today())).days
+    except ValueError:
+        return None
+    if days < 0:
+        return "overdue"
+    return "soon" if days <= DUE_SOON_DAYS else None
+
+
 def note_with_dates(note: str, entry: PriorityEntry) -> str:
     """The note to edit: its text plus the entry's due:/t:/dur: fields."""
     fields = [f"{k}:{entry.kv[k]}" for k in DATE_FIELDS if k in entry.kv]
