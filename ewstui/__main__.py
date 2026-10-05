@@ -37,11 +37,14 @@ def main(argv: list[str] | None = None) -> int:
             return _forget_password(cfg)
         if cfg.debug:
             print(f"Debug logging to {LOG_FILE.resolve()}", file=sys.stderr)
+        offered = None  # auth schemes the server advertises, once probed
         try:
             if cfg.ews_url:
-                auth.probe_endpoint(cfg.ews_url, verify_ssl=cfg.verify_ssl)
+                offered = auth.probe_endpoint(
+                    cfg.ews_url, verify_ssl=cfg.verify_ssl, auth_type=auth.password_auth_type(cfg)
+                )
             account = auth.get_account(cfg)
-            auth.verify_account(account)
+            auth.verify_account(account, offered=offered)
         except Exception as e:  # noqa: BLE001 - report anything, never start a blank TUI
             reason = str(e) if isinstance(e, auth.AuthError) else auth.explain_error(e)
             print(f"\nConnection failed: {reason}", file=sys.stderr)
@@ -49,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
                 traceback.print_exc()
             else:
                 print("Re-run with --debug for a traceback and full EWS traffic in the log.", file=sys.stderr)
-            _drop_rejected_keychain_password(cfg, e)
+            _drop_rejected_keychain_password(cfg, e, offered)
             return 1
         _offer_to_save_password(cfg, account)
         mail_client = MailClient(account, page_size=cfg.page_size)
@@ -109,16 +112,19 @@ def _offer_to_save_password(cfg, account) -> None:
     print("Saved. Use --forget-password to remove it.", file=sys.stderr)
 
 
-def _drop_rejected_keychain_password(cfg, error: Exception) -> None:
+def _drop_rejected_keychain_password(cfg, error: Exception, offered: list[str] | None = None) -> None:
     """A stored password the server rejects (e.g. after a password
     change) would fail on every start — remove it so the next run
-    prompts again.
+    prompts again. Kept if the server doesn't offer the auth method at
+    all (`offered`, from the probe): then the password was never tested.
     """
     from exchangelib.errors import UnauthorizedError
 
     from . import auth, keychain
 
     if cfg.password_source != "keychain" or not isinstance(error.__cause__, UnauthorizedError):
+        return
+    if auth.not_offered(auth.password_auth_type(cfg), offered):
         return
     username = auth.login_username(cfg)
     keychain.delete_password(username, cfg.ews_url)

@@ -37,7 +37,7 @@ def connect(monkeypatch):
 
     monkeypatch.setattr(auth, "probe_endpoint", lambda *a, **kw: None)
     monkeypatch.setattr(auth, "get_account", get_account)
-    monkeypatch.setattr(auth, "verify_account", lambda account: None)
+    monkeypatch.setattr(auth, "verify_account", lambda account, **kw: None)
     monkeypatch.setattr(entry.EwstuiApp, "run", lambda self: None)
     return state
 

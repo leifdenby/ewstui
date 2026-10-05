@@ -124,6 +124,21 @@ def test_rejected_stored_password_is_removed(login, typed, answer, memory_keyrin
     assert "rejected and has been removed" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(("offered", "kept"), [(["NTLM", "Negotiate"], True), (["Basic", "NTLM"], False)])
+def test_stored_password_kept_if_server_does_not_offer_the_method(
+    login, typed, answer, memory_keyring, monkeypatch, capsys, offered, kept
+):
+    """On VPN the internal server may offer only NTLM: a Basic 401 there
+    says nothing about the password, so it stays in the Keychain."""
+    key = ("ewstui", f"jdoe @ {URL}")
+    memory_keyring.items[key] = "good-password"
+    login.reject = True
+    monkeypatch.setattr(auth, "probe_endpoint", lambda *a, **kw: offered)
+    assert entry.main([*ARGS, "--auth", "basic"]) == 1
+    assert (key in memory_keyring.items) is kept
+    assert ("has been removed" in capsys.readouterr().err) is not kept
+
+
 def test_rejected_typed_password_is_not_offered_for_saving(login, typed, answer, memory_keyring):
     typed["password"] = "wrong"
     login.reject = True

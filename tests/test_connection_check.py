@@ -56,6 +56,35 @@ def test_probe_flags_oauth_only_servers(monkeypatch, capsys):
     assert "--auth oauth2" in capsys.readouterr().err
 
 
+def test_probe_returns_schemes_and_warns_if_basic_not_offered(probe_ok, capsys):
+    assert auth.probe_endpoint(URL, auth_type="basic") == ["NTLM", "Negotiate"]
+    err = capsys.readouterr().err
+    assert "doesn't offer Basic auth" in err
+    assert "VPN" in err and "--auth ntlm" in err
+
+
+@pytest.mark.parametrize("auth_type", ["NTLM", None])
+def test_probe_quiet_when_the_method_is_offered_or_unknown(probe_ok, capsys, auth_type):
+    auth.probe_endpoint(URL, auth_type=auth_type)
+    assert "doesn't offer" not in capsys.readouterr().err
+
+
+def test_probe_warns_if_ntlm_not_offered(monkeypatch, capsys):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse(401, {"WWW-Authenticate": 'Basic realm="x"'}))
+    auth.probe_endpoint(URL, auth_type="NTLM")
+    err = capsys.readouterr().err
+    assert "doesn't offer NTLM auth" in err and "--auth basic" in err
+
+
+def test_401_for_a_method_the_server_does_not_offer_says_so():
+    err = UnauthorizedError("Invalid credentials")
+    hint = auth.explain_error(err, "basic", ["NTLM", "Negotiate"])
+    assert "doesn't offer Basic auth" in hint and "--auth ntlm" in hint
+    assert "check the password" not in hint
+    assert "check the password" in auth.explain_error(err, "basic", ["Basic", "NTLM"])
+    assert "check the password" in auth.explain_error(err, "basic", [])  # nothing advertised: unknown
+
+
 @pytest.mark.parametrize(
     ("exc", "hint"),
     [

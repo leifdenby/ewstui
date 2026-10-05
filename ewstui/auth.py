@@ -338,11 +338,39 @@ def _get_account(cfg: Config) -> Account:
 
 PROBE_TIMEOUT = 15  # seconds
 
+# The WWW-Authenticate schemes each password method can log in with.
+_SCHEMES = {BASIC: {"basic"}, NTLM: {"ntlm", "negotiate"}}
 
-def probe_endpoint(url: str, verify_ssl: bool = True) -> None:
+
+def password_auth_type(cfg: Config) -> str | None:
+    """BASIC or NTLM when that's the method configured; None otherwise
+    (oauth2, kerberos, auto)."""
+    return {AuthMethod.BASIC: BASIC, AuthMethod.NTLM: NTLM}.get(cfg.auth_method)
+
+
+def not_offered(auth_type: str | None, offered: list[str] | None) -> bool:
+    """Did the probe show the server won't take this auth type at all?
+    (False if unknown: no probe, or nothing advertised.)"""
+    if not offered or auth_type not in _SCHEMES:
+        return False
+    return not _SCHEMES[auth_type] & {s.lower() for s in offered}
+
+
+def _not_offered_hint(auth_type: str, offered: list[str]) -> str:
+    other = "--auth ntlm --username 'DOMAIN\\user' (or --domain DOMAIN)" if auth_type == BASIC else "--auth basic"
+    return (
+        f"The server at this address doesn't offer {'Basic' if auth_type == BASIC else auth_type} auth (it offers {', '.join(offered)}), "
+        "so the password wasn't really checked.\n"
+        "  If this works elsewhere: on a VPN the same hostname often reaches the internal Exchange\n"
+        f"  server directly instead of the gateway. Try {other}."
+    )
+
+
+def probe_endpoint(url: str, verify_ssl: bool = True, auth_type: str | None = None) -> list[str]:
     """Unauthenticated GET against the EWS URL: checks DNS/TCP/TLS and
-    reports which auth schemes the server advertises. Raises AuthError
-    if the server can't be reached at all.
+    reports which auth schemes the server advertises (returned), with a
+    warning if `auth_type` isn't one of them. Raises AuthError if the
+    server can't be reached at all.
     """
     import requests
 
@@ -373,6 +401,9 @@ def probe_endpoint(url: str, verify_ssl: bool = True) -> None:
         _status(f"  Redirects to {r.headers.get('Location')} — the EWS URL may be wrong.")
     if schemes and schemes == ["Bearer"]:
         _status("  Note: server only offers Bearer (OAuth2); NTLM/Basic won't work — use --auth oauth2.")
+    elif not_offered(auth_type, schemes):
+        _status(f"  Note: {_not_offered_hint(auth_type, schemes)}")
+    return schemes
 
 
 VERIFY_TIMEOUT = 30  # seconds; exchangelib's own default is 120
@@ -383,7 +414,7 @@ _HANG_HINT = (
 )
 
 
-def verify_account(account: Account, timeout: int = VERIFY_TIMEOUT) -> None:
+def verify_account(account: Account, timeout: int = VERIFY_TIMEOUT, offered: list[str] | None = None) -> None:
     """One real authenticated EWS call (fetch the Inbox folder). Raises
     AuthError with a human-readable explanation on failure, including
     when the server doesn't answer within `timeout` seconds.
@@ -402,13 +433,15 @@ def verify_account(account: Account, timeout: int = VERIFY_TIMEOUT) -> None:
         _status(f"  OK: Inbox has {inbox.total_count} messages ({inbox.unread_count} unread)")
     except Exception as e:  # noqa: BLE001 - translate anything EWS throws
         auth_type = getattr(getattr(protocol, "config", None), "auth_type", None)
-        raise AuthError(explain_error(e, auth_type)) from e
+        raise AuthError(explain_error(e, auth_type, offered)) from e
     finally:
         hint.cancel()
         protocol.TIMEOUT = saved_timeout
 
 
-def explain_error(e: Exception, auth_type: str | None = None) -> str:
+def explain_error(e: Exception, auth_type: str | None = None, offered: list[str] | None = None) -> str:
+    """A plain-language explanation of a failed login. `offered`: the
+    auth schemes the probe saw (see probe_endpoint)."""
     import requests
     from exchangelib.errors import (
         ErrorNonExistentMailbox,
@@ -432,6 +465,8 @@ def explain_error(e: Exception, auth_type: str | None = None) -> str:
             + "".join(f"   - {t}\n" for t in tips)
             + "   - a different username form: --username 'DOMAIN\\user' or --domain DOMAIN"
         )
+    if isinstance(e, UnauthorizedError) and not_offered(auth_type, offered):
+        return f"{msg}\n  {_not_offered_hint(auth_type, offered)}"
     if isinstance(e, UnauthorizedError):
         other = {NTLM: "--auth basic", BASIC: "--auth ntlm"}.get(auth_type, "--auth ntlm or --auth basic")
         return (
