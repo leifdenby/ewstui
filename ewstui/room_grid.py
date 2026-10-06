@@ -338,6 +338,11 @@ class FindRoomScreen(ModalScreen[dict | None]):
         height: auto;
         max-height: 30;
     }
+    /* The pinned attendee rows and headers look like the rest of the grid,
+       not like DataTable's highlighted fixed rows. */
+    #room-grid > .datatable--fixed {
+        background: $surface;
+    }
     #room-help {
         color: $text-muted;
     }

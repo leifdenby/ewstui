@@ -122,6 +122,18 @@ async def test_attendees_become_rows_with_their_free_busy(tmp_path):
                         "attendees": ["boss@corp.example", "typo@corp.example"]}]
 
 
+async def test_pinned_rows_have_no_highlight(tmp_path):
+    app, people = make_app(tmp_path), FakePeople()
+    async with app.run_test(size=(160, 40)) as pilot:
+        screen = FindRoomScreen([ROOM], fetch_day, today=DAY, now=at(8), free_busy=people)
+        app.push_screen(screen)
+        await settle(app, pilot)
+        await add(app, pilot, "ann@corp.example")
+        grid = screen.query_one(RoomGrid)
+        fixed = grid.get_component_styles("datatable--fixed").background
+        assert fixed == grid.styles.background
+
+
 async def test_typing_into_the_new_row(tmp_path):
     """Keys go into the address, not to the grid (j, v, r, [ ...); the row
     shows what's typed; Backspace deletes; Esc cancels without closing."""
