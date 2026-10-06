@@ -935,7 +935,7 @@ class CalendarClient:
         if not emails:
             return []
         first = datetime.combine(start.date(), time.min)
-        last = datetime.combine(end.date(), time.min) + timedelta(days=1)
+        last = datetime.combine(max(start, end - timedelta(microseconds=1)).date(), time.min) + timedelta(days=1)
         views = self.account.protocol.get_free_busy_info(
             accounts=[(email, "Required", False) for email in emails],
             start=EWSDateTime.from_datetime(first).astimezone(self.tz),

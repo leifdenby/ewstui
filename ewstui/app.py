@@ -1785,6 +1785,7 @@ class EwstuiApp(App):
                     default_location=names,
                     title=f"New event in {names}",
                     free_busy=self.calendar_client.people_free_busy,
+                    attendees=result.get("attendees"),
                 ),
                 _on_event,
             )
@@ -1795,6 +1796,7 @@ class EwstuiApp(App):
                 self.calendar_client.rooms_day,
                 search=self.calendar_client.search_rooms,
                 on_room_added=self._save_found_room,
+                free_busy=self.calendar_client.people_free_busy,
             ),
             _book,
         )

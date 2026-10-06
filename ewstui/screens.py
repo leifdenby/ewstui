@@ -342,10 +342,11 @@ class NewEventScreen(ModalScreen[dict | None]):
         default_location: str = "",
         title: str = "New event",
         free_busy=None,
+        attendees: list[str] | None = None,
     ) -> None:
         super().__init__()
         self.free_busy = free_busy  # (emails, start, end) -> [RoomAvailability], or None
-        self.attendees: list[str] = []
+        self.attendees: list[str] = list(attendees or [])
         self._status: dict[str, object] = {}  # address -> RoomAvailability / CHECKING
         start = default_start or datetime.now()
         end = default_end or start + timedelta(hours=1)
@@ -368,7 +369,7 @@ class NewEventScreen(ModalScreen[dict | None]):
 
     def on_mount(self) -> None:
         self.query_one("#event-subject", Input).focus()
-        self._show_attendees()
+        self._check(list(self.attendees))  # ones brought along from the room finder
 
     def _times(self) -> tuple[datetime, datetime] | None:
         fmt = "%Y-%m-%d %H:%M"
@@ -400,7 +401,7 @@ class NewEventScreen(ModalScreen[dict | None]):
 
     def _check(self, emails: list[str]) -> None:
         times = self._times()
-        if self.free_busy is None or times is None or times[1] <= times[0]:
+        if not emails or self.free_busy is None or times is None or times[1] <= times[0]:
             self._show_attendees()
             return
         for email in emails:

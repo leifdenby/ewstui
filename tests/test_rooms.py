@@ -342,7 +342,7 @@ async def test_enter_books_free_slot_and_refuses_busy_one(tmp_path):
         grid.move_cursor(row=0, column=1 + 12)  # Havgus 14:00, free
         await pilot.press("enter")
         await pilot.pause()
-    assert results == [{"rooms": [ROOM_A], "start": at(14), "end": at(15)}]
+    assert results == [{"rooms": [ROOM_A], "start": at(14), "end": at(15), "attendees": []}]
 
 
 # -- visual selection (v) -----------------------------------------------------
@@ -384,7 +384,7 @@ async def test_visual_selection_books_several_rooms_for_the_span(tmp_path):
         assert "Havgus (8 pers), Stormen" in status and "14:00–15:30" in status
         await pilot.press("enter")
         await pilot.pause()
-    assert results == [{"rooms": [ROOM_A, ROOM_B], "start": at(14), "end": at(15, 30)}]
+    assert results == [{"rooms": [ROOM_A, ROOM_B], "start": at(14), "end": at(15, 30), "attendees": []}]
 
 
 async def test_visual_selection_over_a_busy_cell_is_refused(tmp_path):

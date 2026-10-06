@@ -70,6 +70,7 @@ ROOM_KEYS = [
     ("v", "select rooms × times"),
     ("Enter", "book cell or selection"),
     ("/", "find more rooms"),
+    ("a", "add attendees (shown under the rooms)"),
     ("r", "refresh availability"),
     ("t", "today"),
 ]
