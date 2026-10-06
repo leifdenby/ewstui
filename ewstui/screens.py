@@ -318,6 +318,7 @@ class NewEventScreen(ModalScreen[dict | None]):
     #event-box {
         width: 60%;
         height: auto;
+        max-height: 100%;  /* a short terminal scrolls the form rather than cutting off its end */
         border: round $accent;
         padding: 1 2;
         background: $surface;
@@ -356,7 +357,7 @@ class NewEventScreen(ModalScreen[dict | None]):
         self._title = title
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="event-box"):
+        with VerticalScroll(id="event-box"):
             yield Label(f"{self._title}  (Ctrl+S save · Ctrl+T Teams meeting instead · Esc cancel)", markup=False)
             yield Input(placeholder="Subject", id="event-subject")
             yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="event-start")
@@ -434,6 +435,8 @@ class NewEventScreen(ModalScreen[dict | None]):
             for email in self.attendees
         )
         box.update(text)
+        if self.attendees:
+            self.call_after_refresh(box.scroll_visible, animate=False)  # the newest one, on a short terminal
 
     def action_cancel(self) -> None:
         self.dismiss(None)

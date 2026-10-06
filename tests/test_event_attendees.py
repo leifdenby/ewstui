@@ -2,6 +2,7 @@
 or busy for the meeting's time (EWS free/busy, like the room finder)."""
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -152,6 +153,59 @@ async def test_enter_adds_each_attendee_and_shows_if_they_are_free(tmp_path):
         await pilot.press("ctrl+s")
         await settle(app, pilot)
     assert app.calendar_client.last_created_attendees == ["boss@corp.example", "a@corp.example", "c@corp.example"]
+
+
+async def test_typing_two_attendees_one_after_the_other(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        screen = await open_form(app, pilot)
+        screen.query_one("#event-attendees").focus()
+        await pilot.press(*"a@corp.example", "enter")
+        await settle(app, pilot)
+        await pilot.press(*"b@corp.example", "enter")
+        await settle(app, pilot)
+        assert screen.attendees == ["a@corp.example", "b@corp.example"]
+        assert "✓ b@corp.example  free" in shown(screen)
+
+
+async def test_on_a_short_terminal_the_attendee_list_stays_on_screen(tmp_path):
+    """The form is taller than 24 rows: it scrolls, and keeps the list in view."""
+    app = make_app(tmp_path)
+    async with app.run_test(size=(120, 24)) as pilot:
+        screen = await open_form(app, pilot)
+        screen.query_one("#event-attendees").focus()
+        for who in ("a@corp.example", "b@corp.example", "c@corp.example"):
+            await pilot.press(*who, "enter")
+            await settle(app, pilot)
+        listed = screen.query_one("#event-attendee-list").region
+        field = screen.query_one("#event-attendees").region
+        assert listed.height == 3 and listed.bottom <= 24 and field.y >= 0
+
+
+async def test_a_second_attendee_while_the_first_is_still_being_checked(tmp_path):
+    app = make_app(tmp_path)
+    gate = threading.Event()
+    lookups = []
+
+    def slow(emails, start, end):
+        lookups.append(list(emails))
+        gate.wait(5)  # a slow Exchange server
+        return [availability(e) for e in emails]
+
+    app.calendar_client.people_free_busy = slow
+    async with app.run_test(size=(140, 40)) as pilot:
+        screen = await open_form(app, pilot)
+        screen.query_one("#event-attendees").focus()
+        await pilot.press(*"a@corp.example", "enter")
+        await pilot.pause()
+        await pilot.press(*"b@corp.example", "enter")
+        await pilot.pause()
+        assert screen.attendees == ["a@corp.example", "b@corp.example"]
+        assert "… b@corp.example  checking…" in shown(screen)
+        gate.set()
+        await settle(app, pilot)
+        assert lookups == [["a@corp.example"], ["b@corp.example"]]
+        assert "✓ a@corp.example  free" in shown(screen) and "✓ b@corp.example  free" in shown(screen)
 
 
 async def test_a_new_time_checks_everyone_again(tmp_path):

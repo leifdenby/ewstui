@@ -120,6 +120,20 @@ async def test_attendees_become_rows_with_their_free_busy(tmp_path):
                         "attendees": ["boss@corp.example", "typo@corp.example"]}]
 
 
+async def test_typing_two_attendees_one_after_the_other(tmp_path):
+    app, people = make_app(tmp_path), FakePeople()
+    async with app.run_test(size=(160, 40)) as pilot:
+        screen = FindRoomScreen([ROOM], fetch_day, today=DAY, now=at(8), free_busy=people)
+        app.push_screen(screen)
+        await settle(app, pilot)
+        await pilot.press("a", *"ann@corp.example", "enter")
+        await settle(app, pilot)
+        await pilot.press(*"bob@corp.example", "enter")
+        await settle(app, pilot)
+        assert screen.attendees == ["ann@corp.example", "bob@corp.example"]
+        assert len(screen.query_one(RoomGrid).rows) == 3
+
+
 async def test_attendees_show_as_checking_until_looked_up_and_again_per_day(tmp_path):
     app, people = make_app(tmp_path), FakePeople()
     async with app.run_test(size=(160, 40)) as pilot:
