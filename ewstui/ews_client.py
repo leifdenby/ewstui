@@ -925,6 +925,32 @@ class CalendarClient:
             results.append(r)
         return RoomsDay(day=day, work_hours=_working_hours(own, day), rooms=results)
 
+    @retry_on_dead_connection
+    def people_free_busy(self, emails: list[str], start: datetime, end: datetime) -> list[RoomAvailability]:
+        """Whether each address is free over [start, end), in one EWS
+        GetUserAvailability call (asked for the whole days around it),
+        with the busy times overlapping it — for inviting people. Needs no
+        access to their calendars.
+        """
+        if not emails:
+            return []
+        first = datetime.combine(start.date(), time.min)
+        last = datetime.combine(end.date(), time.min) + timedelta(days=1)
+        views = self.account.protocol.get_free_busy_info(
+            accounts=[(email, "Required", False) for email in emails],
+            start=EWSDateTime.from_datetime(first).astimezone(self.tz),
+            end=EWSDateTime.from_datetime(last).astimezone(self.tz),
+            requested_view="Detailed",
+        )
+        start_ews = EWSDateTime.from_datetime(start).astimezone(self.tz)
+        end_ews = EWSDateTime.from_datetime(end).astimezone(self.tz)
+        results = []
+        for email, view in zip(emails, views):
+            r = availability_from_view(Room(name=email, email=email), view, start_ews, end_ews)
+            r.busy = [b._replace(start=_to_local(b.start, self.tz), end=_to_local(b.end, self.tz)) for b in r.busy]
+            results.append(r)
+        return results
+
     def create_event(
         self,
         subject: str,

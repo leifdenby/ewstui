@@ -1691,7 +1691,8 @@ class EwstuiApp(App):
             self.notify(f"Event created — invitation sent to {n} attendee{'s' if n != 1 else ''}" if n else "Event created")
             self.load_calendar_range()
 
-        self.push_screen(NewEventScreen(default_start=self.calendar_range_start), _on_result)
+        self.push_screen(NewEventScreen(default_start=self.calendar_range_start,
+                                        free_busy=self.calendar_client.people_free_busy), _on_result)
 
     def _schedule_in_teams(self, subject: str, start, end, attendees: list[str] | None = None,
                            location: str = "", content: str = "") -> None:
@@ -1783,6 +1784,7 @@ class EwstuiApp(App):
                     default_end=result["end"],
                     default_location=names,
                     title=f"New event in {names}",
+                    free_busy=self.calendar_client.people_free_busy,
                 ),
                 _on_event,
             )

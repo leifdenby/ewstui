@@ -6,10 +6,12 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static, TextArea
 
 from . import keymap
+from .ews_client import Room, RoomAvailability
 
 
 class ComposeScreen(ModalScreen[dict | None]):
@@ -243,10 +245,65 @@ class ComposeScreen(ModalScreen[dict | None]):
         self.dismiss(self._fields())
 
 
+CHECKING = "checking"  # an attendee's free/busy is being looked up
+FREE_STYLE, BUSY_STYLE, UNSURE_STYLE = "#7aa67a", "#e07a7a", "#d4b06a"
+
+
+def split_addresses(text: str) -> list[str]:
+    """"a@x, b@x; c@x" -> ["a@x", "b@x", "c@x"]."""
+    return [a.strip() for a in text.replace(";", ",").split(",") if a.strip()]
+
+
+def attendee_line(email: str, status, start: datetime | None = None) -> Text:
+    """One attendee in the new-event form: the address, then whether
+    they're free for the meeting — `status` is a RoomAvailability,
+    CHECKING, or None when free/busy isn't looked up (no calendar)."""
+    line = Text("  ")
+    if status is None:
+        return line.append(f"· {email}")
+    if status == CHECKING:
+        return line.append(f"… {email}  ").append("checking…", style="dim")
+    if status.error:
+        return line.append(f"? {email}  ", style=UNSURE_STYLE).append("couldn't check — is the address right?",
+                                                                      style="dim")
+    if status.free:
+        return line.append(f"✓ {email}  ", style=FREE_STYLE).append("free", style=FREE_STYLE)
+    slots = []
+    for b in sorted(status.busy, key=lambda b: b.start):
+        when = f"{b.start:%H:%M}–{b.end:%H:%M}"
+        if start is not None and b.start.date() != start.date():
+            when = f"{b.start:%a} {when}"
+        kind = {"Tentative": "tentative", "OOF": "out of office", "WorkingElsewhere": "working elsewhere"}.get(
+            b.busy_type, "busy")
+        slots.append(f"{kind} {when}" + (f" ({b.subject})" if b.subject else ""))
+    style = UNSURE_STYLE if all(b.busy_type == "Tentative" for b in status.busy) else BUSY_STYLE
+    return line.append(f"✗ {email}  ", style=style).append(", ".join(slots), style=style)
+
+
+class AttendeeInput(Input):
+    """The attendee field: Backspace with nothing typed asks to take the
+    last added attendee off the list."""
+
+    class RemoveLast(Message):
+        pass
+
+    def action_delete_left(self) -> None:
+        if not self.value:
+            self.post_message(self.RemoveLast())
+            return
+        super().action_delete_left()
+
+
 class NewEventScreen(ModalScreen[dict | None]):
     """New calendar event. Dismisses with a dict of field values, or None.
     Ctrl+T instead: the same plus "teams": True, to schedule it in Teams
-    (a Teams meeting, with its join link) rather than as a plain event."""
+    (a Teams meeting, with its join link) rather than as a plain event.
+
+    Attendees: type an address and press Enter to add it to the list
+    below the field (Backspace in the empty field takes the last one off
+    again). With `free_busy(emails, start, end)` each one is looked up and
+    shown as free or busy for the meeting's time, and looked up again
+    when the time changes."""
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -271,6 +328,11 @@ class NewEventScreen(ModalScreen[dict | None]):
     #event-notes {
         height: 6;
     }
+    #event-attendee-list {
+        height: auto;
+        max-height: 8;
+        margin-bottom: 1;
+    }
     """
 
     def __init__(
@@ -279,8 +341,12 @@ class NewEventScreen(ModalScreen[dict | None]):
         default_end: datetime | None = None,
         default_location: str = "",
         title: str = "New event",
+        free_busy=None,
     ) -> None:
         super().__init__()
+        self.free_busy = free_busy  # (emails, start, end) -> [RoomAvailability], or None
+        self.attendees: list[str] = []
+        self._status: dict[str, object] = {}  # address -> RoomAvailability / CHECKING
         start = default_start or datetime.now()
         end = default_end or start + timedelta(hours=1)
         self._start_default = start.strftime("%Y-%m-%d %H:%M")
@@ -295,32 +361,97 @@ class NewEventScreen(ModalScreen[dict | None]):
             yield Input(value=self._start_default, placeholder="Start (YYYY-MM-DD HH:MM)", id="event-start")
             yield Input(value=self._end_default, placeholder="End (YYYY-MM-DD HH:MM)", id="event-end")
             yield Input(value=self._location_default, placeholder="Location", id="event-location")
-            yield Input(placeholder="Attendees (addresses, comma separated) — they get an invitation",
-                        id="event-attendees")
+            yield AttendeeInput(placeholder="Attendee address, then Enter to add (Backspace when empty removes the last)",
+                                id="event-attendees")
+            yield Static(id="event-attendee-list")
             yield TextArea(id="event-notes", placeholder="Notes")
 
     def on_mount(self) -> None:
         self.query_one("#event-subject", Input).focus()
+        self._show_attendees()
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_save(self, teams: bool = False) -> None:
+    def _times(self) -> tuple[datetime, datetime] | None:
         fmt = "%Y-%m-%d %H:%M"
         try:
             start = datetime.strptime(self.query_one("#event-start", Input).value, fmt)
             end = datetime.strptime(self.query_one("#event-end", Input).value, fmt)
         except ValueError:
+            return None
+        return start, end
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "event-attendees":
+            return
+        event.stop()
+        new = [a for a in split_addresses(event.value) if a.casefold() not in {x.casefold() for x in self.attendees}]
+        event.input.value = ""
+        if new:
+            self.attendees += new
+            self._check(new)
+
+    def on_attendee_input_remove_last(self, event: AttendeeInput.RemoveLast) -> None:
+        if self.attendees:
+            self._status.pop(self.attendees.pop(), None)
+            self._show_attendees()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id in ("event-start", "event-end") and self.attendees and self._times():
+            self._check(list(self.attendees))  # a new time: are they free then?
+
+    def _check(self, emails: list[str]) -> None:
+        times = self._times()
+        if self.free_busy is None or times is None or times[1] <= times[0]:
+            self._show_attendees()
+            return
+        for email in emails:
+            self._status[email] = CHECKING
+        self._show_attendees()
+
+        def work() -> None:
+            try:
+                results = self.free_busy(emails, *times)
+            except Exception as e:  # noqa: BLE001 - say so, don't crash
+                results = [RoomAvailability(Room(email, email), free=False, error=str(e)) for email in emails]
+            self.app.call_from_thread(self._checked, times, emails, results)
+
+        self.run_worker(work, thread=True, group="event-free-busy")
+
+    def _checked(self, times, emails: list[str], results: list) -> None:
+        if times != self._times():
+            return  # the time changed meanwhile; a newer check is on its way
+        for email, result in zip(emails, results):
+            if email in self.attendees:
+                self._status[email] = result
+        self._show_attendees()
+
+    def _show_attendees(self) -> None:
+        box = self.query_one("#event-attendee-list", Static)
+        box.display = bool(self.attendees)
+        times = self._times()
+        text = Text("\n").join(
+            attendee_line(email, self._status.get(email) if self.free_busy else None, times[0] if times else None)
+            for email in self.attendees
+        )
+        box.update(text)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self, teams: bool = False) -> None:
+        times = self._times()
+        if times is None:
             self.app.bell()
             return
+        start, end = times
+        typed = [a for a in split_addresses(self.query_one("#event-attendees", Input).value)
+                 if a.casefold() not in {x.casefold() for x in self.attendees}]  # typed but not Enter'd
         self.dismiss(
             {
                 "subject": self.query_one("#event-subject", Input).value or "(no subject)",
                 "start": start,
                 "end": end,
                 "location": self.query_one("#event-location", Input).value,
-                "attendees": [a.strip() for a in self.query_one("#event-attendees", Input).value.replace(";", ",").split(",")
-                              if a.strip()],
+                "attendees": [*self.attendees, *typed],
                 "notes": self.query_one("#event-notes", TextArea).text.strip(),
                 "teams": teams,
             }

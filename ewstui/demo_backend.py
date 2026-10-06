@@ -482,6 +482,27 @@ class DemoCalendarClient:
             out.append(RoomAvailability(room=room, free=not busy, busy=busy))
         return RoomsDay(day=day, work_hours=None, rooms=out)  # None: UI falls back to 08:00-17:00
 
+    def people_free_busy(self, emails: list[str], start: datetime, end: datetime) -> list[RoomAvailability]:
+        """The demo boss is in the 1:1 (14:00-14:30) every day; everyone else is free."""
+        out = []
+        for email in emails:
+            busy = [
+                b for b in self.people_bookings(email, start, end)
+                if b.busy_type in BLOCKING_BUSY_TYPES and b.start < end and b.end > start
+            ]
+            out.append(RoomAvailability(room=Room(email, email), free=not busy, busy=busy))
+        return out
+
+    def people_bookings(self, email: str, start: datetime, end: datetime) -> list[BusySlot]:
+        if email.casefold() != "boss@corp.example":
+            return []
+        days = range((end.date() - start.date()).days + 1)
+        first = datetime.combine(start.date(), datetime.min.time())
+        return [
+            BusySlot(day.replace(hour=14), day.replace(hour=14, minute=30), "Busy", "1:1 with manager")
+            for day in (first + timedelta(days=i) for i in days)
+        ]
+
     def create_event(self, subject, start, end, location="", body="", resources=None, is_all_day=False,
                      attendees=None) -> None:
         self.last_created_attendees = list(attendees or [])
