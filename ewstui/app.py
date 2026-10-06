@@ -44,7 +44,7 @@ from .message_cache import MessageCache
 from .room_grid import FindRoomScreen
 from .theme import MUTED_SLATE, THEMES
 from .keymap import INVITE_HINTS, STATUS_HINTS
-from .widgets.calendar_view import CalendarView
+from .widgets.calendar_view import CalendarView, working_week_start
 from .widgets.chrome import StatusBar, TopBar
 from .widgets.folder_list import FolderList
 from .widgets.message_table import MessageTable
@@ -231,8 +231,9 @@ class EwstuiApp(App):
         self.config = config
         self.current_folder_id: str | None = None
         self.current_message_id: str | None = None
-        self.calendar_range_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.calendar_range_days = 7
+        # The calendar pane shows a working week, Monday-Friday; [ and ] move a week.
+        self.calendar_range_start = datetime.combine(working_week_start(date.today()), datetime.min.time())
+        self.calendar_range_days = 5
         self.priority_store = PriorityStore(config.priority_file)
         # Session-only; most recent last. Not persisted across restarts. A
         # list entry is a visual-selection batch, undone as one.
@@ -944,7 +945,8 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load calendar: {e}", severity="error", timeout=10)
             return
-        self.query_one("#calendar", CalendarView).set_events(events)
+        days = [start.date() + timedelta(days=i) for i in range(self.calendar_range_days)]
+        self.query_one("#calendar", CalendarView).set_events(events, days)
         self._update_status()
 
     # -- mail pane events -------------------------------------------------
@@ -1691,7 +1693,9 @@ class EwstuiApp(App):
             self.notify(f"Event created — invitation sent to {n} attendee{'s' if n != 1 else ''}" if n else "Event created")
             self.load_calendar_range()
 
-        self.push_screen(NewEventScreen(default_start=self.calendar_range_start,
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        in_range = self.calendar_range_start <= today < self.calendar_range_start + timedelta(days=self.calendar_range_days)
+        self.push_screen(NewEventScreen(default_start=today if in_range else self.calendar_range_start,
                                         free_busy=self.calendar_client.people_free_busy), _on_result)
 
     def _schedule_in_teams(self, subject: str, start, end, attendees: list[str] | None = None,
@@ -1825,7 +1829,7 @@ class EwstuiApp(App):
         self.load_calendar_range()
 
     def on_calendar_view_range_shift_requested(self, event: CalendarView.RangeShiftRequested) -> None:
-        self.calendar_range_start += timedelta(days=event.direction * self.calendar_range_days)
+        self.calendar_range_start += timedelta(weeks=event.direction)
         self.load_calendar_range()
 
     # -- global actions -----------------------------------------------

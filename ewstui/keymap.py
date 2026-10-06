@@ -58,7 +58,7 @@ PREVIEW_KEYS = [
 CALENDAR_KEYS = [
     ("n", "new event"),
     ("d", "delete event"),
-    ("[ / ]", "earlier / later"),
+    ("[ / ]", "previous / next week"),
     ("f", "find a free meeting room"),
     ("T", "join its Teams meeting / make it one in Teams"),
 ]

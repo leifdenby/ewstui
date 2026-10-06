@@ -69,8 +69,17 @@ async def test_calendar_tab_renders_mixed_timed_and_all_day_events(tmp_path, cli
         await pilot.pause()
         view = app.query_one("#calendar", CalendarView)
         rows = [view.get_row_at(i) for i in range(view.row_count)]
-    assert [(r[0], r[1], r[2]) for r in rows] == [
+    # Grouped by day, the date on a day's first row, a blank row between
+    # days, and a day with nothing on still listed.
+    assert [tuple(str(c) for c in r[:3]) for r in rows] == [
         ("Fri 2026-09-25", "09:00-10:00", "Meetup"),
-        ("Fri 2026-09-25", "11:30-12:15", "Catch-up"),
+        ("", "11:30-12:15", "Catch-up"),
+        ("", "", ""),
+        ("Sat 2026-09-26", "", "nothing on"),
+        ("", "", ""),
+        ("Sun 2026-09-27", "", "nothing on"),
+        ("", "", ""),
         ("Mon 2026-09-28", "all day", "Attending EWGLAM"),
+        ("", "", ""),
+        ("Tue 2026-09-29", "", "nothing on"),
     ]
