@@ -5,9 +5,10 @@ also be typed; Enter on a free cell books from that slot for the chosen
 duration, or `v` selects a rectangle of rooms × times and Enter books
 all those rooms for that span in one invite.
 
-`a` (or Tab) goes to the attendees field: an address + Enter adds that
-person as a row under the rooms, showing when they're busy that day, so
-you can pick a time everyone's free; they're invited along with the room.
+`a` adds an attendee: type the address into the new row and press Enter.
+Attendees are listed above the rooms (and stay put while the rooms
+scroll), showing when they're busy that day, so you can pick a time
+everyone's free; `x` takes one off. They're invited along with the room.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from textual.widgets import DataTable, Input, Label, ListItem, ListView
 from textual.worker import get_current_worker
 
 from .ews_client import DEFAULT_WORK_HOURS, Room, RoomAvailability, RoomMatch, RoomsDay
-from .screens import AttendeeInput, split_addresses
+from .screens import split_addresses
 
 SLOT = timedelta(minutes=30)
 FREE = Text(" · ", style="green")
@@ -43,7 +44,9 @@ SELECTED = {
     "unknown": Text(" ? ", style="bold black on yellow"),
     "checking": Text(" … ", style="black on grey50"),
 }
-PERSON_PREFIX = "person:"  # row keys of attendees, so they never clash with a room's
+# Row keys of the rows that aren't rooms, so they never clash with a room's address
+PERSON_PREFIX = "person:"
+PEOPLE_HEADER, ROOMS_HEADER, EDIT_ROW = "header:attendees", "header:rooms", "edit:attendee"
 
 
 def day_slots(day: date, hours: tuple[time, time]) -> list[datetime]:
@@ -96,12 +99,15 @@ class RoomGrid(DataTable):
         Binding("t", "today", "Today"),
         Binding("slash", "search", "Search rooms"),
         Binding("r", "refresh", "Refresh"),
-        Binding("a", "attendees", "Add attendees"),
+        Binding("a", "add_attendee", "Add attendee"),
+        Binding("x", "remove_attendee", "Remove attendee", show=False),
     ]
 
     # Visual-mode anchor (row, column) where `v` was pressed; the
     # selection is the rectangle between it and the cursor.
     anchor: tuple[int, int] | None = None
+    # The address being typed into a new attendee row (after `a`), or None.
+    editing: str | None = None
 
     class DayShift(Message):
         def __init__(self, days: int | None) -> None:
@@ -123,11 +129,43 @@ class RoomGrid(DataTable):
     def action_refresh(self) -> None:
         self.post_message(self.RefreshRequested())
 
-    class AttendeesRequested(Message):
-        """a: go to the attendees field."""
+    class EditChanged(Message):
+        """The typed attendee address changed (or typing started)."""
 
-    def action_attendees(self) -> None:
-        self.post_message(self.AttendeesRequested())
+    class EditDone(Message):
+        def __init__(self, text: str | None) -> None:
+            self.text = text  # None: cancelled with Esc
+            super().__init__()
+
+    class RemoveAttendeeRequested(Message):
+        """x: take the attendee under the cursor off."""
+
+    def action_add_attendee(self) -> None:
+        self.editing = ""
+        self.post_message(self.EditChanged())
+
+    def action_remove_attendee(self) -> None:
+        self.post_message(self.RemoveAttendeeRequested())
+
+    def on_key(self, event) -> None:
+        """While typing an attendee, every key goes into the address (none
+        of the grid's own keys apply): Enter adds it, Esc cancels."""
+        if self.editing is None:
+            return
+        event.stop()
+        event.prevent_default()
+        if event.key == "enter":
+            text, self.editing = self.editing, None
+            self.post_message(self.EditDone(text))
+        elif event.key == "escape":
+            self.editing = None
+            self.post_message(self.EditDone(None))
+        elif event.key == "backspace":
+            self.editing = self.editing[:-1]
+            self.post_message(self.EditChanged())
+        elif event.is_printable and event.character:
+            self.editing += event.character
+            self.post_message(self.EditChanged())
 
     def action_shift_day(self, days: int) -> None:
         self.post_message(self.DayShift(days))
@@ -296,9 +334,6 @@ class FindRoomScreen(ModalScreen[dict | None]):
     #room-duration {
         width: 8;
     }
-    #room-attendees {
-        width: 1fr;
-    }
     #room-grid {
         height: auto;
         max-height: 30;
@@ -334,7 +369,8 @@ class FindRoomScreen(ModalScreen[dict | None]):
         self._cache: dict[date, RoomsDay] = {}
         self._shown: RoomsDay | None = None
         self._slots: list[datetime] = []
-        self._kinds: list[list[str]] = []  # per row, per slot: a CELL/SELECTED key
+        self._kinds: list[list[str] | None] = []  # per row, per slot: a CELL/SELECTED key; None: not a room/person
+        self._room_offset = 0  # grid row of the first room (after the attendees, if any)
         self._painted: set[tuple[int, int]] = set()  # cells currently drawn as selected
 
     def compose(self) -> ComposeResult:
@@ -345,13 +381,11 @@ class FindRoomScreen(ModalScreen[dict | None]):
                 yield Input(value=self._day.isoformat(), placeholder="YYYY-MM-DD", id="room-date")
                 yield Label("Duration (min)")
                 yield Input(value="60", placeholder="60", id="room-duration")
-                yield Label("Attendees")
-                yield AttendeeInput(placeholder="address + Enter (Backspace removes the last)", id="room-attendees")
             yield RoomGrid(id="room-grid", cursor_type="cell", zebra_stripes=True)
             yield Label("", id="room-status", markup=False)
             yield Label(
                 "[/] day · j/k room · h/l time · v select rooms × times · Enter book · / find a room · "
-                "a add attendees · r refresh · t today · Tab edit date · Esc close",
+                "a add attendee · x remove attendee · r refresh · t today · Tab edit date · Esc close",
                 id="room-help",
                 markup=False,  # "[/]" would otherwise parse as a closing tag
             )
@@ -399,30 +433,53 @@ class FindRoomScreen(ModalScreen[dict | None]):
         self.query_one("#room-title", Label).update(
             f"Rooms — {result.day:%A %d %B %Y} · {hours[0]:%H:%M}–{hours[1]:%H:%M} ({source})"
         )
+        keep_key = self._key_at_cursor() if keep is not None else None
         grid.clear(columns=True)
-        grid.add_column("Room", key="room")
+        # Wide enough for every name up front (rather than widening once the
+        # grid is idle), so rebuilding it — on each attendee's answer — never
+        # flickers; room to type an address in the new row.
+        names = [r.room.name for r in result.rooms] + [f"👤 {e} " for e in self.attendees] + ["Attendees"]
+        width = max(len(n) for n in names) + 1
+        grid.add_column("Room", key="room", width=max(width, 32) if grid.editing is not None else width)
         for slot in self._slots:
             grid.add_column(slot.strftime("%H:%M") if slot.minute == 0 else "  :30", key=slot.isoformat())
         self._kinds, self._painted = [], set()
+        blank = [""] * len(self._slots)
+        # Attendees on top, under their own header, pinned while the rooms scroll.
+        if self.attendees or grid.editing is not None:
+            self._fetch_people(result.day,
+                               [e for e in self.attendees if (result.day, e.casefold()) not in self._people])
+            self._kinds.append(None)
+            grid.add_row(Text("Attendees", style="bold"), *blank, key=PEOPLE_HEADER)
+            for email in self.attendees:
+                kinds = self._row_kinds(self._person(email, result.day))
+                self._kinds.append(kinds)
+                grid.add_row(Text(f"👤 {email}", style="italic"), *(CELL[k] for k in kinds), key=PERSON_PREFIX + email)
+            if grid.editing is not None:
+                self._kinds.append(None)
+                grid.add_row(self._edit_label(), *blank, key=EDIT_ROW)
+            self._kinds.append(None)
+            grid.add_row(Text("Rooms", style="bold"), *blank, key=ROOMS_HEADER)
+        self._room_offset = len(self._kinds)
+        grid.fixed_rows = self._room_offset
         for r in result.rooms:
             kinds = self._row_kinds(r)
             self._kinds.append(kinds)
             grid.add_row(Text(r.room.name), *(CELL[k] for k in kinds), key=r.room.email)
-        self._fetch_people(result.day, [e for e in self.attendees if (result.day, e.casefold()) not in self._people])
-        for email in self.attendees:
-            kinds = self._row_kinds(self._person(email, result.day))
-            self._kinds.append(kinds)
-            grid.add_row(Text(f"👤 {email}", style="italic"), *(CELL[k] for k in kinds), key=PERSON_PREFIX + email)
 
-        if keep is not None:
-            grid.move_cursor(row=keep.row, column=keep.column, animate=False)
+        keys = [row.key.value for row in grid.ordered_rows]
+        if grid.editing is not None:
+            grid.move_cursor(row=keys.index(EDIT_ROW), column=keep.column if keep else 1, animate=False)
+        elif keep is not None:
+            row = keys.index(keep_key) if keep_key in keys else min(keep.row, len(keys) - 1)
+            grid.move_cursor(row=max(row, 0), column=keep.column, animate=False)
         else:
             upcoming = next((i for i, s in enumerate(self._slots) if s >= self._now), 0)
-            grid.move_cursor(row=0, column=upcoming + 1, animate=False)
+            grid.move_cursor(row=self._room_offset, column=upcoming + 1, animate=False)
         if self._focus_room is not None:
             emails = [r.room.email for r in result.rooms]
             if self._focus_room in emails:
-                grid.move_cursor(row=emails.index(self._focus_room), animate=False)
+                grid.move_cursor(row=self._room_offset + emails.index(self._focus_room), animate=False)
             self._focus_room = None
         self._paint_selection()  # a selection survives attendees being added or looked up
         if not result.rooms:
@@ -474,14 +531,43 @@ class FindRoomScreen(ModalScreen[dict | None]):
         if self._shown is not None and day == self._shown.day:
             self._show(self._shown)
 
-    def on_room_grid_attendees_requested(self, event: RoomGrid.AttendeesRequested) -> None:
-        self.query_one("#room-attendees", Input).focus()
+    def _key_at_cursor(self) -> str | None:
+        grid = self.query_one(RoomGrid)
+        try:
+            return grid.coordinate_to_cell_key(grid.cursor_coordinate).row_key.value
+        except Exception:  # noqa: BLE001 - an empty grid
+            return None
 
-    def on_attendee_input_remove_last(self, event: AttendeeInput.RemoveLast) -> None:
-        if self.attendees:
-            self.attendees.pop()
-            if self._shown is not None:
-                self._show(self._shown)
+    def _edit_label(self) -> Text:
+        return Text("👤 ", style="italic").append(self.query_one(RoomGrid).editing or "").append("▏", style="reverse")
+
+    def on_room_grid_edit_changed(self, event: RoomGrid.EditChanged) -> None:
+        grid = self.query_one(RoomGrid)
+        if self._shown is None:  # nothing to add a row to yet
+            grid.editing = None
+            self.app.bell()
+            return
+        if EDIT_ROW in grid.rows:
+            grid.update_cell(EDIT_ROW, "room", self._edit_label())
+        else:
+            grid.cancel_visual()
+            self._show(self._shown)
+        self._set_status("Type the attendee's address — Enter to add, Esc to cancel")
+
+    def on_room_grid_edit_done(self, event: RoomGrid.EditDone) -> None:
+        if event.text and event.text.strip():
+            self._add_attendees(event.text)
+        elif self._shown is not None:
+            self._show(self._shown)
+
+    def on_room_grid_remove_attendee_requested(self, event: RoomGrid.RemoveAttendeeRequested) -> None:
+        person = self._person_cell(any_column=True)
+        if person is None:
+            self.app.bell()
+            return
+        self.attendees.remove(person[0])
+        if self._shown is not None:
+            self._show(self._shown)
 
     def _add_attendees(self, text: str) -> None:
         known = {e.casefold() for e in self.attendees}
@@ -524,9 +610,10 @@ class FindRoomScreen(ModalScreen[dict | None]):
         if self._shown is None or not self._shown.rooms:
             return None
         row, col = grid.cursor_coordinate
-        if col == 0 or not (0 <= row < len(self._shown.rooms)) or col - 1 >= len(self._slots):
-            return None  # the room-name column
-        return self._shown.rooms[row], self._slots[col - 1]
+        i = row - self._room_offset
+        if col == 0 or not (0 <= i < len(self._shown.rooms)) or col - 1 >= len(self._slots):
+            return None  # the room-name column, or not a room's row
+        return self._shown.rooms[i], self._slots[col - 1]
 
     def _selected_booking(self) -> tuple[list[RoomAvailability], datetime, datetime] | None:
         """(rooms, start, end) covered by the visual selection, or None."""
@@ -534,7 +621,8 @@ class FindRoomScreen(ModalScreen[dict | None]):
         if sel is None or self._shown is None or not self._slots:
             return None
         rows, cols = sel
-        rooms = [self._shown.rooms[r] for r in rows if r < len(self._shown.rooms)]
+        rooms = [self._shown.rooms[r - self._room_offset] for r in rows
+                 if 0 <= r - self._room_offset < len(self._shown.rooms)]
         first, last = cols.start - 1, min(cols.stop - 1, len(self._slots)) - 1
         return rooms, self._slots[first], self._slots[last] + SLOT
 
@@ -543,7 +631,8 @@ class FindRoomScreen(ModalScreen[dict | None]):
         grid = self.query_one(RoomGrid)
         sel = grid.selection()
         wanted = {(r, c) for r in sel[0] for c in sel[1]} if sel else set()
-        wanted = {(r, c) for r, c in wanted if r < len(self._kinds) and c - 1 < len(self._slots)}
+        wanted = {(r, c) for r, c in wanted
+                  if r < len(self._kinds) and self._kinds[r] is not None and c - 1 < len(self._slots)}
         for r, c in wanted ^ self._painted:
             style = SELECTED if (r, c) in wanted else CELL
             grid.update_cell_at(Coordinate(r, c), style[self._kinds[r][c - 1]])
@@ -569,14 +658,17 @@ class FindRoomScreen(ModalScreen[dict | None]):
             self._set_status(f"{names} · {start:%H:%M}–{end:%H:%M} — Enter to book, Esc/v to cancel"
                              + self._people_note(start, end))
 
-    def _person_cell(self) -> tuple[str, datetime] | None:
-        """(attendee, slot) under the cursor, if it's on an attendee's row."""
-        if self._shown is None:
+    def _person_cell(self, any_column: bool = False) -> tuple[str, datetime | None] | None:
+        """(attendee, slot) under the cursor, if it's on an attendee's row
+        (with `any_column`, also on the name column: slot None)."""
+        if self._shown is None or not self.attendees:
             return None
         row, col = self.query_one(RoomGrid).cursor_coordinate
-        i = row - len(self._shown.rooms)
-        if col == 0 or not (0 <= i < len(self.attendees)) or col - 1 >= len(self._slots):
+        i = row - 1  # under the "Attendees" header
+        if not (0 <= i < len(self.attendees)) or col - 1 >= len(self._slots):
             return None
+        if col == 0:
+            return (self.attendees[i], None) if any_column else None
         return self.attendees[i], self._slots[col - 1]
 
     def _describe_person(self, email: str, start: datetime, duration: timedelta | None) -> None:
@@ -592,6 +684,9 @@ class FindRoomScreen(ModalScreen[dict | None]):
             self._set_status(f"{email} is busy {clashes(r, start, end)}")
 
     def _describe_cursor(self) -> None:
+        if self.query_one(RoomGrid).editing is not None:
+            self._set_status("Type the attendee's address — Enter to add, Esc to cancel")
+            return
         if self.query_one(RoomGrid).anchor is not None:
             self._describe_selection()
             return
@@ -689,10 +784,6 @@ class FindRoomScreen(ModalScreen[dict | None]):
         self.load_day(self._now.date() if event.days is None else self._day + timedelta(days=event.days))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "room-attendees":  # stay in the field, to add the next one
-            event.input.value = ""
-            self._add_attendees(event.value)
-            return
         if event.input.id == "room-date":
             try:
                 day = date.fromisoformat(event.value.strip())
@@ -712,12 +803,5 @@ class FindRoomScreen(ModalScreen[dict | None]):
         grid = self.query_one(RoomGrid)
         if grid.anchor is not None:  # Esc leaves visual mode first, like vim
             grid.cancel_visual()
-            return
-        if self.focused is self.query_one("#room-attendees"):  # done adding attendees: back to the grid
-            attendees = self.query_one("#room-attendees", Input)
-            if attendees.value.strip():
-                self._add_attendees(attendees.value)
-                attendees.value = ""
-            grid.focus()
             return
         self.dismiss(None)

@@ -67,9 +67,14 @@ def row(screen, i) -> list:
 
 
 async def add(app, pilot, text):
-    app.screen.query_one("#room-attendees", Input).value = text
-    await pilot.press("enter")
+    """a, type the address into the new row, Enter."""
+    await pilot.press("a", *text, "enter")
     await settle(app, pilot)
+
+
+def names(screen) -> list[str]:
+    grid = screen.query_one(RoomGrid)
+    return [str(grid.get_cell_at((i, 0))) for i in range(grid.row_count)]
 
 
 async def test_attendees_become_rows_with_their_free_busy(tmp_path):
@@ -78,22 +83,20 @@ async def test_attendees_become_rows_with_their_free_busy(tmp_path):
         screen = FindRoomScreen([ROOM], fetch_day, today=DAY, now=at(8), free_busy=people)
         app.push_screen(screen, results.append)
         await settle(app, pilot)
-        await pilot.press("a")
-        assert screen.focused is screen.query_one("#room-attendees")
-        await add(app, pilot, "boss@corp.example, typo@corp.example")
+        await add(app, pilot, "boss@corp.example,typo@corp.example")
         await add(app, pilot, "ann@corp.example")
         assert screen.attendees == ["boss@corp.example", "typo@corp.example", "ann@corp.example"]
+        assert names(screen) == ["Attendees", "👤 boss@corp.example", "👤 typo@corp.example", "👤 ann@corp.example",
+                                 "Rooms", "Havgus"]
+        grid = screen.query_one(RoomGrid)
+        assert grid.fixed_rows == 5  # attendees stay in view while the rooms scroll
         assert people.calls[0][1:] == (at(0), at(0) + timedelta(days=1))  # the whole shown day
 
         ten = 1 + 4  # 08:00 + 4 half hours
         boss, typo, ann = row(screen, 1), row(screen, 2), row(screen, 3)
-        assert boss[0].plain == "👤 boss@corp.example"
         assert boss[ten] is BUSY and boss[ten + 2] is FREE and typo[ten] is UNKNOWN and ann[ten] is FREE
 
-        await pilot.press("escape")  # out of the field, back to the grid (not closing)
-        assert app.screen is screen and screen.focused is screen.query_one(RoomGrid)
-        grid = screen.query_one(RoomGrid)
-        grid.move_cursor(row=0, column=ten)
+        grid.move_cursor(row=5, column=ten)
         await pilot.pause()
         assert "Havgus is free 10:00–11:00" in status(screen)
         assert "busy: boss@corp.example (10:00–11:00 (Board))" in status(screen)
@@ -106,32 +109,65 @@ async def test_attendees_become_rows_with_their_free_busy(tmp_path):
         await pilot.pause()
         assert app.screen is screen and "attendee" in status(screen)
 
-        screen.query_one("#room-attendees").focus()
-        await pilot.press("backspace")  # empty field: ann off again
+        grid.move_cursor(row=3, column=0)
+        await pilot.press("x")  # ann off again
         await settle(app, pilot)
         assert screen.attendees == ["boss@corp.example", "typo@corp.example"]
-        assert len(grid.rows) == 3
+        assert names(screen)[-2:] == ["Rooms", "Havgus"] and grid.row_count == 5
 
-        grid.focus()
-        grid.move_cursor(row=0, column=ten + 2)
+        grid.move_cursor(row=4, column=ten + 2)
         await pilot.press("enter")
         await pilot.pause()
     assert results == [{"rooms": [ROOM], "start": at(11), "end": at(12),
                         "attendees": ["boss@corp.example", "typo@corp.example"]}]
 
 
-async def test_typing_two_attendees_one_after_the_other(tmp_path):
+async def test_typing_into_the_new_row(tmp_path):
+    """Keys go into the address, not to the grid (j, v, r, [ ...); the row
+    shows what's typed; Backspace deletes; Esc cancels without closing."""
     app, people = make_app(tmp_path), FakePeople()
     async with app.run_test(size=(160, 40)) as pilot:
         screen = FindRoomScreen([ROOM], fetch_day, today=DAY, now=at(8), free_busy=people)
         app.push_screen(screen)
         await settle(app, pilot)
-        await pilot.press("a", *"ann@corp.example", "enter")
-        await settle(app, pilot)
-        await pilot.press(*"bob@corp.example", "enter")
-        await settle(app, pilot)
+        grid = screen.query_one(RoomGrid)
+        await pilot.press("a", *"jv[r]x", "backspace")
+        await pilot.pause()
+        assert names(screen) == ["Attendees", "👤 jv[r]▏", "Rooms", "Havgus"]
+        assert grid.cursor_row == 1 and grid.anchor is None and screen._day == DAY
+        assert "Enter to add, Esc to cancel" in status(screen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is screen and screen.attendees == [] and names(screen) == ["Havgus"]
+
+        await add(app, pilot, "ann@corp.example")
+        await add(app, pilot, "bob@corp.example")
         assert screen.attendees == ["ann@corp.example", "bob@corp.example"]
-        assert len(screen.query_one(RoomGrid).rows) == 3
+        assert names(screen) == ["Attendees", "👤 ann@corp.example", "👤 bob@corp.example", "Rooms", "Havgus"]
+
+        await pilot.press("a", "enter")  # nothing typed: nothing added
+        await settle(app, pilot)
+        assert screen.attendees == ["ann@corp.example", "bob@corp.example"] and grid.row_count == 5
+
+
+async def test_with_many_rooms_the_attendees_are_on_screen(tmp_path):
+    """The original bug: attendees went below a long room list, out of sight."""
+    app, people = make_app(tmp_path), FakePeople()
+    rooms = [Room(f"Room {i}", f"room{i}@corp.example") for i in range(40)]
+    async with app.run_test(size=(160, 40)) as pilot:
+        screen = FindRoomScreen(rooms, fetch_day, today=DAY, now=at(8), free_busy=people)
+        app.push_screen(screen)
+        await settle(app, pilot)
+        await add(app, pilot, "ann@corp.example")
+        await add(app, pilot, "bob@corp.example")
+        grid = screen.query_one(RoomGrid)
+        grid.move_cursor(row=grid.row_count - 1)  # scroll down to the last room
+        await settle(app, pilot)
+        await pilot.pause()  # column widths catch up on an idle tick
+        lines = [grid.render_line(y).text.strip() for y in range(grid.size.height)]
+        assert grid.scroll_y > 0 and any(line.startswith("Room 39") for line in lines)
+        assert [line.split("  ")[0] for line in lines[1:5]] == [
+            "Attendees", "👤 ann@corp.example", "👤 bob@corp.example", "Rooms"]  # pinned above the scrolled rooms
 
 
 async def test_attendees_show_as_checking_until_looked_up_and_again_per_day(tmp_path):
@@ -163,12 +199,11 @@ async def test_attendees_from_the_room_finder_are_invited(tmp_path):
         await pilot.press("3", "f")
         await settle(app, pilot)
         screen = app.screen
-        await pilot.press("a")
         await add(app, pilot, "boss@corp.example")
-        await pilot.press("escape")
         grid = screen.query_one(RoomGrid)
         two_pm = datetime.combine(screen._day, time(14))
-        grid.move_cursor(row=1, column=1 + screen._slots.index(two_pm))  # Aquarium 14:00
+        # Attendees, boss, Rooms, Room 4B, then Aquarium
+        grid.move_cursor(row=4, column=1 + screen._slots.index(two_pm))  # Aquarium 14:00
         await pilot.pause()
         assert "busy: boss@corp.example" in status(screen)
         await pilot.press("enter")
