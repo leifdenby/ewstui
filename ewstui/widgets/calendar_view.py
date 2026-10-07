@@ -73,22 +73,33 @@ class CalendarView(DataTable):
     def set_events(self, events: list[EventSummary], days: list[date] | None = None) -> None:
         """Events grouped by day, a blank row between days. With `days`,
         each of those days is listed, also one with nothing on, and only
-        those (an event spanning several days shows on the first)."""
+        those (an event spanning several days shows on the first). Days
+        before today are greyed out, and the cursor starts at today (or the
+        first day after it)."""
         self.clear()
+        today = date.today()
         by_day: dict[date, list[EventSummary]] = {}
         for ev in sorted(events, key=lambda e: e.start):
             by_day.setdefault(ev.start.date(), []).append(ev)
         if days is not None:
             by_day = {d: by_day.get(d, []) for d in days}
+        start_row = None
         for i, (day, day_events) in enumerate(sorted(by_day.items())):
             if i:
                 self.add_row("", "", "", "", key=f"{GAP}{day}")
-            label = Text(day.strftime("%a %Y-%m-%d"), style="bold" if day == date.today() else "")
+            if start_row is None and day >= today:
+                start_row = self.row_count
+            style = "dim" if day < today else ""
+            label = Text(day.strftime("%a %Y-%m-%d"), style="bold" if day == today else style)
             if not day_events:
                 self.add_row(label, "", Text("nothing on", style="dim"), "", key=f"{EMPTY_DAY}{day}")
             for n, ev in enumerate(day_events):
                 time_str = "all day" if ev.is_all_day else f"{ev.start.strftime('%H:%M')}-{ev.end.strftime('%H:%M')}"
-                self.add_row(label if n == 0 else "", time_str, ev.subject, ev.location, key=ev.id)
+                cells = (Text(time_str, style=style), Text(ev.subject, style=style), Text(ev.location, style=style))
+                self.add_row(label if n == 0 else "", *cells, key=ev.id)
+        if start_row:
+            self._row = start_row
+            self.move_cursor(row=start_row)
 
     def _current_event_id(self) -> str | None:
         if self.row_count == 0:
