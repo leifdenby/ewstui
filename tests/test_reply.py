@@ -11,7 +11,7 @@ from ewstui.app import EwstuiApp, _split_addresses
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import MailClient
-from ewstui.screens import ComposeScreen, RecipientsArea
+from ewstui.screens import ComposeScreen, PickPersonScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
 
@@ -185,10 +185,13 @@ async def test_reply_all_prefills_everyone_and_sends_to_them(app, mail):
     assert sent["to"] == ["colleague@corp.example"] and sent["cc"] == [] and sent["reply_all"]
 
 
-async def test_escape_saves_a_reply_to_drafts(app, mail):
+async def test_ctrl_q_saves_a_reply_to_drafts_and_escape_never_closes(app, mail):
     async with app.run_test() as pilot:
         await open_reply(pilot, app, "Half-written thought")
-        await pilot.press("escape")
+        await pilot.press("escape", "escape", "escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ComposeScreen)
+        await pilot.press("ctrl+q")
         await pilot.pause()
         assert not isinstance(app.screen, ComposeScreen)
     assert mail.sent == []
@@ -197,21 +200,54 @@ async def test_escape_saves_a_reply_to_drafts(app, mail):
     assert draft.to == ["finance@corp.example"]
 
 
-async def test_escape_saves_a_new_email_to_drafts_and_untouched_ones_just_close(app, mail):
+async def test_ctrl_q_saves_a_new_email_to_drafts_and_untouched_ones_just_close(app, mail):
     before = len(drafts(mail))
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("w")
         await pilot.pause()
-        await pilot.press("escape")  # nothing written
+        await pilot.press("ctrl+q")  # nothing written
         await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen) and app.is_running
         assert len(drafts(mail)) == before
         await pilot.press("w")
         await pilot.pause()
         app.screen.query_one("#compose-subject", Input).value = "Idea"
-        await pilot.press("escape")
+        await pilot.press("ctrl+q")
         await pilot.pause()
     assert len(drafts(mail)) == before + 1 and drafts(mail)[0].subject == "Idea"
+
+
+async def test_colon_q_only_closes_unchanged_and_q_bang_throws_away(app, mail):
+    before = len(drafts(mail))
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Not worth keeping")
+        screen = app.screen
+        screen.query_one("#compose-body", TextArea).focus()
+        await pilot.press("escape", "colon", "q", "enter")  # written in: :q refuses
+        await pilot.pause()
+        assert app.screen is screen
+        await pilot.press("colon", "q", "exclamation_mark", "enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen)
+        await pilot.press("w")
+        await pilot.pause()
+        app.screen.query_one("#compose-to", RecipientsArea).focus()
+        await pilot.press("escape", "colon", "q", "enter")  # untouched: :q closes (from To too)
+        await pilot.pause()
+        assert not isinstance(app.screen, ComposeScreen)
+    assert len(drafts(mail)) == before and mail.sent == []
+
+
+async def test_ctrl_q_with_a_popup_over_compose_closes_nothing(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Keep me")
+        compose = app.screen
+        app.push_screen(PickPersonScreen("a", [("A", "a@x.test"), ("B", "b@x.test")]))
+        await pilot.pause()
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert app.is_running and isinstance(app.screen, PickPersonScreen) and compose in app.screen_stack
 
 
 async def test_a_failed_draft_save_keeps_the_text(app, mail, monkeypatch):
@@ -221,12 +257,12 @@ async def test_a_failed_draft_save_keeps_the_text(app, mail, monkeypatch):
     monkeypatch.setattr(mail, "save_reply_draft", fail)
     async with app.run_test() as pilot:
         await open_reply(pilot, app, "Precious words")
-        await pilot.press("escape")
+        await pilot.press("ctrl+q")
         await pilot.pause()
         assert isinstance(app.screen, ComposeScreen)
         assert app.screen.query_one("#compose-body", TextArea).text.startswith("Precious words")
         monkeypatch.undo()
-        await pilot.press("escape")  # unchanged since reopening, but still saved
+        await pilot.press("ctrl+q")  # unchanged since reopening, but still saved
         await pilot.pause()
         assert not isinstance(app.screen, ComposeScreen)
     assert mail.get_message("drafts", drafts(mail)[0].id).body_text.startswith("Precious words")

@@ -328,21 +328,25 @@ background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it
 off) and shows e.g. "New mail: Inbox (+2)". Fetching happens off the UI
 thread, and the cursor and open message stay where they were.
 
-**vim in the text box**: the email's text box has vim's modes, shown at
-its bottom right. It starts in INSERT (type straight away); Esc goes to
-NORMAL, where Esc again does what it does below (save to Drafts and
-close). NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
+**vim in the text boxes**: the email's text box and the To / Cc fields
+have vim's modes, shown at their bottom right. They start in INSERT
+(type straight away); Esc goes to NORMAL, and Esc never closes the
+window. NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
 `2dd`), `x X`, `r`{char} (`3rx`), `dd dw de D`, `cc cw C s S`,
 `yy yw p P`, `J`, `u` / Ctrl+R, `i a I A o O` into INSERT, `v` / `V`
 into VISUAL / V-LINE (move to select; `d`/`x`, `y`, `c`, `r`{char}). Yanked and deleted text also goes to the
-system clipboard. Ctrl+S, Tab and Ctrl+O work in every mode.
+system clipboard. `:wq` (or `:x`) saves to Drafts and closes, `:q`
+closes a window you haven't written in, `:q!` closes it and throws away
+what you wrote. Ctrl+S, Ctrl+Q, Tab and Ctrl+O work in every mode. In
+To / Cc, `V` then `j`/`k` and `d` drops whole addresses.
 
-**Writing**: Ctrl+S (or Cmd+Enter) sends; Esc saves what you've written
-to your Drafts folder and closes (a reply stays a reply to its email;
-an untouched window just closes). If sending or saving fails, the
+**Writing**: Ctrl+S (or Cmd+Enter) sends; Ctrl+Q (or `:wq`) saves what
+you've written to your Drafts folder and closes (a reply stays a reply
+to its email; an untouched window just closes). Outside the compose
+view Ctrl+Q still quits ewstui. If sending or saving fails, the
 window comes back with your text. To go on with a draft, open Drafts
 and press Enter / `o` on it: the compose view opens with it filled in;
-Ctrl+S sends that draft (a copy goes to Sent Items), Esc saves your
+Ctrl+S sends that draft (a copy goes to Sent Items), Ctrl+Q saves your
 changes into it. (Drafts are edited as plain text: formatting from
 Outlook doesn't survive an edit here.)
 
@@ -575,7 +579,9 @@ instant; press `r` to throw that away and fetch fresh availability.
 **Priority list**: `A`-`Z` set priority, `V` visual-select, `x` toggle
 complete, `d` remove, `Enter`/`o` jump to email.
 
-**Compose/new-event modals**: `Ctrl+S` send/save, `Esc` discard.
+**Compose/new-event modals**: `Ctrl+S` send/save. New event: `Esc`
+discards. Compose: `Ctrl+Q` / `:wq` save to Drafts and close, `:q!`
+discards (Esc is only vim's).
 In compose, `Cmd+Enter` also sends — if your terminal passes the Cmd
 key through (Ghostty, kitty and WezTerm do; in iTerm2 enable Profiles →
 Keys → "Report keys using CSI u"; Terminal.app can't).

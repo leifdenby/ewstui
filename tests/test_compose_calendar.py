@@ -106,7 +106,7 @@ async def test_the_keys_are_shown_at_the_bottom_like_the_other_views(tmp_path):
         bar = app.screen.query_one(HintBar)
         assert bar.region.y == 44  # the bottom line, where the status bar is
         text = str(bar.render())
-        assert text.startswith(" WRITE ") and "Ctrl+S send" in text and "Esc save to Drafts" in text
+        assert text.startswith(" WRITE ") and "Ctrl+S send" in text and "Ctrl+Q save to Drafts" in text
         assert "Ctrl+O your calendar" in text
         await pilot.press("ctrl+o")
         await pilot.pause()

@@ -100,12 +100,15 @@ async def test_f_in_the_reading_pane_forwards_that_email(app, mail):
         assert screen.query_one("#compose-subject", Input).value.endswith(mail.get_message("inbox", "m2").subject)
 
 
-async def test_escape_saves_a_forward_to_drafts(app, mail):
+async def test_ctrl_q_saves_a_forward_to_drafts(app, mail):
     original = mail.get_message("inbox", "m1")
     async with app.run_test() as pilot:
         screen = await open_forward(pilot, app)
         screen.query_one("#compose-body", TextArea).insert("Have a look", (0, 0))
-        await pilot.press("escape")  # focus is in To (not the vim body), so Esc closes
+        await pilot.press("escape")  # To: vim's NORMAL mode, the window stays
+        await pilot.pause()
+        assert app.screen is screen
+        await pilot.press("ctrl+q")
         await pilot.pause()
         assert not isinstance(app.screen, ComposeScreen)
     assert mail.sent == []

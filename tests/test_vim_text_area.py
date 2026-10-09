@@ -49,13 +49,35 @@ async def test_starts_in_insert_and_shows_the_mode():
         assert area.mode == NORMAL and area.border_subtitle == "NORMAL"
 
 
-async def test_escape_in_normal_is_left_to_the_screen():
+async def test_escape_in_normal_never_reaches_the_screen():
     async with Host().run_test() as pilot:
         area = await normal(pilot)
-        assert pilot.app.escaped == 0  # the first Esc only left insert mode
-        await pilot.press("escape")
+        await pilot.press("escape", "escape")
         await pilot.pause()
-        assert pilot.app.escaped == 1 and area.mode == NORMAL
+        assert pilot.app.escaped == 0 and area.mode == NORMAL
+
+
+async def test_colon_commands_are_posted():
+    commands = []
+
+    class CommandHost(Host):
+        def on_vim_text_area_command(self, event: VimTextArea.Command) -> None:
+            commands.append(event.command)
+
+    async with CommandHost().run_test() as pilot:
+        area = await normal(pilot, "colon", "w", "q")
+        assert area.border_subtitle == ":wq"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert commands == ["wq"] and area.border_subtitle == "NORMAL" and area.text == TEXT
+        # Backspace edits it (an h is typed, not a move), Esc drops it
+        await pilot.press("colon", "q", "h", "backspace", "backspace", "x", "enter")
+        await pilot.pause()
+        assert commands == ["wq", "x"]
+        await pilot.press("colon", "q", "escape", "enter")
+        await pilot.pause()
+        assert commands == ["wq", "x"] and area.cursor_location == (1, 0)  # that Enter was a move down
+        assert pilot.app.escaped == 0
 
 
 async def test_motions():
@@ -155,7 +177,7 @@ async def test_join_and_substitute():
         assert area.text.startswith("Jello")
 
 
-async def test_in_the_compose_view_esc_twice_saves_to_drafts(tmp_path):
+async def test_in_the_compose_view_colon_wq_saves_to_drafts(tmp_path):
     from ewstui.app import EwstuiApp
     from ewstui.config import config_from_args
     from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
@@ -168,13 +190,16 @@ async def test_in_the_compose_view_esc_twice_saves_to_drafts(tmp_path):
         await pilot.pause()
         await pilot.press("r")
         await pilot.pause()
-        body = app.screen.query_one(VimTextArea)
+        body = app.screen.query_one("#compose-body", VimTextArea)
         body.focus()
         await pilot.press(*"Thanks!", "escape")
         await pilot.pause()
         assert isinstance(app.screen, ComposeScreen) and body.mode == NORMAL
         assert "i/a/o insert" in str(app.screen.query_one("#compose-hints").render())
-        await pilot.press("escape")
+        await pilot.press("escape")  # Esc never closes it
+        await pilot.pause()
+        assert isinstance(app.screen, ComposeScreen)
+        await pilot.press("colon", "w", "q", "enter")
         await pilot.pause()
         assert not isinstance(app.screen, ComposeScreen)
     assert mail.get_message("drafts", mail.list_messages("drafts")[0].id).body_text.startswith("Thanks!")

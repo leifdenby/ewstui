@@ -13,13 +13,15 @@ from textual.widgets import Button, Input, Label, Static, TextArea
 from . import keymap
 from .ews_client import Room, RoomAvailability
 from .recipients import format_person, parse_recipients
+from .widgets.vim_text_area import INSERT, NORMAL, VimTextArea
 
 
-class RecipientsArea(TextArea):
+class RecipientsArea(VimTextArea):
     """The To / Cc field: one recipient per line ("Name <address>" or just
     the address; commas and semicolons also separate). Nothing is selected
-    on entering it, so typing adds to what's there. Ctrl+Space looks the
-    current line up in the directory."""
+    on entering it, so typing adds to what's there. vim's modes, as in the
+    email's text box (V then d drops whole lines: addresses). Ctrl+Space
+    looks the current line up in the directory."""
 
     BINDINGS = [Binding("ctrl+space,ctrl+@", "lookup", "Look up in the directory", show=False)]
 
@@ -125,12 +127,14 @@ class PickPersonScreen(ModalScreen[tuple[str, str] | None]):
 
 class ComposeScreen(ModalScreen[dict | None]):
     """New message / reply. Ctrl+S dismisses with the field values to
-    send; Esc with the same plus "draft": True (saved to Drafts), or None
-    if nothing was changed from how the window opened.
+    send; Ctrl+Q / :wq with the same plus "draft": True (saved to Drafts),
+    or None if nothing was changed from how the window opened (and on :q!).
     """
 
+    # Esc never closes it (it's vim's, in the text boxes): Ctrl+Q or :wq saves
+    # to Drafts and closes (Ctrl+Q reaches action_cancel through the app's
+    # priority binding, see EwstuiApp.action_quit_or_close).
     BINDINGS = [
-        Binding("escape", "cancel", "Close (save to Drafts)"),
         Binding("ctrl+s", "send", "Send"),
         # Cmd+Enter only arrives in terminals that report the Cmd key
         # (kitty keyboard protocol: Ghostty, kitty, WezTerm, iTerm2 with
@@ -306,23 +310,21 @@ class ComposeScreen(ModalScreen[dict | None]):
     def _hints(self) -> str:
         from .widgets.week_calendar import WeekCalendar
 
-        from .widgets.vim_text_area import INSERT, VimTextArea
-
         if isinstance(self.focused, WeekCalendar):
             return ("h/l day · j/k week · Space pick day · v select days · Enter free times into the email · "
                     "Ctrl+B/F weeks · Esc/Ctrl+O back to writing")
-        if isinstance(self.focused, RecipientsArea):
-            hints = ["one address per line", "Ctrl+Space look up a name in the directory", "Tab next field",
-                     "Ctrl+S send", "Esc save to Drafts & close"]
-        elif isinstance(self.focused, VimTextArea):
+        close = "Ctrl+Q save to Drafts & close"
+        if isinstance(self.focused, VimTextArea):
+            recipients = isinstance(self.focused, RecipientsArea)
             if self.focused.mode == INSERT:
-                hints = ["Ctrl+S send", "Esc normal mode (vim)", "Tab next field"]
-            elif self.focused.mode == "NORMAL":
-                hints = ["Ctrl+S send", "i/a/o insert · v/V visual · dd yy p u", "Esc save to Drafts & close"]
+                hints = (["Ctrl+Space look up a name"] if recipients else []) + [
+                    "Ctrl+S send", "Esc normal mode (vim)", close] + ([] if recipients else ["Tab next field"])
+            elif self.focused.mode == NORMAL:
+                hints = ["Ctrl+S send", ":wq save to Drafts & close · :q! discard", "i/a/o insert · v/V visual · dd yy p u"]
             else:
                 hints = ["move to select · d delete · y yank · c change", "Esc/v back to normal"]
         else:
-            hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
+            hints = ["Ctrl+S send", close, "Tab next field"]
         if self.fetch_events:
             hints.append("Ctrl+O to the calendar (free times) · Ctrl+B/F weeks" if self.calendar_shown
                          else "Ctrl+O your calendar")
@@ -341,7 +343,6 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         from .widgets.chrome import HintBar
-        from .widgets.vim_text_area import VimTextArea
         from .widgets.week_calendar import WeekCalendar
 
         yield HintBar("WRITE", "", id="compose-hints")  # the keys, where the status bar is in the other views
@@ -454,12 +455,32 @@ class ComposeScreen(ModalScreen[dict | None]):
             "body": self.query_one("#compose-body", TextArea).text,
         }
 
+    def _changed(self) -> bool:
+        return self.unsaved or self._fields() != {"to": self._to, "cc": self._cc, "subject": self._subject,
+                                                  "body": self._body}
+
     def action_cancel(self) -> None:
-        fields = self._fields()
-        if not self.unsaved and fields == {"to": self._to, "cc": self._cc, "subject": self._subject, "body": self._body}:
-            self.dismiss(None)  # nothing written: just close
+        """Ctrl+Q / :wq: saved to Drafts and closed (nothing written: just closed)."""
+        if self._changed():
+            self.dismiss({**self._fields(), "draft": True})
         else:
-            self.dismiss({**fields, "draft": True})
+            self.dismiss(None)
+
+    def on_vim_text_area_command(self, event: VimTextArea.Command) -> None:
+        """vim's :wq / :x (save to Drafts and close), :q (close if nothing
+        was written), :q! (close, throwing away what was written)."""
+        command = event.command
+        if command in ("wq", "x", "wq!", "x!"):
+            self.action_cancel()
+        elif command == "q":
+            if self._changed():
+                self.app.notify("Not saved — :wq saves to Drafts and closes, :q! throws it away", severity="warning")
+            else:
+                self.dismiss(None)
+        elif command == "q!":
+            self.dismiss(None)
+        else:
+            self.app.notify(f"Not a command here: :{command} (:wq, :q, :q!)", severity="warning")
 
     def action_send(self) -> None:
         self.dismiss(self._fields())

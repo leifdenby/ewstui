@@ -210,6 +210,9 @@ class EwstuiApp(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        # Replaces Textual's Ctrl+Q (a priority binding, so it comes before the
+        # screens'): in the compose view it saves to Drafts and closes instead.
+        Binding("ctrl+q", "quit_or_close", "Quit", show=False, priority=True),
         Binding("question_mark", "show_help", "Help"),
         Binding("1", "show_mail", "Mail"),
         Binding("2", "show_priority", "Priority"),
@@ -979,7 +982,7 @@ class EwstuiApp(App):
     @ews_guard("Opening the draft")
     def _edit_draft(self, message_id: str) -> None:
         """Enter / o on a draft: the compose view with it filled in; Ctrl+S
-        sends that draft, Esc saves the changes into it."""
+        sends that draft, Ctrl+Q / :wq saves the changes into it."""
         folder_id = self._folder_of(message_id)
         detail = self._previewed(message_id) or self.mail_client.get_message(folder_id, message_id)
 
@@ -1000,7 +1003,7 @@ class EwstuiApp(App):
         self._compose_and_send(
             ComposeScreen(to=format_recipients(detail.to, detail.names), cc=format_recipients(detail.cc, detail.names),
                           subject=subject,
-                          body=detail.body_text or "", context="Ctrl+S sends it, Esc keeps it in Drafts", title="Draft"),
+                          body=detail.body_text or "", context="Ctrl+S sends it, Ctrl+Q keeps it in Drafts", title="Draft"),
             _send, sent_message="Draft sent", save_draft=_save,
         )
 
@@ -1117,7 +1120,7 @@ class EwstuiApp(App):
         )
 
     def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str, save_draft) -> None:
-        """Show `screen`; on Ctrl+S call `send(result)`, on Esc (with
+        """Show `screen`; on Ctrl+S call `send(result)`, on Ctrl+Q / :wq (with
         something written) `save_draft(result)`. If either fails, say why
         and reopen the compose screen with the text intact, so a server
         error never throws away what the user wrote.
@@ -1979,6 +1982,17 @@ class EwstuiApp(App):
                 table.move_cursor(row=table.get_row_index(restored.message_id))
             except RowDoesNotExist:
                 pass  # not listed here (older than the loaded page, or another folder)
+
+    async def action_quit_or_close(self) -> None:
+        """Ctrl+Q: in the compose view, save to Drafts and close it; with a
+        compose view open under a popup, nothing (no text is thrown away);
+        else quit."""
+        if isinstance(self.screen, ComposeScreen):
+            self.screen.action_cancel()
+        elif any(isinstance(s, ComposeScreen) for s in self.screen_stack):
+            self.bell()
+        else:
+            await self.action_quit()
 
     def action_compose_new(self) -> None:
         def _send(result: dict) -> None:

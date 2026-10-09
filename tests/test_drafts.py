@@ -70,7 +70,7 @@ async def test_ctrl_s_sends_the_draft(tmp_path):
     assert mail.sent[-1]["draft"] == draft_id and "Could you check the numbers?" in mail.sent[-1]["body"]
 
 
-async def test_escape_saves_the_changes_into_the_same_draft(tmp_path):
+async def test_ctrl_q_saves_the_changes_into_the_same_draft(tmp_path):
     app, mail = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:
         await open_drafts(app, pilot)
@@ -78,7 +78,7 @@ async def test_escape_saves_the_changes_into_the_same_draft(tmp_path):
         await pilot.press("enter")
         await settle(app, pilot)
         app.screen.query_one("#compose-subject", Input).value = "Budget question (v2)"
-        await pilot.press("escape")
+        await pilot.press("ctrl+q")
         await settle(app, pilot)
         assert [m.id for m in mail.list_messages("drafts")] == before  # no new draft
         assert mail.get_message("drafts", before[0]).subject == "Budget question (v2)"

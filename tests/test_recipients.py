@@ -59,6 +59,22 @@ async def test_typing_in_to_adds_to_what_is_there(tmp_path):
         assert to.text == "Casey Colleague <colleague@corp.example>\nb@x.test"
 
 
+async def test_vim_in_to_visual_line_drops_addresses(tmp_path):
+    screen = ComposeScreen(to="a@x.test\nb@x.test\nc@x.test\nd@x.test", context="ctx")
+    async with composing(screen, tmp_path) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        to.focus()
+        to.move_cursor((1, 0))
+        await pilot.press("escape", "V", "j", "d")
+        await pilot.pause()
+        assert to.text == "a@x.test\nd@x.test" and to.mode == "NORMAL"
+        hints = str(screen.query_one("#compose-hints").render())
+        assert ":wq save to Drafts & close" in hints
+        await pilot.press("escape")  # Esc in NORMAL: still writing
+        await pilot.pause()
+        assert app.screen is screen
+
+
 async def test_ctrl_space_fills_in_the_one_match(tmp_path):
     screen = ComposeScreen()
     async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):
