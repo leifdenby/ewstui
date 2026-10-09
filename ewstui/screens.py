@@ -12,6 +12,115 @@ from textual.widgets import Button, Input, Label, Static, TextArea
 
 from . import keymap
 from .ews_client import Room, RoomAvailability
+from .recipients import format_person, parse_recipients
+
+
+class RecipientsArea(TextArea):
+    """The To / Cc field: one recipient per line ("Name <address>" or just
+    the address; commas and semicolons also separate). Nothing is selected
+    on entering it, so typing adds to what's there. Ctrl+Space looks the
+    current line up in the directory."""
+
+    BINDINGS = [Binding("ctrl+space,ctrl+@", "lookup", "Look up in the directory", show=False)]
+
+    DEFAULT_CSS = """
+    RecipientsArea {
+        height: auto;
+        min-height: 3;
+        max-height: 7;
+    }
+    """
+
+    class LookupRequested(Message):
+        def __init__(self, area: RecipientsArea, row: int, query: str) -> None:
+            self.area = area
+            self.row = row
+            self.query = query
+            super().__init__()
+
+    def __init__(self, text: str = "", placeholder: str = "", **kwargs) -> None:
+        super().__init__(text, soft_wrap=False, show_line_numbers=False, tab_behavior="focus",
+                         placeholder=placeholder, **kwargs)
+
+    def action_lookup(self) -> None:
+        row = self.cursor_location[0]
+        query = self.document.get_line(row).strip()
+        if query:
+            self.post_message(self.LookupRequested(self, row, query))
+        else:
+            self.app.bell()
+
+    def replace_line(self, row: int, text: str) -> None:
+        line = self.document.get_line(row)
+        self.replace(text, (row, 0), (row, len(line)))
+        self.move_cursor((row, len(text)))
+
+
+class PickPersonScreen(ModalScreen[tuple[str, str] | None]):
+    """Several people match a lookup: pick one (j/k or ↓/↑, Enter), Esc cancels."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("j,down", "cursor(1)", "Next", show=False),
+        Binding("k,up", "cursor(-1)", "Previous", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    PickPersonScreen {
+        align: center middle;
+    }
+    #person-box {
+        width: 70%;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        padding: 0 1;
+        background: $surface;
+    }
+    #person-results {
+        height: auto;
+        max-height: 20;
+    }
+    #person-help {
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, query: str, people: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._query = query
+        self._people = people
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import ListItem, ListView
+
+        with Vertical(id="person-box"):
+            yield Label(f"Who do you mean by “{self._query}”?", markup=False)
+            with ListView(id="person-results"):
+                for name, email in self._people:
+                    yield ListItem(Label(format_person(name, email), markup=False))
+            yield Label("j/k choose · Enter pick · Esc cancel", id="person-help", markup=False)
+
+    def on_mount(self) -> None:
+        from textual.widgets import ListView
+
+        results = self.query_one(ListView)
+        results.index = 0
+        results.focus()
+
+    def action_cursor(self, step: int) -> None:
+        from textual.widgets import ListView
+
+        results = self.query_one(ListView)
+        results.index = max(0, min(len(self._people) - 1, (results.index or 0) + step))
+
+    def on_list_view_selected(self, event) -> None:
+        from textual.widgets import ListView
+
+        self.dismiss(self._people[self.query_one(ListView).index or 0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ComposeScreen(ModalScreen[dict | None]):
@@ -68,6 +177,10 @@ class ComposeScreen(ModalScreen[dict | None]):
     #compose-context {
         color: $text-muted;
     }
+    .recipients-check {
+        height: auto;
+        padding: 0 1;
+    }
     #compose-body {
         height: 1fr;
         border: round $primary;
@@ -90,6 +203,105 @@ class ComposeScreen(ModalScreen[dict | None]):
         # fetch_events(start, end) -> [EventSummary], for the calendar (Ctrl+O);
         # called in a thread. None: no calendar.
         self.fetch_events = fetch_events
+        # find_people(query) -> [(name, address)], for To / Cc: Ctrl+Space and
+        # the check under the fields; called in a thread. None: neither.
+        self.find_people = None
+        self._known: dict[str, bool] = {}  # address (casefolded) -> in the directory?
+        self._check_timer = None
+
+    # -- To / Cc: lookups and the directory check ----------------------------------
+
+    def on_recipients_area_lookup_requested(self, event: RecipientsArea.LookupRequested) -> None:
+        """Ctrl+Space: the current line looked up in the directory; one
+        match fills the line in, several are offered to pick from."""
+        if self.find_people is None:
+            self.app.bell()
+            return
+        area, row, query = event.area, event.row, event.query
+        lookup = parse_recipients(query)[0] if "<" in query else query
+
+        def work() -> None:
+            try:
+                people = self.find_people(lookup)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, f"Directory lookup failed: {e}", severity="warning")
+                return
+            self.app.call_from_thread(self._looked_up, area, row, query, people)
+
+        self.app.notify(f"Looking up “{query}”…", timeout=2)
+        self.run_worker(work, thread=True, group="compose-lookup")
+
+    def _looked_up(self, area: RecipientsArea, row: int, query: str, people: list[tuple[str, str]]) -> None:
+        if not people:
+            self.app.notify(f"Nobody in the directory matches “{query}”", severity="warning")
+            return
+
+        def fill(person: tuple[str, str] | None) -> None:
+            if person is None:
+                return
+            name, email = person
+            self._known[email.casefold()] = True
+            area.replace_line(row, format_person(name, email))
+            area.focus()
+            self._check(area)
+
+        if len(people) == 1:
+            fill(people[0])
+        else:
+            self.app.push_screen(PickPersonScreen(query, people), fill)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if isinstance(event.text_area, RecipientsArea):  # check again once typing pauses
+            if self._check_timer is not None:
+                self._check_timer.stop()
+            area = event.text_area
+            self._check_timer = self.set_timer(1.0, lambda: self._check(area))
+
+    def on_descendant_blur(self, event) -> None:
+        if isinstance(event.widget, RecipientsArea):
+            self._check(event.widget)
+
+    def _check(self, area: RecipientsArea) -> None:
+        """Are the addresses in this field in the directory? (Shown under it;
+        ones that aren't may well be fine — people outside the organisation.)"""
+        if self.find_people is None or not area.is_mounted:
+            return
+        addresses = [a for a in parse_recipients(area.text) if "@" in a]
+        todo = [a for a in addresses if a.casefold() not in self._known]
+        self._show_check(area, addresses, checking=bool(todo))
+        if not todo:
+            return
+
+        def work() -> None:
+            for address in todo:
+                try:
+                    found = self.find_people(address)
+                except Exception:  # noqa: BLE001 - unknown, then
+                    found = []
+                self._known[address.casefold()] = any(e.casefold() == address.casefold() for _, e in found)
+            self.app.call_from_thread(self._show_check, area, addresses, False)
+
+        self.run_worker(work, thread=True, group=f"compose-check-{area.id}")
+
+    def _show_check(self, area: RecipientsArea, addresses: list[str], checking: bool) -> None:
+        if not area.is_mounted:
+            return
+        line = self.query_one(f"#{area.id}-check", Static)
+        if not addresses:
+            line.update("")
+            return
+        known = [a for a in addresses if self._known.get(a.casefold())]
+        unknown = [a for a in addresses if self._known.get(a.casefold()) is False]
+        text = Text()
+        if known:
+            text.append(f"✓ {len(known)} in the directory", style="green")
+        if unknown:
+            text.append(" · " if known else "")
+            text.append(f"? not in the directory: {', '.join(unknown)}", style="yellow")
+        if checking:
+            text.append(" · " if known or unknown else "")
+            text.append("checking…", style="dim")
+        line.update(text)
 
     def _hints(self) -> str:
         from .widgets.week_calendar import WeekCalendar
@@ -99,7 +311,10 @@ class ComposeScreen(ModalScreen[dict | None]):
         if isinstance(self.focused, WeekCalendar):
             return ("h/l day · j/k week · Space pick day · v select days · Enter free times into the email · "
                     "Ctrl+B/F weeks · Esc/Ctrl+O back to writing")
-        if isinstance(self.focused, VimTextArea):
+        if isinstance(self.focused, RecipientsArea):
+            hints = ["one address per line", "Ctrl+Space look up a name in the directory", "Tab next field",
+                     "Ctrl+S send", "Esc save to Drafts & close"]
+        elif isinstance(self.focused, VimTextArea):
             if self.focused.mode == INSERT:
                 hints = ["Ctrl+S send", "Esc normal mode (vim)", "Tab next field"]
             elif self.focused.mode == "NORMAL":
@@ -135,9 +350,12 @@ class ComposeScreen(ModalScreen[dict | None]):
                 yield Label(self.title_text, id="compose-title")
                 if self.context:
                     yield Label(self.context, id="compose-context", markup=False)
-                yield Input(value=self._to, placeholder="To", id="compose-to")
-                yield Input(value=self._cc, placeholder="Cc", id="compose-cc")
-                yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
+                yield RecipientsArea(self._to, placeholder="To — one per line (Ctrl+Space looks a name up)",
+                                     id="compose-to")
+                yield Static(id="compose-to-check", classes="recipients-check")
+                yield RecipientsArea(self._cc, placeholder="Cc", id="compose-cc")
+                yield Static(id="compose-cc-check", classes="recipients-check")
+                yield Input(value=self._subject, placeholder="Subject", id="compose-subject", select_on_focus=False)
                 yield VimTextArea(self._body, id="compose-body")  # vim modes, shown bottom right
             yield WeekCalendar(id="compose-calendar")
 
@@ -145,6 +363,8 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def on_mount(self) -> None:
         self._update_hints()
+        for area in self.query(RecipientsArea):  # the ones a reply / draft brings along
+            self._check(area)
 
     @property
     def calendar_shown(self) -> bool:
@@ -228,8 +448,8 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def _fields(self) -> dict:
         return {
-            "to": self.query_one("#compose-to", Input).value,
-            "cc": self.query_one("#compose-cc", Input).value,
+            "to": self.query_one("#compose-to", RecipientsArea).text,
+            "cc": self.query_one("#compose-cc", RecipientsArea).text,
             "subject": self.query_one("#compose-subject", Input).value,
             "body": self.query_one("#compose-body", TextArea).text,
         }
@@ -250,8 +470,8 @@ FREE_STYLE, BUSY_STYLE, UNSURE_STYLE = "#7aa67a", "#e07a7a", "#d4b06a"
 
 
 def split_addresses(text: str) -> list[str]:
-    """"a@x, b@x; c@x" -> ["a@x", "b@x", "c@x"]."""
-    return [a.strip() for a in text.replace(";", ",").split(",") if a.strip()]
+    """"a@x, b@x; c@x" (or one per line, or "Name <a@x>") -> ["a@x", "b@x", "c@x"]."""
+    return parse_recipients(text)
 
 
 def attendee_line(email: str, status, start: datetime | None = None) -> Text:

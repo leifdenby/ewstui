@@ -11,7 +11,7 @@ from ewstui.app import EwstuiApp, _split_addresses
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import MailClient
-from ewstui.screens import ComposeScreen
+from ewstui.screens import ComposeScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
 
@@ -174,10 +174,11 @@ async def test_reply_all_prefills_everyone_and_sends_to_them(app, mail):
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, ComposeScreen)
-        assert screen.query_one("#compose-to", Input).value == "colleague@corp.example"  # you left out
-        assert screen.query_one("#compose-cc", Input).value == "team@corp.example"
+        # one per line, with names; you left out
+        assert screen.query_one("#compose-to", RecipientsArea).text == "Casey Colleague <colleague@corp.example>"
+        assert screen.query_one("#compose-cc", RecipientsArea).text == "Project Team <team@corp.example>"
         assert "to everyone (2)" in str(screen.query_one("#compose-context").render())
-        screen.query_one("#compose-cc", Input).value = ""  # drop the team from this one
+        screen.query_one("#compose-cc", RecipientsArea).text = ""  # drop the team from this one
         await pilot.press("ctrl+s")
         await pilot.pause()
     sent = mail.sent[0]
@@ -267,7 +268,7 @@ async def test_compose_new_splits_recipients(app, mail):
         await pilot.pause()
         await pilot.press("w")
         await pilot.pause()
-        app.screen.query_one("#compose-to", Input).value = "a@x.test; b@y.test"
+        app.screen.query_one("#compose-to", RecipientsArea).text = "a@x.test; b@y.test"
         app.screen.query_one("#compose-subject", Input).value = "Hello"
         await pilot.press("ctrl+s")
         await pilot.pause()

@@ -344,7 +344,20 @@ window comes back with your text. To go on with a draft, open Drafts
 and press Enter / `o` on it: the compose view opens with it filled in;
 Ctrl+S sends that draft (a copy goes to Sent Items), Esc saves your
 changes into it. (Drafts are edited as plain text: formatting from
-Outlook doesn't survive an edit here.) Ctrl+O shows your calendar beside the
+Outlook doesn't survive an edit here.)
+
+**To / Cc**: one recipient per line, either `Name <address>` or just the
+address (commas and semicolons also separate). Nothing is selected when
+you move into a field, so typing adds to what's there (a reply-all opens
+with everyone filled in, one per line). Ctrl+Space looks the current
+line up in your organisation's directory. Type part of a name or address
+and press Ctrl+Space: one match fills the line in, and with several you
+pick one (`j`/`k`, Enter). A line under each field says which addresses
+are in the directory and flags the ones that aren't ("? not in the
+directory: …"). Those may be fine (people outside the organisation),
+but it catches typos.
+
+Ctrl+O shows your calendar beside the
 email, to check when you're free: the working days (Mon–Fri) as columns,
 three weeks as rows (from this week, or next week at the weekend), each
 day listing its booked time slots; Ctrl+B / Ctrl+F go three weeks back

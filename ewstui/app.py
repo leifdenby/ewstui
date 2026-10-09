@@ -23,6 +23,7 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore, note_with_dates, split_note
+from .recipients import format_recipients, parse_recipients
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
@@ -111,8 +112,9 @@ def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[
 
 
 def _split_addresses(field: str) -> list[str]:
-    """'a@x, b@y; c@z' -> ['a@x', 'b@y', 'c@z'] (the To field is free text)."""
-    return [a.strip() for a in field.replace(";", ",").split(",") if a.strip()]
+    """The To / Cc field's addresses: one per line (or comma / semicolon
+    separated), plain or "Name <address>" (see recipients.py)."""
+    return parse_recipients(field)
 
 
 @dataclass
@@ -996,7 +998,8 @@ class EwstuiApp(App):
 
         subject = "" if detail.subject == "(no subject)" else detail.subject
         self._compose_and_send(
-            ComposeScreen(to=", ".join(detail.to), cc=", ".join(detail.cc), subject=subject,
+            ComposeScreen(to=format_recipients(detail.to, detail.names), cc=format_recipients(detail.cc, detail.names),
+                          subject=subject,
                           body=detail.body_text or "", context="Ctrl+S sends it, Esc keeps it in Drafts", title="Draft"),
             _send, sent_message="Draft sent", save_draft=_save,
         )
@@ -1106,8 +1109,8 @@ class EwstuiApp(App):
             )
 
         self._compose_and_send(
-            ComposeScreen(to=", ".join(to), cc=", ".join(cc), subject=f"Re: {detail.subject}", body=prefill_body,
-                          context=context),
+            ComposeScreen(to=format_recipients(to, detail.names), cc=format_recipients(cc, detail.names),
+                          subject=f"Re: {detail.subject}", body=prefill_body, context=context),
             _send,
             sent_message="Reply sent",
             save_draft=_save_draft,
@@ -1122,6 +1125,8 @@ class EwstuiApp(App):
 
         if screen.fetch_events is None:  # Ctrl+O: your calendar beside the email
             screen.fetch_events = self.calendar_client.list_events
+        if screen.find_people is None:  # To / Cc: Ctrl+Space lookups and the directory check
+            screen.find_people = getattr(self.mail_client, "find_people", None)
 
         def _reopen(result: dict) -> None:
             self._compose_and_send(

@@ -12,7 +12,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import MailClient
-from ewstui.screens import ComposeScreen
+from ewstui.screens import ComposeScreen, RecipientsArea
 from ewstui.widgets.folder_list import FolderList
 from ewstui.widgets.message_table import MessageTable
 from ewstui.widgets.preview import PreviewPane
@@ -48,8 +48,8 @@ async def test_enter_on_a_draft_opens_it_for_writing(tmp_path):
         await settle(app, pilot)
         screen = app.screen
         assert isinstance(screen, ComposeScreen) and screen.title_text == "Draft"
-        assert screen.query_one("#compose-to", Input).value == "finance@corp.example"
-        assert screen.query_one("#compose-cc", Input).value == "boss@corp.example"
+        assert screen.query_one("#compose-to", RecipientsArea).text == "finance@corp.example"
+        assert screen.query_one("#compose-cc", RecipientsArea).text == "boss@corp.example"
         assert screen.query_one("#compose-subject", Input).value == "Budget question"
         assert screen.query_one("#compose-body", TextArea).text == "Hi Finance,\n\nhalf-written"
 

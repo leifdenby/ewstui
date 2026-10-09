@@ -11,7 +11,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import MailClient
-from ewstui.screens import ComposeScreen
+from ewstui.screens import ComposeScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
 
@@ -63,7 +63,7 @@ async def test_f_forwards_the_email_to_who_you_write_in(app, mail):
     async with app.run_test() as pilot:
         screen = await open_forward(pilot, app)
         assert screen.title_text == "Forward"
-        assert screen.focused is screen.query_one("#compose-to", Input)  # empty: who to is the first thing
+        assert screen.focused is screen.query_one("#compose-to", RecipientsArea)  # empty: who to is the first thing
         assert screen.query_one("#compose-subject", Input).value == "Fwd: Q3 budget review"
         assert "Forwarding Finance Team <finance@corp.example>'s email" in str(
             screen.query_one("#compose-context").render())

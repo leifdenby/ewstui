@@ -546,6 +546,27 @@ class MailClient:
         return [_summary(item, folder.id) for item in qs[:limit]]
 
     @retry_on_dead_connection
+    def find_people(self, query: str) -> list[tuple[str, str]]:
+        """(name, address) of the people (and groups) Exchange finds for
+        `query` — a name, part of one, or an address — in the directory and
+        your contacts (ResolveNames). Empty if nobody matches."""
+        q = query.strip()
+        if not q:
+            return []
+        try:
+            found = list(self.account.protocol.resolve_names(names=[q], search_scope="ActiveDirectoryContacts"))
+        except Exception:  # noqa: BLE001 - "no results" can come back as an error
+            log.info("directory lookup for %r failed", q, exc_info=True)
+            return []
+        out, seen = [], set()
+        for mailbox in found:
+            email = getattr(mailbox, "email_address", None)  # errors (no results) come back as exceptions
+            if email and email.casefold() not in seen:
+                seen.add(email.casefold())
+                out.append((getattr(mailbox, "name", None) or email, email))
+        return out
+
+    @retry_on_dead_connection
     def sent_folder_id(self) -> str:
         """Sent Items, via its well-known id (works with localized names)."""
         return self.account.sent.id

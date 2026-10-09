@@ -249,6 +249,16 @@ class DemoMailClient:
         ids = [m.id for m in self._messages.get(folder_id, [])]
         return ids.index(message_id) if message_id in ids else None
 
+    def find_people(self, query: str) -> list[tuple[str, str]]:
+        """Like Exchange's ResolveNames over a small demo directory: every
+        word of the query in the name or address."""
+        words = query.casefold().split()
+        if not words:
+            return []
+        people = {**_NAMES, **{p.email: p.name for p in DEMO_PEOPLE}}
+        return [(name, email) for email, name in people.items()
+                if all(w in f"{name} {email}".casefold() for w in words)]
+
     def sent_folder_id(self) -> str:
         return "sent"
 
