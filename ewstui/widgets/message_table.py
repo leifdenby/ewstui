@@ -126,6 +126,14 @@ class MessageTable(DataTable):
     class FocusFoldersRequested(Message):
         """h: move keyboard focus back to the folder pane."""
 
+    class MoreRequested(Message):
+        """The cursor hit the last loaded row: j wants the next page, G
+        (`to_end`) the whole folder, ending on its oldest email."""
+
+        def __init__(self, to_end: bool) -> None:
+            self.to_end = to_end
+            super().__init__()
+
     class BulkRequested(Message):
         """An action on every message of a visual selection (V): `action`
         is "delete", "archive", "move", "toggle_read" or "add_to_priority"."""
@@ -409,6 +417,13 @@ class MessageTable(DataTable):
     def action_cursor_bottom(self) -> None:
         if self.row_count:
             self.move_cursor(row=self.row_count - 1)
+        if not self.search:
+            self.post_message(self.MoreRequested(to_end=True))
+
+    def action_cursor_down(self) -> None:
+        if self.row_count and self.cursor_row == self.row_count - 1 and not self.search:
+            self.post_message(self.MoreRequested(to_end=False))
+        super().action_cursor_down()
 
     def action_select_cursor(self) -> None:
         mid = self._current_message_id()

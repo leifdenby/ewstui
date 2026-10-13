@@ -364,10 +364,7 @@ class EwstuiApp(App):
         Sent Items that belong to those conversations (Outlook-style).
         Safe to call from the refresh worker thread.
         """
-        limit = self.config.page_size
-        if self._deeper_listing and self._deeper_listing[0] == folder_id:
-            limit = max(limit, self._deeper_listing[1])
-        messages = self.mail_client.list_messages(folder_id, limit=limit)
+        messages = self.mail_client.list_messages(folder_id, limit=self._listing_limit(folder_id))
         if not self.query_one("#messages", MessageTable).threaded:
             return messages
         try:
@@ -961,6 +958,58 @@ class EwstuiApp(App):
         self._deeper_listing = None  # back to one page
         self.select_folder(event.folder.id)
         self.query_one("#messages", MessageTable).focus()
+
+    def on_message_table_more_requested(self, event: MessageTable.MoreRequested) -> None:
+        """j on the last row: the next page of older emails; G: the rest of
+        the folder, then the cursor on its oldest. Nothing to do once the
+        last listing came back short (the whole folder is loaded)."""
+        folder_id = self.current_folder_id
+        if not folder_id:
+            return
+        table = self.query_one("#messages", MessageTable)
+        loaded = sum(m.folder_id == folder_id for m in table._messages)
+        if loaded < self._listing_limit(folder_id):
+            return
+        self.notify("Loading older emails…", timeout=3)
+        self._load_more(folder_id, loaded, event.to_end)
+
+    def _listing_limit(self, folder_id: str) -> int:
+        """How many of the folder's emails _fetch_messages asks for."""
+        limit = self.config.page_size
+        if self._deeper_listing and self._deeper_listing[0] == folder_id:
+            limit = max(limit, self._deeper_listing[1])
+        return limit
+
+    @work(thread=True, exclusive=True, group="more")
+    def _load_more(self, folder_id: str, loaded: int, to_end: bool) -> None:
+        total = next((f.total_count for f in self.query_one("#folders", FolderList).folders if f.id == folder_id), 0)
+        limit = loaded + self.config.page_size
+        if to_end:  # the folder's count may be stale: keep going until a listing comes back short
+            limit = max(limit, total + self.config.page_size)
+        before = self._deeper_listing
+        try:
+            while True:
+                self._deeper_listing = (folder_id, limit)
+                messages = self._fetch_messages(folder_id)
+                if not to_end or sum(m.folder_id == folder_id for m in messages) < limit:
+                    break
+                limit *= 2
+        except Exception as e:  # noqa: BLE001 - what's listed stays
+            self._deeper_listing = before
+            self.call_from_thread(self.notify, f"Loading older emails failed: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._show_more, folder_id, messages, to_end)
+
+    def _show_more(self, folder_id: str, messages: list, to_end: bool) -> None:
+        if folder_id != self.current_folder_id:  # moved on meanwhile
+            return
+        table = self.query_one("#messages", MessageTable)
+        table.set_messages(messages, keep_cursor_on=self.current_message_id, home_folder_id=folder_id,
+                           priorities=self.priority_store.priorities_by_message())
+        self._message_snapshot = [(m.id, m.is_read) for m in messages]
+        if to_end and table.row_count:
+            table.move_cursor(row=table.row_count - 1)  # opens it in the reading pane, like G
+        self._update_status()
 
     def on_message_table_message_opened(self, event: MessageTable.MessageOpened) -> None:
         self.open_message(event.message_id)
@@ -1909,10 +1958,13 @@ class EwstuiApp(App):
             table = self.query_one("#messages", MessageTable)
             messages = table._messages
             unread = sum(not m.is_read for m in messages)
-            folder = next(
-                (f.name for f in self.query_one("#folders", FolderList).folders if f.id == self.current_folder_id), ""
-            )
-            items = [(folder, "normal"), (f"{len(messages)} messages", "dim")]
+            summary = next((f for f in self.query_one("#folders", FolderList).folders if f.id == self.current_folder_id), None)
+            folder = summary.name if summary else ""
+            loaded = sum(m.folder_id == self.current_folder_id for m in messages)
+            count = f"{len(messages)} messages"
+            if summary and summary.total_count > loaded:  # older ones not loaded yet (G loads them)
+                count = f"{len(messages)} of {summary.total_count + len(messages) - loaded} messages"
+            items = [(folder, "normal"), (count, "dim")]
             if unread:
                 items.append((f"{unread} unread", "accent"))
             if table.threaded:
