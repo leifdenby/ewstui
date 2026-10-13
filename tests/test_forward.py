@@ -75,6 +75,22 @@ async def test_f_forwards_the_email_to_who_you_write_in(app, mail):
                           "subject": "Fwd: Q3 budget review", "body": "FYI"}]
 
 
+async def test_forward_shows_the_original_below_but_doesnt_send_it_twice(app, mail):
+    original = mail.get_message("inbox", "m1")
+    async with app.run_test() as pilot:
+        screen = await open_forward(pilot, app)
+        quoted = screen.query_one("#compose-quoted", TextArea)
+        assert quoted.read_only
+        assert "From: Finance Team <finance@corp.example>" in quoted.text
+        assert "Subject: Q3 budget review" in quoted.text
+        assert original.body_text.strip() and original.body_text in quoted.text
+        assert screen.query_one("#compose-body", TextArea).text == ""  # Exchange appends the original itself
+        await pilot.press(*"boss@corp.example")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert mail.sent[0]["body"] == ""
+
+
 async def test_forward_without_recipients_isnt_sent(app, mail):
     async with app.run_test() as pilot:
         await open_forward(pilot, app)

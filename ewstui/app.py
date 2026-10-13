@@ -23,7 +23,7 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore, note_with_dates, split_note
-from .recipients import format_recipients, parse_recipients
+from .recipients import format_person, format_recipients, parse_recipients
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
@@ -1048,14 +1048,24 @@ class EwstuiApp(App):
 
     def _open_forward(self, folder_id: str, message_id: str, detail) -> None:
         """The compose view for a forward: To empty (and focused), your note
-        in the body. Exchange adds the original below it, with its
-        attachments, so it isn't pasted in here too."""
-        name = (getattr(detail, "names", None) or {}).get(detail.sender)
+        in the body, the original shown read-only under it. Exchange adds
+        the original below your note, with its attachments, so it isn't
+        part of the body too."""
+        names = getattr(detail, "names", None) or {}
+        name = names.get(detail.sender)
         who = f"{name} <{detail.sender}>" if name else detail.sender
         context = f"Forwarding {who}'s email — it goes along below what you write" + (
             ", with its attachments" if detail.has_attachments else ""
         )
         subject = detail.subject if re.match(r"(?i)\s*(fw|fwd)\s*:", detail.subject) else f"Fwd: {detail.subject}"
+        header = [f"From: {who}"]
+        if detail.received:
+            header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
+        for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
+            if addresses:
+                header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
+        header.append(f"Subject: {detail.subject}")
+        quoted = "\n".join(header) + "\n\n" + (detail.body_text or "")
 
         def _fields(result: dict) -> dict:
             return {"subject": result["subject"], "body": result["body"],
@@ -1068,7 +1078,7 @@ class EwstuiApp(App):
             self.mail_client.forward(folder_id, message_id, **fields)
 
         self._compose_and_send(
-            ComposeScreen(subject=subject, context=context, title="Forward"),
+            ComposeScreen(subject=subject, context=context, title="Forward", quoted=quoted),
             _send,
             sent_message="Forwarded",
             save_draft=lambda result: self.mail_client.save_forward_draft(folder_id, message_id, **_fields(result)),
@@ -1134,7 +1144,7 @@ class EwstuiApp(App):
         def _reopen(result: dict) -> None:
             self._compose_and_send(
                 ComposeScreen(to=result["to"], cc=result.get("cc", ""), subject=result["subject"], body=result["body"],
-                              context=screen.context, unsaved=True, title=screen.title_text),
+                              context=screen.context, unsaved=True, title=screen.title_text, quoted=screen.quoted),
                 send, sent_message, save_draft,
             )
 

@@ -190,16 +190,25 @@ class ComposeScreen(ModalScreen[dict | None]):
         border: round $primary;
         margin-top: 1;
     }
+    #compose-quoted {
+        height: 1fr;
+        border: round $panel;
+        border-title-color: $text-muted;
+        color: $text-muted;
+    }
     """
 
     def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False,
-                 fetch_events=None, cc: str = "", title: str | None = None) -> None:
+                 fetch_events=None, cc: str = "", title: str | None = None, quoted: str = "") -> None:
         super().__init__()
         self.title_text = title or ("Reply" if context else "New email")
         self._to = to
         self._cc = cc
         self._subject = subject
         self._body = body
+        # A forward's original, shown read-only under the body: Exchange adds
+        # it below what you write, so it isn't part of the body itself.
+        self.quoted = quoted
         self.context = context  # for a reply: who sent the email and when
         # Opened with text that isn't saved anywhere (reopened after a failed
         # send): Esc saves it even if it's unchanged.
@@ -358,6 +367,10 @@ class ComposeScreen(ModalScreen[dict | None]):
                 yield Static(id="compose-cc-check", classes="recipients-check")
                 yield Input(value=self._subject, placeholder="Subject", id="compose-subject", select_on_focus=False)
                 yield VimTextArea(self._body, id="compose-body")  # vim modes, shown bottom right
+                if self.quoted:
+                    quoted = TextArea(self.quoted, read_only=True, soft_wrap=True, id="compose-quoted")
+                    quoted.border_title = "Goes along below what you write (read-only)"
+                    yield quoted
             yield WeekCalendar(id="compose-calendar")
 
     # -- the calendar beside the email (Ctrl+O) ------------------------------------
