@@ -75,6 +75,23 @@ async def test_vim_in_to_visual_line_drops_addresses(tmp_path):
         assert app.screen is screen
 
 
+async def test_yank_in_to_put_in_cc(tmp_path):
+    screen = ComposeScreen(to="a@x.test\nCasey Colleague <colleague@corp.example>", cc="c@x.test", context="ctx")
+    async with composing(screen, tmp_path) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        cc = screen.query_one("#compose-cc", RecipientsArea)
+        to.focus()
+        to.move_cursor((1, 0))
+        await pilot.press("escape", "V", "y", "tab")
+        await pilot.pause()
+        assert app.focused is cc
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        assert cc.text == "c@x.test\nCasey Colleague <colleague@corp.example>"
+        assert to.text == "a@x.test\nCasey Colleague <colleague@corp.example>"
+        assert app.screen is screen
+
+
 async def test_ctrl_space_fills_in_the_one_match(tmp_path):
     screen = ComposeScreen()
     async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):

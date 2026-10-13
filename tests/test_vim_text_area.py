@@ -128,6 +128,14 @@ async def test_yank_and_put_lines_and_words():
         assert area.text.startswith("Hello there worldHello ")
 
 
+async def test_put_takes_what_was_last_copied_anywhere_in_the_app():
+    async with Host().run_test() as pilot:
+        area = await normal(pilot, "y", "y")
+        pilot.app.copy_to_clipboard("copied")  # Ctrl+C elsewhere, after the yank: put as characters
+        await pilot.press("p")
+        assert area.text.startswith("Hcopiedello there world\n")
+
+
 async def test_undo_and_redo():
     async with Host().run_test() as pilot:
         area = await normal(pilot, "d", "d")

@@ -10,7 +10,8 @@ NORMAL:  h j k l · w b e · 0 ^ $ · gg G (counts: 3j, 2dd, …)
          :{command} Enter — posted as Command for the screen (compose: :wq, :x, :q, :q!)
 VISUAL:  the motions extend the selection; d/x delete, y yank, c change, r{char} replace,
          Esc or v/V back to NORMAL
-Yanked and deleted text also goes to the system clipboard.
+Yanked and deleted text goes to one register for the whole app (p in another
+text box puts it there; Ctrl+V in a field pastes it) and to the system clipboard.
 """
 from __future__ import annotations
 
@@ -50,7 +51,6 @@ class VimTextArea(TextArea):
         self.mode = INSERT
         self._pending = ""  # a count and/or operator typed so far ("3", "d", "2d", "g")
         self._command: str | None = None  # the `:` command line being typed (without the colon)
-        self._register: tuple[str, bool] = ("", False)  # (text, linewise)
         self._anchor: tuple[int, int] | None = None  # visual: where it started
         self._vcursor: tuple[int, int] = (0, 0)  # visual: vim's cursor (see _update_visual)
 
@@ -328,12 +328,22 @@ class VimTextArea(TextArea):
         if op == "c":
             self._set_mode(INSERT)
 
+    # The register is the app's clipboard, shared by every text box (yank in
+    # To, put in Cc) and by Textual's own copying (Ctrl+C, mouse selections);
+    # the app remembers alongside whether the last yank was whole lines.
+
     def _yank(self, text: str, linewise: bool) -> None:
-        self._register = (text, linewise)
+        self.app._vim_register = (text, linewise)
         try:
-            self.app.copy_to_clipboard(text)
+            self.app.copy_to_clipboard(text)  # also to the system clipboard (OSC 52)
         except Exception:  # noqa: BLE001 - the terminal may not support it
-            pass
+            self.app._clipboard = text
+
+    def _register(self) -> tuple[str, bool]:
+        """(text, linewise): what was last yanked or copied anywhere in the app."""
+        text = self.app.clipboard
+        yanked = getattr(self.app, "_vim_register", ("", False))
+        return text, yanked[1] and yanked[0] == text  # copied since (Ctrl+C): characters
 
     def _cut(self, start, end, linewise: bool) -> None:
         if start == end:
@@ -371,7 +381,7 @@ class VimTextArea(TextArea):
         self._set_mode(INSERT)
 
     def _put(self, after: bool) -> None:
-        text, linewise = self._register
+        text, linewise = self._register()
         if not text:
             return
         row, col = self.cursor_location
