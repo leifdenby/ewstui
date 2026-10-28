@@ -603,7 +603,8 @@ event, `[`/`]` shift the visible date range.
 **Finding a room** (`f` in the Calendar tab): shows one day as a grid —
 a row per room in your account's config, a column per half hour of your
 working day (taken from your Outlook working hours if the server
-provides them, else 08:00–17:00), `███` busy and `·` free. It's one EWS
+provides them, else 08:00–17:00), `███` busy and `·` free; `e` widens
+it to 06:00–22:00 to book outside working hours (`e` again to go back). It's one EWS
 GetUserAvailability call per day, with no access to the rooms' calendars
 needed. `[`/`]` go to the previous/next day (`t` back to today), or Tab
 to the date field, type a date and Enter; `j`/`k` pick the room and
