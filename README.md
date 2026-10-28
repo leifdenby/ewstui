@@ -299,6 +299,62 @@ itself an embedded email or calendar item (e.g. a forwarded message)
 shows up greyed out in the list since EWS represents those
 differently and this doesn't handle that case yet.
 
+## Exporting a folder (`ewstui export`)
+
+Copies one mail folder to plain files, for reading and searching outside
+ewstui (grep, scripts, an AI assistant), without opening the UI:
+
+```bash
+ewstui export "Projects/0 - Proposals/SBEP" --out ~/proposals/sbep/emails --with-sent
+ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
+```
+
+- The folder is its path in the folder pane, `/`-separated, any case.
+  If there's no such folder, the closest paths are listed.
+- `--with-sent` also exports your replies from Sent Items to the
+  folder's conversations (matched on Exchange's conversation id, going
+  back 30 days before the folder's oldest email).
+  `--no-attachments` skips downloading attachments.
+- Connection options are the usual ones (`--account`, `--email`,
+  `--auth`, ...); with none, the default account is used. Logging in
+  works as for the UI (Keychain + Touch ID, or a password prompt).
+- Re-running only fetches emails that are new or changed (by Exchange's
+  change key); the rest is left as it is. `--update DIR` reads the
+  folder, account and options from the earlier export. One directory
+  holds one folder of one mailbox: exporting another one into it is
+  refused.
+
+What it writes:
+
+```
+emails/
+  index.json                                        where it came from + one record per email
+  2026-10-20_0931_kick-off_1a2b3c4d.md              headers + the email's plain text
+  attachments/2026-10-20_0931_kick-off_1a2b3c4d/plan.docx
+```
+
+`index.json` (format `ewstui-export/1`) has:
+- `source`: the mailbox, account, EWS URL, folder path and id, and the
+  options used.
+- `exported_by`: the ewstui version, git commit and command line (the
+  password is never on the command line).
+- `first_synced` and `last_synced`.
+- `counts`.
+- `emails`, newest first. Each email has its file, date, subject,
+  from/to/cc (name and address), the folder it came from, its
+  attachments, and `present` (false once it's gone from the folder; its
+  file is kept).
+
+Each email also carries the ids to find it on the server again:
+- `message_id`, the Internet Message-ID, which never changes, even when
+  the email is moved.
+- `ews_item_id` and `ews_folder_id`, Exchange's own ids. They're a
+  direct lookup, but Exchange gives an email a new id when it's moved.
+- `changekey`.
+
+File names end in a hash of the Message-ID, so they stay the same across
+runs.
+
 ## Keybindings
 
 Press `?` inside the app for the full list: a panel with every section

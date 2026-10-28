@@ -209,6 +209,11 @@ def _resolve_password(cfg: Config, username: str) -> str:
         if password is not None:
             cfg.password_source = "keychain"
             return password
+    if not sys.stdin.isatty():  # e.g. `ewstui export` run from a script: nobody to type it
+        raise AuthError(
+            f"No password for {username}: the Keychain unlock was cancelled or unavailable, and there's "
+            "no terminal to type one in. Run it in a terminal, or set EWSTUI_PASSWORD."
+        )
     cfg.password_source = "prompt"
     return getpass.getpass(f"EWS password for {username}: ")
 
