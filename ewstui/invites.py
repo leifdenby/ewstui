@@ -7,7 +7,7 @@ test; the calendar lookup itself happens in the app.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from textual.content import Content
 
@@ -58,6 +58,31 @@ def when_text(info: MeetingInfo) -> str:
     end = info.end or info.start
     end_text = f"{end:%H:%M}" if end.date() == info.start.date() else f"{end:%a %d %b %H:%M}"
     return f"{info.start:%a %d %b %Y %H:%M}–{end_text} ({_duration(info.start, end)})"
+
+
+def parse_new_time(text: str, info: MeetingInfo, today: date) -> tuple[datetime, datetime] | None:
+    """What you type to propose a new time for a meeting: an optional day
+    (anything parse_date reads) then a start time, or a range — "14",
+    "thu 10:30", "tomorrow 9-10:30", "2026-11-03 13". Without a day it's
+    the meeting's day; without an end it keeps the meeting's length."""
+    from .dates import parse_date
+    from .event_panel import parse_time
+
+    words = text.split()
+    if not words or info.start is None:
+        return None
+    *day_words, times = words
+    day = parse_date(" ".join(day_words), today) if day_words else info.start.date()
+    first, sep, last = times.replace("–", "-").partition("-")
+    start_time, end_time = parse_time(first), parse_time(last) if sep else None
+    if day is None or start_time is None or (sep and end_time is None):
+        return None
+    start = datetime.combine(day, start_time)
+    if end_time is not None:
+        end = datetime.combine(day, end_time)
+        return (start, end) if end > start else None
+    length = (info.end - info.start) if info.end and not info.is_all_day else timedelta(hours=1)
+    return start, start + length
 
 
 def strip_hours(info: MeetingInfo, hours: tuple[time, time] = DEFAULT_WORK_HOURS) -> tuple[time, time]:

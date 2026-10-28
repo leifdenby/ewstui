@@ -117,6 +117,8 @@ class MeetingInfo:
     "Unknown"/"NoResponseReceived" (not answered), "Accept", "Tentative",
     "Decline" or "Organizer". `calendar_item_id` is the meeting in your
     calendar (Exchange puts an invite there as tentative on arrival).
+    `allows_new_time` is False when the organizer turned off proposals of
+    a new time.
     """
     kind: str  # "invite" / "cancellation" / "response"
     start: datetime | None
@@ -128,6 +130,7 @@ class MeetingInfo:
     my_response: str = "Unknown"
     is_out_of_date: bool = False
     calendar_item_id: str | None = None
+    allows_new_time: bool = True
 
 
 # How ewstui answers an invite -> the exchangelib method that does it.
@@ -401,6 +404,7 @@ def _meeting(item, tz, calendar=None) -> MeetingInfo | None:
         my_response=getattr(item, "my_response_type", None) or "Unknown",
         is_out_of_date=bool(getattr(item, "is_out_of_date", False)),
         calendar_item_id=calendar_item_id,
+        allows_new_time=getattr(item, "allow_new_time_proposal", None) is not False,
     )
 
 
@@ -596,17 +600,27 @@ class MailClient:
             meeting=_meeting(item, self.tz, getattr(self.account, "calendar", None)),
         )
 
-    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True,
+                          proposed: tuple[datetime, datetime] | None = None) -> None:
         """Accept / tentatively accept / decline an invite (`response` is a
         key of INVITE_RESPONSES). With `send`, the organizer gets your
         response (with `note` as its text); without, it's only recorded in
-        your calendar. Not retried: a repeat would answer twice.
+        your calendar. `proposed` (naive local start, end) suggests a new
+        time with a tentative / decline that's sent; Outlook shows the
+        organizer a "New time proposed" they can accept. Not retried: a
+        repeat would answer twice.
         """
         from exchangelib.items import SAVE_ONLY, SEND_AND_SAVE_COPY
 
         item = self._folder_by_id(folder_id).get(id=message_id)
         respond = getattr(item, INVITE_RESPONSES[response])
-        respond(message_disposition=SEND_AND_SAVE_COPY if send else SAVE_ONLY, body=note or None)
+        extra = {}
+        if proposed and send and response != "accept":
+            extra = {
+                "proposed_start": EWSDateTime.from_datetime(proposed[0]).astimezone(self.tz),
+                "proposed_end": EWSDateTime.from_datetime(proposed[1]).astimezone(self.tz),
+            }
+        respond(message_disposition=SEND_AND_SAVE_COPY if send else SAVE_ONLY, body=note or None, **extra)
 
     def remove_cancelled_meeting(self, folder_id: str, message_id: str) -> bool:
         """Delete (to Deleted Items) the calendar entry of a cancelled

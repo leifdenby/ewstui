@@ -293,11 +293,13 @@ class DemoMailClient:
     def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
         return self.move_message(folder_id, message_id, "archive")
 
-    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True,
+                          proposed=None) -> None:
         m = self.get_message(folder_id, message_id)
         if m.meeting is None or m.meeting.kind != "invite":
             raise ValueError("not a meeting invite")
-        self.invite_responses.append({"id": message_id, "response": response, "note": note, "send": send})
+        self.invite_responses.append({"id": message_id, "response": response, "note": note, "send": send}
+                                     | ({"proposed": proposed} if proposed else {}))
         m.meeting.my_response = {"accept": "Accept", "tentative": "Tentative", "decline": "Decline"}[response]
         m.changekey += "+"
         if self.calendar is not None:

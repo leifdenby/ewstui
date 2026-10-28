@@ -797,7 +797,8 @@ class EwstuiApp(App):
         def _on_result(result: dict | None) -> None:
             if result is not None:
                 self.notify("Sending your response…" if result["send"] else "Updating your calendar…", timeout=3)
-                self._respond_to_invite(folder_id, detail, result["response"], result["note"], result["send"])
+                self._respond_to_invite(folder_id, detail, result["response"], result["note"], result["send"],
+                                        result["proposed"])
 
         organizer = detail.names.get(meeting.organizer, meeting.organizer) if getattr(detail, "names", None) else meeting.organizer
         self.push_screen(
@@ -805,15 +806,18 @@ class EwstuiApp(App):
         )
 
     @work(thread=True, group="invite-respond")
-    def _respond_to_invite(self, folder_id: str, detail, response: str, note: str, send: bool) -> None:
+    def _respond_to_invite(self, folder_id: str, detail, response: str, note: str, send: bool, proposed=None) -> None:
         try:
-            self.mail_client.respond_to_invite(folder_id, detail.id, response, note=note, send=send)
+            self.mail_client.respond_to_invite(folder_id, detail.id, response, note=note, send=send, proposed=proposed)
         except Exception as e:  # noqa: BLE001
             log.warning("answering an invite failed", exc_info=True)
             self.call_from_thread(self.notify, f"Answering the invite failed: {e}", severity="error", timeout=10)
             return
         moved, error = self._archive_wherever(folder_id, detail)
-        self.call_from_thread(self._invite_done, detail, folder_id, INVITE_DONE[response], send, moved, error)
+        done = INVITE_DONE[response]
+        if proposed:
+            done += f", proposing {proposed[0]:%a %d %b %H:%M}–{proposed[1]:%H:%M}"
+        self.call_from_thread(self._invite_done, detail, folder_id, done, send, moved, error)
 
     @work(thread=True, group="invite-respond")
     def _remove_cancelled(self, folder_id: str, detail) -> None:

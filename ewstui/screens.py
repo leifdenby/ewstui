@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -904,8 +904,10 @@ class InviteResponseScreen(ModalScreen[dict | None]):
     """`i` on an invite: the meeting and your availability that day, then
     a / t / d to accept, tentatively accept or decline. `s` toggles whether
     the organizer is sent your response; `n` (or Tab) goes to an optional
-    note sent with it, Enter comes back. Dismisses with
-    {"response", "note", "send"}, or None.
+    note sent with it, `p` to a new time to propose with a tentative /
+    decline (unless the organizer turned proposals off); Enter comes back.
+    Dismisses with {"response", "note", "send", "proposed"} — proposed is
+    (start, end) or None — or None.
     """
 
     BINDINGS = [
@@ -915,6 +917,7 @@ class InviteResponseScreen(ModalScreen[dict | None]):
         Binding("d", "respond('decline')", "Decline"),
         Binding("s", "toggle_send", "Send response"),
         Binding("n,tab", "note", "Note", show=False),
+        Binding("p", "propose", "Propose new time", show=False),
     ]
     AUTO_FOCUS = ""  # focus nothing: letters are answers, not typing, until n/Tab
 
@@ -938,6 +941,7 @@ class InviteResponseScreen(ModalScreen[dict | None]):
         margin-top: 1;
     }
     """
+    PROPOSE_HELP = "e.g. 14, thu 10:30, tomorrow 9-10:30"
 
     def __init__(self, subject: str, meeting, events=None, organizer_name: str = "") -> None:
         super().__init__()
@@ -955,6 +959,10 @@ class InviteResponseScreen(ModalScreen[dict | None]):
             yield Static(id="invite-send")
             yield Input(placeholder="Note to send with your response (optional) — n or Tab to type, Enter when done",
                         id="invite-note")
+            if self._meeting.allows_new_time:
+                yield Input(placeholder=f"New time to propose with t / d (optional) — p to type; {self.PROPOSE_HELP}",
+                            id="invite-propose")
+                yield Static(id="invite-proposal")
 
     def on_mount(self) -> None:
         self._draw()
@@ -996,6 +1004,42 @@ class InviteResponseScreen(ModalScreen[dict | None]):
             if self.send else
             Content.from_markup(f"[b {c['tux-key']}]s[/] $box send your response (off: only your calendar changes)", box=box)
         )
+        self._draw_proposal()
+
+    def _proposal_text(self) -> str:
+        return self.query_one("#invite-propose", Input).value.strip() if self._meeting.allows_new_time else ""
+
+    def _proposed(self) -> tuple[datetime, datetime] | None:
+        from .invites import parse_new_time
+
+        return parse_new_time(self._proposal_text(), self._meeting, date.today())
+
+    def _draw_proposal(self) -> None:
+        from textual.content import Content
+
+        if not self._meeting.allows_new_time:
+            return
+        c = self.app.theme_variables
+        text, proposed = self._proposal_text(), self._proposed()
+        if not text:
+            line = Content("")
+        elif proposed is None:
+            line = Content.from_markup(f"[{c['warning']}]Can't read that time ($h)[/]", h=self.PROPOSE_HELP)
+        else:
+            start, end = proposed
+            end_text = f"{end:%H:%M}" if end.date() == start.date() else f"{end:%a %d %b %H:%M}"
+            when = f"{start:%a %d %b %H:%M}–{end_text}"
+            if self.send:
+                line = Content.from_markup(f"Proposes [b]$w[/] with [b {c['tux-key']}]t[/] or "
+                                           f"[b {c['tux-key']}]d[/] [{c['tux-dim']}](not with a)[/]", w=when)
+            else:
+                line = Content.from_markup(f"[{c['warning']}]$w can only be proposed when your response is sent "
+                                           f"(s)[/]", w=when)
+        self.query_one("#invite-proposal", Static).update(line)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "invite-propose":
+            self._draw_proposal()
 
     def action_toggle_send(self) -> None:
         self.send = not self.send
@@ -1004,12 +1048,24 @@ class InviteResponseScreen(ModalScreen[dict | None]):
     def action_note(self) -> None:
         self.query_one("#invite-note", Input).focus()
 
+    def action_propose(self) -> None:
+        if not self._meeting.allows_new_time:
+            self.notify(f"{self._organizer} doesn't take proposals of a new time for this meeting")
+            return
+        self.query_one("#invite-propose", Input).focus()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.set_focus(None)  # back to answering with a / t / d
 
     def action_respond(self, response: str) -> None:
         note = self.query_one("#invite-note", Input).value.strip()
-        self.dismiss({"response": response, "note": note if self.send else "", "send": self.send})
+        proposed = None
+        if response != "accept" and self.send and self._proposal_text():
+            proposed = self._proposed()
+            if proposed is None:
+                self.notify(f"Can't read the new time ({self.PROPOSE_HELP}) — fix it or clear it", severity="warning")
+                return
+        self.dismiss({"response": response, "note": note if self.send else "", "send": self.send, "proposed": proposed})
 
     def action_cancel(self) -> None:
         self.dismiss(None)

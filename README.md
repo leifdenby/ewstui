@@ -501,7 +501,12 @@ strip of half-hour cells (`·` free, `█` busy, `▒` the meeting, `×` the
 meeting on top of something else). `i` opens the answer popup with the
 same availability: `a` accept, `t` tentative, `d` decline; `s` switches
 off sending your response to the organizer (only your calendar
-changes); `n` (or Tab) types an optional note to send with it. The
+changes); `n` (or Tab) types an optional note to send with it; `p`
+types a new time to propose with a tentative or decline (`14` keeps the
+meeting's day and length, `thu 10:30`, `tomorrow 9-10:30`; the line
+below shows what it read). The organizer gets Outlook's "New time
+proposed", which they can accept. A proposal needs the response to be
+sent, and the field is absent when the organizer turned proposals off. The
 invite email is then archived (`u` brings the email back; your answer
 stays). A cancellation (`cancelled ·`) shows the meeting's time and
 place, and `i` offers to remove it from your calendar.

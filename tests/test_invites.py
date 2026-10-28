@@ -14,7 +14,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import EventSummary, MailClient, MeetingInfo
-from ewstui.invites import conflicts, day_strip, render_invite_card, strip_hours, when_text
+from ewstui.invites import conflicts, day_strip, parse_new_time, render_invite_card, strip_hours, when_text
 from ewstui.screens import ConfirmScreen, InviteResponseScreen
 from ewstui.widgets.message_table import MessageTable
 from ewstui.widgets.preview import PreviewPane
@@ -220,6 +220,51 @@ def test_respond_without_sending_only_updates_the_calendar():
     assert item.calls == [("accept", {"message_disposition": SAVE_ONLY, "body": None})]
 
 
+@pytest.mark.parametrize("response", ["tentative", "decline"])
+def test_a_proposed_new_time_goes_with_tentative_and_decline(response):
+    item = FakeInvite()
+    start, end = datetime(2026, 9, 30, 13), datetime(2026, 9, 30, 14)
+    client_with([item]).respond_to_invite("inbox", "req1", response, proposed=(start, end))
+    (_, kw), = item.calls
+    local = lambda t: t.astimezone(EWSTimeZone.localzone()).replace(tzinfo=None)  # noqa: E731
+    assert (local(kw["proposed_start"]), local(kw["proposed_end"])) == (start, end)
+
+
+@pytest.mark.parametrize(("response", "send"), [("accept", True), ("decline", False)])
+def test_no_proposal_with_accept_or_without_sending(response, send):
+    item = FakeInvite()
+    proposed = (datetime(2026, 9, 30, 13), datetime(2026, 9, 30, 14))
+    client_with([item]).respond_to_invite("inbox", "req1", response, send=send, proposed=proposed)
+    (_, kw), = item.calls
+    assert "proposed_start" not in kw and "proposed_end" not in kw
+
+
+def test_organizer_turning_off_new_time_proposals_is_read():
+    items = meeting_items()
+    assert client_with(items).get_message("inbox", "req1").meeting.allows_new_time
+    items[0].allow_new_time_proposal = False
+    assert not client_with(items).get_message("inbox", "req1").meeting.allows_new_time
+
+
+PLANNING = MeetingInfo(kind="invite", start=datetime(2026, 9, 29, 10), end=datetime(2026, 9, 29, 11, 30))
+TODAY = datetime(2026, 9, 28).date()  # a Monday
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("14", (datetime(2026, 9, 29, 14), datetime(2026, 9, 29, 15, 30))),  # the meeting's day and length
+    ("thu 10:30", (datetime(2026, 10, 1, 10, 30), datetime(2026, 10, 1, 12))),
+    ("tomorrow 9-10:15", (datetime(2026, 9, 29, 9), datetime(2026, 9, 29, 10, 15))),
+    ("2026-10-05 13.00–14", (datetime(2026, 10, 5, 13), datetime(2026, 10, 5, 14))),
+    ("", None),
+    ("thu", None),
+    ("blursday 10", None),
+    ("15-14", None),
+    ("25", None),
+])
+def test_parse_new_time(text, expected):
+    assert parse_new_time(text, PLANNING, TODAY) == expected
+
+
 def test_remove_cancelled_meeting_trashes_the_calendar_entry():
     trashed = []
 
@@ -313,6 +358,36 @@ async def test_note_is_sent_with_the_response(tmp_path):
         await settle(app, pilot)
         assert app.mail_client.invite_responses[0]["note"] == "late by 5"
         assert app.mail_client.invite_responses[0]["response"] == "tentative"
+
+
+async def test_p_proposes_a_new_time_with_tentative(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await go_to(app, pilot, "inv1")
+        await pilot.press("i")
+        await settle(app, pilot)
+        await pilot.press("p", *"16", "enter")
+        assert "Proposes" in str(app.screen.query_one("#invite-proposal").render())
+        await pilot.press("t")
+        await settle(app, pilot)
+        meeting_day = app.mail_client.get_message("archive", "inv1").meeting.start.date()
+        start = datetime.combine(meeting_day, datetime.min.time()).replace(hour=16)
+        assert app.mail_client.invite_responses[0]["response"] == "tentative"
+        assert app.mail_client.invite_responses[0]["proposed"] == (start, start + timedelta(hours=1))
+
+
+async def test_accept_ignores_a_proposed_time_and_an_unreadable_one_blocks_decline(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await go_to(app, pilot, "inv1")
+        await pilot.press("i")
+        await settle(app, pilot)
+        await pilot.press("p", *"blursday", "enter", "d")
+        await settle(app, pilot)
+        assert isinstance(app.screen, InviteResponseScreen) and app.mail_client.invite_responses == []
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert app.mail_client.invite_responses == [{"id": "inv1", "response": "accept", "note": "", "send": True}]
 
 
 async def test_escape_answers_nothing(tmp_path):
