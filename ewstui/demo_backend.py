@@ -126,6 +126,28 @@ _LOREM = (
 )
 
 
+def _summarize_message(m: MessageDetail, folder_id: str) -> MessageSummary:
+    """Build the message-list row of a demo email, as the live client's ``_summary`` does.
+
+    Parameters
+    ----------
+    m : MessageDetail
+        The demo email.
+    folder_id : str
+        The folder it is in.
+
+    Returns
+    -------
+    MessageSummary
+        The row, with its folder and Internet Message-ID.
+    """
+    return MessageSummary(
+        m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
+        conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
+        conversation_index=m.conversation_index, kind=m.kind, internet_message_id=m.internet_message_id,
+    )
+
+
 class DemoMailClient:
     def __init__(self, page_size: int = 50, calendar: DemoCalendarClient | None = None, with_invites: bool = False):
         """`with_invites` adds a meeting invite, a cancellation and a
@@ -236,14 +258,7 @@ class DemoMailClient:
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
         msgs = self._messages.get(folder_id, [])
         limit = limit or self.page_size
-        return [
-            MessageSummary(
-                m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
-                conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
-                conversation_index=m.conversation_index, kind=m.kind,
-            )
-            for m in msgs[offset : offset + limit]
-        ]
+        return [_summarize_message(m, folder_id) for m in msgs[offset : offset + limit]]
 
     def message_position(self, folder_id: str, message_id: str) -> int | None:
         ids = [m.id for m in self._messages.get(folder_id, [])]
@@ -348,13 +363,26 @@ class DemoMailClient:
         for m in self._messages.get(folder_id, []):
             haystack = f"{m.subject} {m.sender} {m.body_text}".casefold()
             if words and all(any(w.startswith(word) for w in haystack.split()) or word in haystack for word in words):
-                out.append(MessageSummary(
-                    m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
-                    conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
-                    conversation_index=m.conversation_index, kind=m.kind,
-                ))
+                out.append(_summarize_message(m, folder_id))
         out.sort(key=lambda m: m.received or datetime.min, reverse=True)
         return out[:limit]
+
+    def find_conversation(self, conversation_id: str) -> list[MessageSummary]:
+        """Find every email of a conversation, in any folder (like the live client).
+
+        Parameters
+        ----------
+        conversation_id : str
+            The conversation's id.
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first, each with its folder as ``folder_id``.
+        """
+        found = [_summarize_message(m, folder_id) for folder_id, msgs in self._messages.items()
+                 for m in msgs if m.conversation_id == conversation_id]
+        return sorted(found, key=lambda m: m.received or datetime.min, reverse=True)
 
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])

@@ -1,13 +1,16 @@
 """
-`ewstui export`: copy one mail folder to plain files, for reading and
-searching outside ewstui (grep, scripts, an AI assistant).
+`ewstui export`: copy one mail folder (export_folder), or selected emails
+and their threads from any folder (export_messages, `--message`), to
+plain files, for reading and searching outside ewstui (grep, scripts, an
+AI assistant).
 
     <out>/index.json                       where it came from + one record per email
     <out>/<date>_<subject>_<hash>.md       the email as text
     <out>/attachments/<same stem>/<file>   its file attachments
 
 Works on the MailClient interface only (list_folders, list_messages,
-get_message, list_attachments, save_attachment, sent_folder_id), so the
+get_message, list_attachments, save_attachment, sent_folder_id,
+find_message, find_conversation), so the
 demo backend stands in for tests. Re-running adds what's new and rewrites
 what changed (by change key); emails already exported stay as they are.
 """
@@ -182,17 +185,59 @@ def write_index(out_dir: Path, index: dict) -> None:
     os.replace(tmp, path)
 
 
+def describe_source(source: dict) -> str:
+    """Describe what an export is a copy of, for messages to the user.
+
+    Parameters
+    ----------
+    source : dict
+        The ``source`` of an index.json.
+
+    Returns
+    -------
+    str
+        E.g. ``'Projects/SBEP' in you@corp.example`` or ``3 selected emails in you@corp.example``.
+    """
+    if source.get("kind") == "messages":
+        what = f"{len(source.get('message_ids', []))} selected emails" + (" (+ threads)" if source.get("thread") else "")
+    else:
+        what = repr(source.get("folder_path"))
+    return f"{what} in {source.get('mailbox')}"
+
+
 def check_source(existing: dict | None, source: dict, out_dir: Path) -> None:
-    """One folder of one mailbox per directory: refuse to mix another in."""
+    """Refuse to mix another source into an export directory.
+
+    One folder of one mailbox per directory, or selected emails of one
+    mailbox (more emails can be added to those).
+
+    Parameters
+    ----------
+    existing : dict or None
+        The directory's current index.json, if any.
+    source : dict
+        The ``source`` of the export about to be written.
+    out_dir : Path
+        The export directory (for the error message).
+
+    Raises
+    ------
+    ExportError
+        If the directory holds an export of something else.
+    """
     if not existing:
         return
     old = existing.get("source", {})
-    for key in ("mailbox", "folder_id"):
-        if old.get(key) != source.get(key):
-            raise ExportError(
-                f"{Path(out_dir) / INDEX} is an export of {old.get('folder_path')!r} in {old.get('mailbox')}, "
-                f"not {source.get('folder_path')!r} in {source.get('mailbox')}. Use another --out directory."
-            )
+    # Exports made before `--message` existed have no "kind": folders.
+    old_kind, new_kind = old.get("kind", "folder"), source.get("kind", "folder")
+    same = old.get("mailbox") == source.get("mailbox") and old_kind == new_kind
+    if same and new_kind == "folder":
+        same = old.get("folder_id") == source.get("folder_id")
+    if not same:
+        raise ExportError(
+            f"{Path(out_dir) / INDEX} is an export of {describe_source(old)}, "
+            f"not {describe_source(source)}. Use another --out directory."
+        )
 
 
 def git_commit() -> str | None:
@@ -246,29 +291,53 @@ def _sent_replies(client, folder_messages: list[MessageSummary]) -> tuple[str, l
     return sent_id, replies
 
 
-def export_folder(client, folder: FolderSummary, out_dir: Path, *, source: dict, exported_by: dict,
-                  with_sent: bool = False, attachments: bool = True, now=None, progress=None) -> Stats:
-    """Export `folder` into `out_dir` (see the module docstring); returns
-    what happened. `source` and `exported_by` go into index.json as they
-    are; `progress(done, total)` is called after each email."""
-    out_dir = Path(out_dir)
+def _prepare_export(out_dir: Path, source: dict) -> tuple[dict | None, dict[str, dict]]:
+    """Check an export directory and read the records already in it.
+
+    Parameters
+    ----------
+    out_dir : Path
+        The export directory (created if needed).
+    source : dict
+        The ``source`` of the export about to be written.
+
+    Returns
+    -------
+    tuple[dict or None, dict[str, dict]]
+        The existing index.json (if any), and its email records by
+        ``message_key``, all marked ``present: False`` until seen again.
+    """
     existing = load_index(out_dir)
     check_source(existing, source, out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
     records = {r["message_id"] or f"ews:{r['ews_item_id']}": r for r in (existing or {}).get("emails", [])}
-    by_item = {r["ews_item_id"]: r for r in records.values()}
     for r in records.values():
         r["present"] = False  # until seen in this run
+    return existing, records
 
-    stats = Stats()
-    in_folder = list(iter_all(client, folder.id))
-    stats.folder_total = len(in_folder)
-    todo = [(m, folder.id, folder.name) for m in in_folder]
-    if with_sent:
-        sent_id, replies = _sent_replies(client, in_folder)
-        todo += [(m, sent_id, "Sent Items") for m in replies]
 
+def _export_items(client, todo: list[tuple[MessageSummary, str, str]], out_dir: Path, records: dict[str, dict],
+                  stats: Stats, attachments: bool, progress) -> None:
+    """Write each email (and its attachments) unless it's unchanged since the last run.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        Where the emails are fetched from.
+    todo : list[tuple[MessageSummary, str, str]]
+        (summary, folder id, folder name) of each email to export.
+    out_dir : Path
+        The export directory.
+    records : dict[str, dict]
+        The index records by ``message_key``; updated in place.
+    stats : Stats
+        Counts of new / updated / unchanged emails; updated in place.
+    attachments : bool
+        Whether to download file attachments.
+    progress : callable or None
+        Called as ``progress(done, total)`` after each email.
+    """
+    by_item = {r["ews_item_id"]: r for r in records.values()}
     for done, (summary, folder_id, folder_name) in enumerate(todo, 1):
         known = by_item.get(summary.id)
         if known and known["changekey"] == summary.changekey and (out_dir / known["file"]).exists():
@@ -287,21 +356,37 @@ def export_folder(client, folder: FolderSummary, out_dir: Path, *, source: dict,
                 stats.updated += 1
             else:
                 stats.new += 1
-        if folder_id != folder.id:
-            stats.from_sent += 1
         if progress:
             progress(done, len(todo))
 
+
+def _write_export_index(out_dir: Path, existing: dict | None, records: dict[str, dict], stats: Stats, *,
+                        source: dict, exported_by: dict, description: str, now: datetime | None) -> None:
+    """Fill in the totals in `stats` and write index.json.
+
+    Parameters
+    ----------
+    out_dir : Path
+        The export directory.
+    existing : dict or None
+        The previous index.json, for ``first_synced``.
+    records : dict[str, dict]
+        All email records, present or not.
+    stats : Stats
+        This run's counts; ``attachments`` and ``exported`` are set here.
+    source, exported_by : dict
+        Written into index.json as they are.
+    description : str
+        The index's human-readable ``description``.
+    now : datetime or None
+        The sync time (now if None).
+    """
     stats.attachments = sum(len(r["attachments"]) for r in records.values() if r["present"])
     stats.exported = sum(1 for r in records.values() if r["present"])
     synced = _iso(now or datetime.now().astimezone())
     write_index(out_dir, {
         "format": FORMAT,
-        "description": (
-            f"Copy of the Exchange folder {source.get('folder_path')!r} in {source.get('mailbox')}, made with "
-            "`ewstui export`. A read-only snapshot: changes here don't reach Exchange. Emails no longer in the "
-            "folder are kept with present: false. Refresh with: ewstui export --update <this directory>"
-        ),
+        "description": description,
         "source": source,
         "exported_by": exported_by,
         "first_synced": (existing or {}).get("first_synced") or synced,
@@ -309,4 +394,136 @@ def export_folder(client, folder: FolderSummary, out_dir: Path, *, source: dict,
         "counts": {k: v for k, v in asdict(stats).items() if k not in ("new", "updated", "unchanged")},
         "emails": sorted(records.values(), key=lambda r: r["date"] or "", reverse=True),
     })
+
+
+def export_folder(client, folder: FolderSummary, out_dir: Path, *, source: dict, exported_by: dict,
+                  with_sent: bool = False, attachments: bool = True, now=None, progress=None) -> Stats:
+    """Export `folder` into `out_dir` (see the module docstring); returns
+    what happened. `source` and `exported_by` go into index.json as they
+    are; `progress(done, total)` is called after each email."""
+    out_dir = Path(out_dir)
+    existing, records = _prepare_export(out_dir, source)
+
+    stats = Stats()
+    in_folder = list(iter_all(client, folder.id))
+    stats.folder_total = len(in_folder)
+    todo = [(m, folder.id, folder.name) for m in in_folder]
+    if with_sent:
+        sent_id, replies = _sent_replies(client, in_folder)
+        todo += [(m, sent_id, "Sent Items") for m in replies]
+        stats.from_sent = len(replies)
+
+    _export_items(client, todo, out_dir, records, stats, attachments, progress)
+    _write_export_index(
+        out_dir, existing, records, stats, source=source, exported_by=exported_by, now=now,
+        description=(
+            f"Copy of the Exchange folder {source.get('folder_path')!r} in {source.get('mailbox')}, made with "
+            "`ewstui export`. A read-only snapshot: changes here don't reach Exchange. Emails no longer in the "
+            "folder are kept with present: false. Refresh with: ewstui export --update <this directory>"
+        ),
+    )
+    return stats
+
+
+def find_messages(client, message_ids: list[str], thread: bool = False) -> list[tuple[MessageSummary, str, str]]:
+    """Look up emails by Internet Message-ID, optionally with their whole threads.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        Where to look (all mail folders).
+    message_ids : list[str]
+        Internet Message-IDs (``<...@host>``), as ``ewstui search`` prints them.
+    thread : bool
+        Also include every email in each one's conversation, in any folder.
+
+    Returns
+    -------
+    list[tuple[MessageSummary, str, str]]
+        (summary, folder id, folder name) of each email, without duplicates.
+
+    Raises
+    ------
+    ExportError
+        If any of the Message-IDs isn't found in the mailbox.
+    """
+    names = {f.id: f.name for f in client.list_folders()}
+    found: dict[str, tuple[MessageSummary, str, str]] = {}
+    missing = []
+    for message_id in message_ids:
+        where = client.find_message(message_id)
+        if where is None:
+            missing.append(message_id)
+            continue
+        detail = client.get_message(where.folder_id, where.message_id)
+        found.setdefault(detail.id, (detail, where.folder_id, names.get(where.folder_id, "?")))
+        if thread and detail.conversation_id:
+            for m in client.find_conversation(detail.conversation_id):
+                found.setdefault(m.id, (m, m.folder_id, names.get(m.folder_id, "?")))
+    if missing:
+        raise ExportError(f"not found in the mailbox: {', '.join(missing)}")
+    return list(found.values())
+
+
+def export_messages(client, message_ids: list[str], out_dir: Path, *, source: dict, exported_by: dict,
+                    thread: bool = False, attachments: bool = True, now=None, progress=None) -> Stats:
+    """Export selected emails (optionally with their threads) into `out_dir`.
+
+    Re-running into the same directory adds the new Message-IDs to the
+    ones exported before and refreshes them all, so one directory can
+    collect the emails about one topic from any folder.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        Where the emails are fetched from.
+    message_ids : list[str]
+        Internet Message-IDs of the emails to export.
+    out_dir : Path
+        The export directory (created if needed).
+    source : dict
+        Written into index.json (``kind: "messages"``); its
+        ``message_ids`` become those of earlier runs plus `message_ids`.
+    exported_by : dict
+        Written into index.json as it is.
+    thread : bool
+        Also export every email in each one's conversation.
+    attachments : bool
+        Whether to download file attachments.
+    now : datetime or None
+        The sync time (now if None).
+    progress : callable or None
+        Called as ``progress(done, total)`` after each email.
+
+    Returns
+    -------
+    Stats
+        What happened (``folder_total`` is the number of emails selected).
+
+    Raises
+    ------
+    ExportError
+        If the directory holds another kind of export, or a Message-ID isn't found.
+    """
+    out_dir = Path(out_dir)
+    source = {**source, "kind": "messages"}
+    existing, records = _prepare_export(out_dir, source)
+    old = (existing or {}).get("source", {})
+    all_ids = list(dict.fromkeys([*old.get("message_ids", []), *message_ids]))
+    thread = thread or bool(old.get("thread"))
+    source = {**source, "message_ids": all_ids, "thread": thread}
+
+    stats = Stats()
+    todo = find_messages(client, all_ids, thread=thread)
+    stats.folder_total = len(todo)
+    _export_items(client, todo, out_dir, records, stats, attachments, progress)
+    _write_export_index(
+        out_dir, existing, records, stats, source=source, exported_by=exported_by, now=now,
+        description=(
+            f"Copy of selected emails{' and their threads' if thread else ''} in {source.get('mailbox')} "
+            "(source.message_ids), made with `ewstui export --message`. A read-only snapshot: changes here don't "
+            "reach Exchange. Emails no longer found are kept with present: false. Refresh with: "
+            "ewstui export --update <this directory>; add emails with: ewstui export --message <id> --out <this directory>"
+        ),
+    )
     return stats

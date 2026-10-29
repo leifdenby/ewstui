@@ -136,3 +136,66 @@ def test_command_line_unknown_folder_fails(tmp_path, capsys):
     common = ["--demo", "--config", str(tmp_path / "config.toml")]
     assert main(["export", "Inbx/Nope", "--out", str(tmp_path / "x"), *common]) == 1
     assert "no folder" in capsys.readouterr().err
+
+
+MESSAGES_SOURCE = {"mailbox": "you@corp.example", "kind": "messages"}
+
+
+def run_messages(client, out, ids, **kwargs):
+    return export.export_messages(client, ids, out, source=MESSAGES_SOURCE, exported_by=BY, **kwargs)
+
+
+def test_single_message_is_exported_with_its_attachment(tmp_path):
+    stats = run_messages(DemoMailClient(), tmp_path, ["<m1@demo.corp.example>"])
+    assert (stats.folder_total, stats.new, stats.attachments) == (1, 1, 1)
+    idx = index(tmp_path)
+    assert idx["source"]["kind"] == "messages" and idx["source"]["message_ids"] == ["<m1@demo.corp.example>"]
+    [record] = idx["emails"]
+    assert (record["subject"], record["source_folder"]) == ("Q3 budget review", "Inbox")
+    assert (tmp_path / record["file"]).read_text().startswith("Subject: Q3 budget review\n")
+
+
+def test_thread_pulls_in_the_reply_from_sent_items(tmp_path):
+    stats = run_messages(DemoMailClient(), tmp_path, ["<m2@demo.corp.example>"], thread=True)
+    assert stats.folder_total == 2
+    folders = {r["ews_item_id"]: r["source_folder"] for r in index(tmp_path)["emails"]}
+    assert folders == {"m2": "Inbox", "s1": "Sent Items"}
+
+
+def test_messages_from_several_runs_accumulate_without_duplicates(tmp_path):
+    client = DemoMailClient()
+    run_messages(client, tmp_path, ["<m1@demo.corp.example>"])
+    stats = run_messages(client, tmp_path, ["<s2@demo.corp.example>", "<m1@demo.corp.example>"])
+    assert (stats.new, stats.unchanged, stats.exported) == (1, 1, 2)
+    assert index(tmp_path)["source"]["message_ids"] == ["<m1@demo.corp.example>", "<s2@demo.corp.example>"]
+
+
+def test_unknown_message_id_fails(tmp_path):
+    with pytest.raises(export.ExportError, match="<nope@x>"):
+        run_messages(DemoMailClient(), tmp_path, ["<nope@x>"])
+
+
+def test_folder_and_message_exports_dont_mix(tmp_path):
+    client = proposal_client()
+    run(client, tmp_path)
+    with pytest.raises(export.ExportError, match="another --out directory"):
+        run_messages(client, tmp_path, ["<m1@demo.corp.example>"])
+
+
+def test_command_line_message_export_and_update(tmp_path, capsys):
+    out = tmp_path / "emails"
+    common = ["--demo", "--config", str(tmp_path / "config.toml")]
+    assert main(["export", "--message", "<m2@demo.corp.example>", "--thread", "--out", str(out), *common]) == 0
+    assert "2 new" in capsys.readouterr().out
+    assert index(out)["source"]["thread"] is True
+
+    assert main(["export", "--update", str(out), *common]) == 0
+    assert "0 new, 0 updated, 2 unchanged" in capsys.readouterr().out
+
+
+def test_command_line_rejects_folder_with_message(tmp_path):
+    common = ["--demo", "--config", str(tmp_path / "config.toml")]
+    with pytest.raises(SystemExit):
+        main(["export", "Inbox", "--message", "<m1@demo.corp.example>", "--out", str(tmp_path / "x"), *common])
+    with pytest.raises(SystemExit):
+        main(["export", "Inbox", "--thread", "--out", str(tmp_path / "x"), *common])

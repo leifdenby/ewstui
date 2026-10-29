@@ -355,6 +355,33 @@ Each email also carries the ids to find it on the server again:
 File names end in a hash of the Message-ID, so they stay the same across
 runs.
 
+### Searching and exporting single emails (`ewstui search`, `export --message`)
+
+To find an email without opening the UI, and export just it (or its
+whole thread) rather than a folder:
+
+```bash
+ewstui search Joel CV                       # Inbox + Sent Items, newest first
+ewstui search "budget" --folder Archive --folder "Projects/SBEP"
+ewstui search "budget" --folder all --json  # every mail folder, as JSON
+ewstui export --message "<abc123@mail.example>" --thread --out ~/letters/joel/emails
+ewstui export --message "<def456@mail.example>" --out ~/letters/joel/emails   # adds to it
+```
+
+- `search` uses Exchange's own search (words in the subject, body and
+  people; a word also matches the start of a longer one). Exchange
+  searches one folder per request, so each folder is a separate request,
+  merged newest first; `--limit` (default 25) caps the hits. Each hit
+  is printed with its Message-ID (`@` marks attachments).
+- `export --message ID` finds the email in whichever folder it is in.
+  Repeat `--message` for more. `--thread` adds the rest of each email's
+  conversation from any folder, your replies in Sent Items included.
+- The directory's `index.json` has `source.kind: "messages"` and the
+  Message-IDs in `source.message_ids`. Exporting more emails into the
+  same directory adds to that list. `--update DIR` refreshes them all
+  (and their threads, if exported with `--thread`). A directory holds
+  either a folder export or selected emails, never both.
+
 ## Keybindings
 
 Press `?` inside the app for the full list: a panel with every section
@@ -659,6 +686,8 @@ ewstui/
   keymap.py          Single source of truth for the help-screen text
   screens.py         Modal screens: compose/reply, new event, help
   priority_store.py  Local todo.txt-backed priority list (parse/format/store)
+  export.py          `ewstui export`: a folder or selected emails -> files + index.json
+  cli_search.py      `ewstui search`: Exchange search over several folders, printed
   app.py             Main Textual App: three-pane mail view + calendar + priority views
   widgets/
     folder_list.py    Left pane

@@ -108,6 +108,10 @@ class MessageSummary:
     # "invite", "cancellation" or "response" for meeting items (see
     # MeetingInfo), "mail" for everything else.
     kind: str = "mail"
+    # The Internet Message-ID header (<...@host>): unlike the EWS item id it
+    # stays the same when the message is moved, so the priority list uses
+    # it to find a message again (and `ewstui search` prints it).
+    internet_message_id: str | None = None
 
 
 @dataclass
@@ -142,10 +146,6 @@ class MessageDetail(MessageSummary):
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     body_text: str = ""
-    # The Internet Message-ID header (<...@host>): unlike the EWS item id it
-    # stays the same when the message is moved, so the priority list uses
-    # it to find a message again.
-    internet_message_id: str | None = None
     # Display names of the sender and recipients, by address ("Jane Doe"),
     # for the reading pane; sender/to/cc stay plain addresses for replying.
     names: dict[str, str] = field(default_factory=dict)
@@ -410,6 +410,7 @@ def _meeting(item, tz, calendar=None) -> MeetingInfo | None:
 
 SUMMARY_FIELDS = (
     "subject", "sender", "datetime_received", "is_read", "has_attachments", "conversation_id", "conversation_index",
+    "message_id",
 )
 
 
@@ -430,6 +431,7 @@ def _summary(item, folder_id: str | None) -> MessageSummary:
         folder_id=folder_id,
         conversation_index=bytes(index) if index else None,
         kind=_kind(item),
+        internet_message_id=getattr(item, "message_id", None),
     )
 
 
@@ -591,6 +593,7 @@ class MailClient:
             received=item.datetime_received,
             is_read=_is_read(item),
             has_attachments=bool(getattr(item, "has_attachments", False)),
+            conversation_id=getattr(getattr(item, "conversation_id", None), "id", None),
             to=_addresses(item, "to_recipients", "required_attendees"),
             cc=_addresses(item, "cc_recipients", "optional_attendees"),
             body_text=getattr(item, "text_body", None) or "",
@@ -658,6 +661,37 @@ class MailClient:
                 return found
         folders = [f for f in self._all_folders() if _is_mail_folder(f)]
         return first(FolderCollection(account=self.account, folders=folders).filter(message_id=internet_message_id))
+
+    @retry_on_dead_connection
+    def find_conversation(self, conversation_id: str) -> list[MessageSummary]:
+        """Find every email of a conversation, in any mail folder.
+
+        One FindItem request over all mail folders, restricted on the
+        ConversationId, so a thread's replies in Sent Items (or wherever
+        they were filed) are found too.
+
+        Parameters
+        ----------
+        conversation_id : str
+            The conversation's EWS id (``MessageSummary.conversation_id``).
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first, each with the folder it is in as
+            ``folder_id``.
+        """
+        from exchangelib.folders import FolderCollection
+        from exchangelib.properties import ConversationId
+
+        folders = [f for f in self._all_folders() if _is_mail_folder(f)]
+        qs = (
+            FolderCollection(account=self.account, folders=folders)
+            .filter(conversation_id=ConversationId(id=conversation_id))
+            .only(*SUMMARY_FIELDS, "parent_folder_id")
+        )
+        found = [_summary(item, item.parent_folder_id.id) for item in qs]
+        return sorted(found, key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
 
     def _all_folders(self) -> list:
         out, stack = [], list(self.account.msg_folder_root.children)
