@@ -89,6 +89,8 @@ async def test_p_column_follows_outside_edits(tmp_path):
 
 
 async def test_not_watched_outside_the_priority_view_or_during_a_selection(tmp_path, monkeypatch):
+    # only the calls below check the file: the timer would also count a reload on a slow machine
+    monkeypatch.setattr("ewstui.app.PRIORITY_WATCH_SECONDS", 3600)
     app, todo = make_app(tmp_path)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()

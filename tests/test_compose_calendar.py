@@ -80,7 +80,8 @@ async def test_ctrl_o_shows_the_calendar_beside_the_email(tmp_path):
         first = calendar.first
         assert f"{first:%a %d %b}" in text  # from a Monday
         if today.weekday() < 5:  # the demo's events are today
-            assert "09:00–09:15 Standup" in text and "14:00–14:30 1:1 with manager" in text
+            # (a long subject is cut to the day's column)
+            assert "09:00–09:15 Standup" in text and "14:00–14:30 1:1 wi…" in text
         assert calendar.region.x >= screen.query_one("#compose-body", TextArea).region.right  # beside it
         await pilot.press("ctrl+f")
         await settle(app, pilot)
