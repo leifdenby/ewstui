@@ -17,6 +17,8 @@ def main(argv: list[str] | None = None) -> int:
         return _export(argv[1:])
     if argv[:1] == ["search"]:
         return _search(argv[1:])
+    if argv[:1] == ["calendar"]:
+        return _calendar(argv[1:])
     cfg = config_from_args(argv)
     _setup_logging(cfg)
 
@@ -311,6 +313,66 @@ def _search(argv: list[str]) -> int:
     else:
         print("\n".join(cli_search.format_hit_lines(hits, names)) if hits else "No matches.")
         print(f"\n{len(hits)} hits in {', '.join(f.name for f in folders)}", file=sys.stderr)
+    return 0
+
+
+def _calendar(argv: list[str]) -> int:
+    """`ewstui calendar --from DATE [--to DATE] [--json]`: list your calendar
+    events over a date range (see cli_calendar.py). Any other options are
+    the usual connection/account ones.
+
+    Parameters
+    ----------
+    argv : list[str]
+        The arguments after ``calendar``.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 if the connection failed.
+    """
+    import argparse
+    import json
+    from datetime import date, timedelta
+
+    from . import cli_calendar
+
+    p = argparse.ArgumentParser(
+        prog="ewstui calendar",
+        usage="ewstui calendar --from YYYY-MM-DD [--to YYYY-MM-DD] [--json] [options]",
+        description="List your calendar events over a date range (both days included), oldest first. "
+        "Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
+    )
+    p.add_argument("--from", dest="start", type=date.fromisoformat, required=True, metavar="YYYY-MM-DD",
+                   help="First day to list")
+    p.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today(), metavar="YYYY-MM-DD",
+                   help="Last day to list (default today)")
+    p.add_argument("--json", action="store_true", help="Print the events as a JSON list")
+    ns, positionals, rest = _split_positionals(p, argv)
+    if positionals:
+        p.error(f"unrecognized arguments: {' '.join(positionals)}")
+    if ns.end < ns.start:
+        p.error("--to is before --from")
+
+    cfg = config_from_args(rest)
+    _setup_logging(cfg)
+    if cfg.demo:
+        from .demo_backend import DemoCalendarClient
+
+        client = DemoCalendarClient()
+    else:
+        from .ews_client import CalendarClient
+
+        account = _connect(cfg)
+        if account is None:
+            return 1
+        client = CalendarClient(account)
+    events = cli_calendar.fetch_events(client, ns.start, ns.end + timedelta(days=1))
+    if ns.json:
+        print(json.dumps([cli_calendar.build_event_record(e) for e in events], indent=2, ensure_ascii=False))
+    else:
+        print("\n".join(cli_calendar.format_event_lines(events)) if events else "No events.")
+        print(f"\n{len(events)} events from {ns.start} to {ns.end}", file=sys.stderr)
     return 0
 
 

@@ -382,6 +382,23 @@ ewstui export --message "<def456@mail.example>" --out ~/letters/joel/emails   # 
   (and their threads, if exported with `--thread`). A directory holds
   either a folder export or selected emails, never both.
 
+### Listing calendar events (`ewstui calendar`)
+
+To list your calendar over a date range without opening the UI (e.g. to
+look back over a year's trips):
+
+```bash
+ewstui calendar --from 2026-01-01 --to 2026-12-31          # oldest first, one line each
+ewstui calendar --from 2026-01-01 --json > calendar.json   # --to defaults to today
+```
+
+- Both days are included. The range is fetched a month at a time
+  (Exchange caps one calendar view), and an event spanning months is
+  listed once.
+- Each line shows start, end, Exchange's "show as" status (Busy, OOF,
+  WorkingElsewhere, ...), subject and location. `--json` gives the same
+  fields plus the organizer.
+
 ## Keybindings
 
 Press `?` inside the app for the full list: a panel with every section
