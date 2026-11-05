@@ -62,6 +62,7 @@ def typed(monkeypatch):
         return state["password"]
 
     monkeypatch.setattr(getpass, "getpass", fake_getpass)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)  # a terminal to type it in
     return state
 
 
@@ -108,6 +109,17 @@ def test_cancelled_touch_id_falls_back_to_prompt(login, typed, answer, memory_ke
     typed["password"] = "typed-instead"
     assert entry.main(ARGS) == 0
     assert login.passwords == ["typed-instead"]
+
+
+def test_cancelled_touch_id_without_a_terminal_fails_clearly(login, typed, answer, memory_keyring, touch_id,
+                                                            monkeypatch, capsys):
+    memory_keyring.items[KEY] = "s3cret"
+    touch_id.allow = False
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)  # e.g. ewstui export run from a script
+    assert entry.main(ARGS) == 1
+    assert typed["asked"] == 0
+    assert "no terminal to type one in" in capsys.readouterr().err
+    assert memory_keyring.items[KEY] == "s3cret"  # never tested, so kept
 
 
 def test_no_touch_id_prompt_when_nothing_stored(login, typed, answer, touch_id):

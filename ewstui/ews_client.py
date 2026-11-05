@@ -108,6 +108,10 @@ class MessageSummary:
     # "invite", "cancellation" or "response" for meeting items (see
     # MeetingInfo), "mail" for everything else.
     kind: str = "mail"
+    # The Internet Message-ID header (<...@host>): unlike the EWS item id it
+    # stays the same when the message is moved, so the priority list uses
+    # it to find a message again (and `ewstui search` prints it).
+    internet_message_id: str | None = None
 
 
 @dataclass
@@ -117,6 +121,8 @@ class MeetingInfo:
     "Unknown"/"NoResponseReceived" (not answered), "Accept", "Tentative",
     "Decline" or "Organizer". `calendar_item_id` is the meeting in your
     calendar (Exchange puts an invite there as tentative on arrival).
+    `allows_new_time` is False when the organizer turned off proposals of
+    a new time.
     """
     kind: str  # "invite" / "cancellation" / "response"
     start: datetime | None
@@ -128,6 +134,7 @@ class MeetingInfo:
     my_response: str = "Unknown"
     is_out_of_date: bool = False
     calendar_item_id: str | None = None
+    allows_new_time: bool = True
 
 
 # How ewstui answers an invite -> the exchangelib method that does it.
@@ -139,10 +146,6 @@ class MessageDetail(MessageSummary):
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     body_text: str = ""
-    # The Internet Message-ID header (<...@host>): unlike the EWS item id it
-    # stays the same when the message is moved, so the priority list uses
-    # it to find a message again.
-    internet_message_id: str | None = None
     # Display names of the sender and recipients, by address ("Jane Doe"),
     # for the reading pane; sender/to/cc stay plain addresses for replying.
     names: dict[str, str] = field(default_factory=dict)
@@ -401,11 +404,13 @@ def _meeting(item, tz, calendar=None) -> MeetingInfo | None:
         my_response=getattr(item, "my_response_type", None) or "Unknown",
         is_out_of_date=bool(getattr(item, "is_out_of_date", False)),
         calendar_item_id=calendar_item_id,
+        allows_new_time=getattr(item, "allow_new_time_proposal", None) is not False,
     )
 
 
 SUMMARY_FIELDS = (
     "subject", "sender", "datetime_received", "is_read", "has_attachments", "conversation_id", "conversation_index",
+    "message_id",
 )
 
 
@@ -426,6 +431,7 @@ def _summary(item, folder_id: str | None) -> MessageSummary:
         folder_id=folder_id,
         conversation_index=bytes(index) if index else None,
         kind=_kind(item),
+        internet_message_id=getattr(item, "message_id", None),
     )
 
 
@@ -546,6 +552,27 @@ class MailClient:
         return [_summary(item, folder.id) for item in qs[:limit]]
 
     @retry_on_dead_connection
+    def find_people(self, query: str) -> list[tuple[str, str]]:
+        """(name, address) of the people (and groups) Exchange finds for
+        `query` — a name, part of one, or an address — in the directory and
+        your contacts (ResolveNames). Empty if nobody matches."""
+        q = query.strip()
+        if not q:
+            return []
+        try:
+            found = list(self.account.protocol.resolve_names(names=[q], search_scope="ActiveDirectoryContacts"))
+        except Exception:  # noqa: BLE001 - "no results" can come back as an error
+            log.info("directory lookup for %r failed", q, exc_info=True)
+            return []
+        out, seen = [], set()
+        for mailbox in found:
+            email = getattr(mailbox, "email_address", None)  # errors (no results) come back as exceptions
+            if email and email.casefold() not in seen:
+                seen.add(email.casefold())
+                out.append((getattr(mailbox, "name", None) or email, email))
+        return out
+
+    @retry_on_dead_connection
     def sent_folder_id(self) -> str:
         """Sent Items, via its well-known id (works with localized names)."""
         return self.account.sent.id
@@ -566,6 +593,7 @@ class MailClient:
             received=item.datetime_received,
             is_read=_is_read(item),
             has_attachments=bool(getattr(item, "has_attachments", False)),
+            conversation_id=getattr(getattr(item, "conversation_id", None), "id", None),
             to=_addresses(item, "to_recipients", "required_attendees"),
             cc=_addresses(item, "cc_recipients", "optional_attendees"),
             body_text=getattr(item, "text_body", None) or "",
@@ -575,17 +603,27 @@ class MailClient:
             meeting=_meeting(item, self.tz, getattr(self.account, "calendar", None)),
         )
 
-    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True,
+                          proposed: tuple[datetime, datetime] | None = None) -> None:
         """Accept / tentatively accept / decline an invite (`response` is a
         key of INVITE_RESPONSES). With `send`, the organizer gets your
         response (with `note` as its text); without, it's only recorded in
-        your calendar. Not retried: a repeat would answer twice.
+        your calendar. `proposed` (naive local start, end) suggests a new
+        time with a tentative / decline that's sent; Outlook shows the
+        organizer a "New time proposed" they can accept. Not retried: a
+        repeat would answer twice.
         """
         from exchangelib.items import SAVE_ONLY, SEND_AND_SAVE_COPY
 
         item = self._folder_by_id(folder_id).get(id=message_id)
         respond = getattr(item, INVITE_RESPONSES[response])
-        respond(message_disposition=SEND_AND_SAVE_COPY if send else SAVE_ONLY, body=note or None)
+        extra = {}
+        if proposed and send and response != "accept":
+            extra = {
+                "proposed_start": EWSDateTime.from_datetime(proposed[0]).astimezone(self.tz),
+                "proposed_end": EWSDateTime.from_datetime(proposed[1]).astimezone(self.tz),
+            }
+        respond(message_disposition=SEND_AND_SAVE_COPY if send else SAVE_ONLY, body=note or None, **extra)
 
     def remove_cancelled_meeting(self, folder_id: str, message_id: str) -> bool:
         """Delete (to Deleted Items) the calendar entry of a cancelled
@@ -623,6 +661,37 @@ class MailClient:
                 return found
         folders = [f for f in self._all_folders() if _is_mail_folder(f)]
         return first(FolderCollection(account=self.account, folders=folders).filter(message_id=internet_message_id))
+
+    @retry_on_dead_connection
+    def find_conversation(self, conversation_id: str) -> list[MessageSummary]:
+        """Find every email of a conversation, in any mail folder.
+
+        One FindItem request over all mail folders, restricted on the
+        ConversationId, so a thread's replies in Sent Items (or wherever
+        they were filed) are found too.
+
+        Parameters
+        ----------
+        conversation_id : str
+            The conversation's EWS id (``MessageSummary.conversation_id``).
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first, each with the folder it is in as
+            ``folder_id``.
+        """
+        from exchangelib.folders import FolderCollection
+        from exchangelib.properties import ConversationId
+
+        folders = [f for f in self._all_folders() if _is_mail_folder(f)]
+        qs = (
+            FolderCollection(account=self.account, folders=folders)
+            .filter(conversation_id=ConversationId(id=conversation_id))
+            .only(*SUMMARY_FIELDS, "parent_folder_id")
+        )
+        found = [_summary(item, item.parent_folder_id.id) for item in qs]
+        return sorted(found, key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
 
     def _all_folders(self) -> list:
         out, stack = [], list(self.account.msg_folder_root.children)

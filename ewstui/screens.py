@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -12,16 +12,129 @@ from textual.widgets import Button, Input, Label, Static, TextArea
 
 from . import keymap
 from .ews_client import Room, RoomAvailability
+from .recipients import format_person, parse_recipients
+from .widgets.vim_text_area import INSERT, NORMAL, VimTextArea
+
+
+class RecipientsArea(VimTextArea):
+    """The To / Cc field: one recipient per line ("Name <address>" or just
+    the address; commas and semicolons also separate). Nothing is selected
+    on entering it, so typing adds to what's there. vim's modes, as in the
+    email's text box (V then d drops whole lines: addresses). Ctrl+Space
+    looks the current line up in the directory."""
+
+    BINDINGS = [Binding("ctrl+space,ctrl+@", "lookup", "Look up in the directory", show=False)]
+
+    DEFAULT_CSS = """
+    RecipientsArea {
+        height: auto;
+        min-height: 3;
+        max-height: 7;
+    }
+    """
+
+    class LookupRequested(Message):
+        def __init__(self, area: RecipientsArea, row: int, query: str) -> None:
+            self.area = area
+            self.row = row
+            self.query = query
+            super().__init__()
+
+    def __init__(self, text: str = "", placeholder: str = "", **kwargs) -> None:
+        super().__init__(text, soft_wrap=False, show_line_numbers=False, tab_behavior="focus",
+                         placeholder=placeholder, **kwargs)
+
+    def action_lookup(self) -> None:
+        row = self.cursor_location[0]
+        query = self.document.get_line(row).strip()
+        if query:
+            self.post_message(self.LookupRequested(self, row, query))
+        else:
+            self.app.bell()
+
+    def replace_line(self, row: int, text: str) -> None:
+        line = self.document.get_line(row)
+        self.replace(text, (row, 0), (row, len(line)))
+        self.move_cursor((row, len(text)))
+
+
+class PickPersonScreen(ModalScreen[tuple[str, str] | None]):
+    """Several people match a lookup: pick one (j/k or ↓/↑, Enter), Esc cancels."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("j,down", "cursor(1)", "Next", show=False),
+        Binding("k,up", "cursor(-1)", "Previous", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    PickPersonScreen {
+        align: center middle;
+    }
+    #person-box {
+        width: 70%;
+        height: auto;
+        max-height: 80%;
+        border: round $accent;
+        padding: 0 1;
+        background: $surface;
+    }
+    #person-results {
+        height: auto;
+        max-height: 20;
+    }
+    #person-help {
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, query: str, people: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._query = query
+        self._people = people
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import ListItem, ListView
+
+        with Vertical(id="person-box"):
+            yield Label(f"Who do you mean by “{self._query}”?", markup=False)
+            with ListView(id="person-results"):
+                for name, email in self._people:
+                    yield ListItem(Label(format_person(name, email), markup=False))
+            yield Label("j/k choose · Enter pick · Esc cancel", id="person-help", markup=False)
+
+    def on_mount(self) -> None:
+        from textual.widgets import ListView
+
+        results = self.query_one(ListView)
+        results.index = 0
+        results.focus()
+
+    def action_cursor(self, step: int) -> None:
+        from textual.widgets import ListView
+
+        results = self.query_one(ListView)
+        results.index = max(0, min(len(self._people) - 1, (results.index or 0) + step))
+
+    def on_list_view_selected(self, event) -> None:
+        from textual.widgets import ListView
+
+        self.dismiss(self._people[self.query_one(ListView).index or 0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ComposeScreen(ModalScreen[dict | None]):
     """New message / reply. Ctrl+S dismisses with the field values to
-    send; Esc with the same plus "draft": True (saved to Drafts), or None
-    if nothing was changed from how the window opened.
+    send; Ctrl+Q / :wq with the same plus "draft": True (saved to Drafts),
+    or None if nothing was changed from how the window opened (and on :q!).
     """
 
+    # Esc never closes it (it's vim's, in the text boxes): Ctrl+Q or :wq saves
+    # to Drafts and closes (Ctrl+Q reaches action_cancel through the app's
+    # priority binding, see EwstuiApp.action_quit_or_close).
     BINDINGS = [
-        Binding("escape", "cancel", "Close (save to Drafts)"),
         Binding("ctrl+s", "send", "Send"),
         # Cmd+Enter only arrives in terminals that report the Cmd key
         # (kitty keyboard protocol: Ghostty, kitty, WezTerm, iTerm2 with
@@ -68,21 +181,34 @@ class ComposeScreen(ModalScreen[dict | None]):
     #compose-context {
         color: $text-muted;
     }
+    .recipients-check {
+        height: auto;
+        padding: 0 1;
+    }
     #compose-body {
         height: 1fr;
         border: round $primary;
         margin-top: 1;
     }
+    #compose-quoted {
+        height: 1fr;
+        border: round $panel;
+        border-title-color: $text-muted;
+        color: $text-muted;
+    }
     """
 
     def __init__(self, to: str = "", subject: str = "", body: str = "", context: str = "", unsaved: bool = False,
-                 fetch_events=None, cc: str = "", title: str | None = None) -> None:
+                 fetch_events=None, cc: str = "", title: str | None = None, quoted: str = "") -> None:
         super().__init__()
         self.title_text = title or ("Reply" if context else "New email")
         self._to = to
         self._cc = cc
         self._subject = subject
         self._body = body
+        # A forward's original, shown read-only under the body: Exchange adds
+        # it below what you write, so it isn't part of the body itself.
+        self.quoted = quoted
         self.context = context  # for a reply: who sent the email and when
         # Opened with text that isn't saved anywhere (reopened after a failed
         # send): Esc saves it even if it's unchanged.
@@ -90,24 +216,124 @@ class ComposeScreen(ModalScreen[dict | None]):
         # fetch_events(start, end) -> [EventSummary], for the calendar (Ctrl+O);
         # called in a thread. None: no calendar.
         self.fetch_events = fetch_events
+        # find_people(query) -> [(name, address)], for To / Cc: Ctrl+Space and
+        # the check under the fields; called in a thread. None: neither.
+        self.find_people = None
+        self._known: dict[str, bool] = {}  # address (casefolded) -> in the directory?
+        self._check_timer = None
+
+    # -- To / Cc: lookups and the directory check ----------------------------------
+
+    def on_recipients_area_lookup_requested(self, event: RecipientsArea.LookupRequested) -> None:
+        """Ctrl+Space: the current line looked up in the directory; one
+        match fills the line in, several are offered to pick from."""
+        if self.find_people is None:
+            self.app.bell()
+            return
+        area, row, query = event.area, event.row, event.query
+        lookup = parse_recipients(query)[0] if "<" in query else query
+
+        def work() -> None:
+            try:
+                people = self.find_people(lookup)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, f"Directory lookup failed: {e}", severity="warning")
+                return
+            self.app.call_from_thread(self._looked_up, area, row, query, people)
+
+        self.app.notify(f"Looking up “{query}”…", timeout=2)
+        self.run_worker(work, thread=True, group="compose-lookup")
+
+    def _looked_up(self, area: RecipientsArea, row: int, query: str, people: list[tuple[str, str]]) -> None:
+        if not people:
+            self.app.notify(f"Nobody in the directory matches “{query}”", severity="warning")
+            return
+
+        def fill(person: tuple[str, str] | None) -> None:
+            if person is None:
+                return
+            name, email = person
+            self._known[email.casefold()] = True
+            area.replace_line(row, format_person(name, email))
+            area.focus()
+            self._check(area)
+
+        if len(people) == 1:
+            fill(people[0])
+        else:
+            self.app.push_screen(PickPersonScreen(query, people), fill)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if isinstance(event.text_area, RecipientsArea):  # check again once typing pauses
+            if self._check_timer is not None:
+                self._check_timer.stop()
+            area = event.text_area
+            self._check_timer = self.set_timer(1.0, lambda: self._check(area))
+
+    def on_descendant_blur(self, event) -> None:
+        if isinstance(event.widget, RecipientsArea):
+            self._check(event.widget)
+
+    def _check(self, area: RecipientsArea) -> None:
+        """Are the addresses in this field in the directory? (Shown under it;
+        ones that aren't may well be fine — people outside the organisation.)"""
+        if self.find_people is None or not area.is_mounted:
+            return
+        addresses = [a for a in parse_recipients(area.text) if "@" in a]
+        todo = [a for a in addresses if a.casefold() not in self._known]
+        self._show_check(area, addresses, checking=bool(todo))
+        if not todo:
+            return
+
+        def work() -> None:
+            for address in todo:
+                try:
+                    found = self.find_people(address)
+                except Exception:  # noqa: BLE001 - unknown, then
+                    found = []
+                self._known[address.casefold()] = any(e.casefold() == address.casefold() for _, e in found)
+            self.app.call_from_thread(self._show_check, area, addresses, False)
+
+        self.run_worker(work, thread=True, group=f"compose-check-{area.id}")
+
+    def _show_check(self, area: RecipientsArea, addresses: list[str], checking: bool) -> None:
+        if not area.is_mounted:
+            return
+        line = self.query_one(f"#{area.id}-check", Static)
+        if not addresses:
+            line.update("")
+            return
+        known = [a for a in addresses if self._known.get(a.casefold())]
+        unknown = [a for a in addresses if self._known.get(a.casefold()) is False]
+        text = Text()
+        if known:
+            text.append(f"✓ {len(known)} in the directory", style="green")
+        if unknown:
+            text.append(" · " if known else "")
+            text.append(f"? not in the directory: {', '.join(unknown)}", style="yellow")
+        if checking:
+            text.append(" · " if known or unknown else "")
+            text.append("checking…", style="dim")
+        line.update(text)
 
     def _hints(self) -> str:
         from .widgets.week_calendar import WeekCalendar
 
-        from .widgets.vim_text_area import INSERT, VimTextArea
-
         if isinstance(self.focused, WeekCalendar):
             return ("h/l day · j/k week · Space pick day · v select days · Enter free times into the email · "
                     "Ctrl+B/F weeks · Esc/Ctrl+O back to writing")
+        close = "Ctrl+Q save to Drafts & close"
         if isinstance(self.focused, VimTextArea):
+            recipients = isinstance(self.focused, RecipientsArea)
             if self.focused.mode == INSERT:
-                hints = ["Ctrl+S send", "Esc normal mode (vim)", "Tab next field"]
-            elif self.focused.mode == "NORMAL":
-                hints = ["Ctrl+S send", "i/a/o insert · v/V visual · dd yy p u", "Esc save to Drafts & close"]
+                hints = (["Ctrl+Space look up a name"] if recipients else []) + [
+                    "Ctrl+S send", "Esc normal mode (vim)", close] + ([] if recipients else ["Tab next field"])
+            elif self.focused.mode == NORMAL:
+                hints = ["Ctrl+S send", ":wq save to Drafts & close · :q! discard", "i/a/o insert · v/V visual · dd yy p u"]
             else:
                 hints = ["move to select · d delete · y yank · c change", "Esc/v back to normal"]
         else:
-            hints = ["Ctrl+S send", "Esc save to Drafts & close", "Tab next field"]
+            hints = ["Ctrl+S send", close, "Tab next field"]
         if self.fetch_events:
             hints.append("Ctrl+O to the calendar (free times) · Ctrl+B/F weeks" if self.calendar_shown
                          else "Ctrl+O your calendar")
@@ -126,7 +352,6 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         from .widgets.chrome import HintBar
-        from .widgets.vim_text_area import VimTextArea
         from .widgets.week_calendar import WeekCalendar
 
         yield HintBar("WRITE", "", id="compose-hints")  # the keys, where the status bar is in the other views
@@ -135,16 +360,25 @@ class ComposeScreen(ModalScreen[dict | None]):
                 yield Label(self.title_text, id="compose-title")
                 if self.context:
                     yield Label(self.context, id="compose-context", markup=False)
-                yield Input(value=self._to, placeholder="To", id="compose-to")
-                yield Input(value=self._cc, placeholder="Cc", id="compose-cc")
-                yield Input(value=self._subject, placeholder="Subject", id="compose-subject")
+                yield RecipientsArea(self._to, placeholder="To — one per line (Ctrl+Space looks a name up)",
+                                     id="compose-to")
+                yield Static(id="compose-to-check", classes="recipients-check")
+                yield RecipientsArea(self._cc, placeholder="Cc", id="compose-cc")
+                yield Static(id="compose-cc-check", classes="recipients-check")
+                yield Input(value=self._subject, placeholder="Subject", id="compose-subject", select_on_focus=False)
                 yield VimTextArea(self._body, id="compose-body")  # vim modes, shown bottom right
+                if self.quoted:
+                    quoted = TextArea(self.quoted, read_only=True, soft_wrap=True, id="compose-quoted")
+                    quoted.border_title = "Goes along below what you write (read-only)"
+                    yield quoted
             yield WeekCalendar(id="compose-calendar")
 
     # -- the calendar beside the email (Ctrl+O) ------------------------------------
 
     def on_mount(self) -> None:
         self._update_hints()
+        for area in self.query(RecipientsArea):  # the ones a reply / draft brings along
+            self._check(area)
 
     @property
     def calendar_shown(self) -> bool:
@@ -228,18 +462,38 @@ class ComposeScreen(ModalScreen[dict | None]):
 
     def _fields(self) -> dict:
         return {
-            "to": self.query_one("#compose-to", Input).value,
-            "cc": self.query_one("#compose-cc", Input).value,
+            "to": self.query_one("#compose-to", RecipientsArea).text,
+            "cc": self.query_one("#compose-cc", RecipientsArea).text,
             "subject": self.query_one("#compose-subject", Input).value,
             "body": self.query_one("#compose-body", TextArea).text,
         }
 
+    def _changed(self) -> bool:
+        return self.unsaved or self._fields() != {"to": self._to, "cc": self._cc, "subject": self._subject,
+                                                  "body": self._body}
+
     def action_cancel(self) -> None:
-        fields = self._fields()
-        if not self.unsaved and fields == {"to": self._to, "cc": self._cc, "subject": self._subject, "body": self._body}:
-            self.dismiss(None)  # nothing written: just close
+        """Ctrl+Q / :wq: saved to Drafts and closed (nothing written: just closed)."""
+        if self._changed():
+            self.dismiss({**self._fields(), "draft": True})
         else:
-            self.dismiss({**fields, "draft": True})
+            self.dismiss(None)
+
+    def on_vim_text_area_command(self, event: VimTextArea.Command) -> None:
+        """vim's :wq / :x (save to Drafts and close), :q (close if nothing
+        was written), :q! (close, throwing away what was written)."""
+        command = event.command
+        if command in ("wq", "x", "wq!", "x!"):
+            self.action_cancel()
+        elif command == "q":
+            if self._changed():
+                self.app.notify("Not saved — :wq saves to Drafts and closes, :q! throws it away", severity="warning")
+            else:
+                self.dismiss(None)
+        elif command == "q!":
+            self.dismiss(None)
+        else:
+            self.app.notify(f"Not a command here: :{command} (:wq, :q, :q!)", severity="warning")
 
     def action_send(self) -> None:
         self.dismiss(self._fields())
@@ -250,8 +504,8 @@ FREE_STYLE, BUSY_STYLE, UNSURE_STYLE = "#7aa67a", "#e07a7a", "#d4b06a"
 
 
 def split_addresses(text: str) -> list[str]:
-    """"a@x, b@x; c@x" -> ["a@x", "b@x", "c@x"]."""
-    return [a.strip() for a in text.replace(";", ",").split(",") if a.strip()]
+    """"a@x, b@x; c@x" (or one per line, or "Name <a@x>") -> ["a@x", "b@x", "c@x"]."""
+    return parse_recipients(text)
 
 
 def attendee_line(email: str, status, start: datetime | None = None) -> Text:
@@ -650,8 +904,10 @@ class InviteResponseScreen(ModalScreen[dict | None]):
     """`i` on an invite: the meeting and your availability that day, then
     a / t / d to accept, tentatively accept or decline. `s` toggles whether
     the organizer is sent your response; `n` (or Tab) goes to an optional
-    note sent with it, Enter comes back. Dismisses with
-    {"response", "note", "send"}, or None.
+    note sent with it, `p` to a new time to propose with a tentative /
+    decline (unless the organizer turned proposals off); Enter comes back.
+    Dismisses with {"response", "note", "send", "proposed"} — proposed is
+    (start, end) or None — or None.
     """
 
     BINDINGS = [
@@ -661,6 +917,7 @@ class InviteResponseScreen(ModalScreen[dict | None]):
         Binding("d", "respond('decline')", "Decline"),
         Binding("s", "toggle_send", "Send response"),
         Binding("n,tab", "note", "Note", show=False),
+        Binding("p", "propose", "Propose new time", show=False),
     ]
     AUTO_FOCUS = ""  # focus nothing: letters are answers, not typing, until n/Tab
 
@@ -684,6 +941,7 @@ class InviteResponseScreen(ModalScreen[dict | None]):
         margin-top: 1;
     }
     """
+    PROPOSE_HELP = "e.g. 14, thu 10:30, tomorrow 9-10:30"
 
     def __init__(self, subject: str, meeting, events=None, organizer_name: str = "") -> None:
         super().__init__()
@@ -701,6 +959,10 @@ class InviteResponseScreen(ModalScreen[dict | None]):
             yield Static(id="invite-send")
             yield Input(placeholder="Note to send with your response (optional) — n or Tab to type, Enter when done",
                         id="invite-note")
+            if self._meeting.allows_new_time:
+                yield Input(placeholder=f"New time to propose with t / d (optional) — p to type; {self.PROPOSE_HELP}",
+                            id="invite-propose")
+                yield Static(id="invite-proposal")
 
     def on_mount(self) -> None:
         self._draw()
@@ -742,6 +1004,42 @@ class InviteResponseScreen(ModalScreen[dict | None]):
             if self.send else
             Content.from_markup(f"[b {c['tux-key']}]s[/] $box send your response (off: only your calendar changes)", box=box)
         )
+        self._draw_proposal()
+
+    def _proposal_text(self) -> str:
+        return self.query_one("#invite-propose", Input).value.strip() if self._meeting.allows_new_time else ""
+
+    def _proposed(self) -> tuple[datetime, datetime] | None:
+        from .invites import parse_new_time
+
+        return parse_new_time(self._proposal_text(), self._meeting, date.today())
+
+    def _draw_proposal(self) -> None:
+        from textual.content import Content
+
+        if not self._meeting.allows_new_time:
+            return
+        c = self.app.theme_variables
+        text, proposed = self._proposal_text(), self._proposed()
+        if not text:
+            line = Content("")
+        elif proposed is None:
+            line = Content.from_markup(f"[{c['warning']}]Can't read that time ($h)[/]", h=self.PROPOSE_HELP)
+        else:
+            start, end = proposed
+            end_text = f"{end:%H:%M}" if end.date() == start.date() else f"{end:%a %d %b %H:%M}"
+            when = f"{start:%a %d %b %H:%M}–{end_text}"
+            if self.send:
+                line = Content.from_markup(f"Proposes [b]$w[/] with [b {c['tux-key']}]t[/] or "
+                                           f"[b {c['tux-key']}]d[/] [{c['tux-dim']}](not with a)[/]", w=when)
+            else:
+                line = Content.from_markup(f"[{c['warning']}]$w can only be proposed when your response is sent "
+                                           f"(s)[/]", w=when)
+        self.query_one("#invite-proposal", Static).update(line)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "invite-propose":
+            self._draw_proposal()
 
     def action_toggle_send(self) -> None:
         self.send = not self.send
@@ -750,12 +1048,24 @@ class InviteResponseScreen(ModalScreen[dict | None]):
     def action_note(self) -> None:
         self.query_one("#invite-note", Input).focus()
 
+    def action_propose(self) -> None:
+        if not self._meeting.allows_new_time:
+            self.notify(f"{self._organizer} doesn't take proposals of a new time for this meeting")
+            return
+        self.query_one("#invite-propose", Input).focus()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.set_focus(None)  # back to answering with a / t / d
 
     def action_respond(self, response: str) -> None:
         note = self.query_one("#invite-note", Input).value.strip()
-        self.dismiss({"response": response, "note": note if self.send else "", "send": self.send})
+        proposed = None
+        if response != "accept" and self.send and self._proposal_text():
+            proposed = self._proposed()
+            if proposed is None:
+                self.notify(f"Can't read the new time ({self.PROPOSE_HELP}) — fix it or clear it", severity="warning")
+                return
+        self.dismiss({"response": response, "note": note if self.send else "", "send": self.send, "proposed": proposed})
 
     def action_cancel(self) -> None:
         self.dismiss(None)

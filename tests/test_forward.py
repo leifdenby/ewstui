@@ -11,7 +11,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.ews_client import MailClient
-from ewstui.screens import ComposeScreen
+from ewstui.screens import ComposeScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
 
@@ -63,7 +63,7 @@ async def test_f_forwards_the_email_to_who_you_write_in(app, mail):
     async with app.run_test() as pilot:
         screen = await open_forward(pilot, app)
         assert screen.title_text == "Forward"
-        assert screen.focused is screen.query_one("#compose-to", Input)  # empty: who to is the first thing
+        assert screen.focused is screen.query_one("#compose-to", RecipientsArea)  # empty: who to is the first thing
         assert screen.query_one("#compose-subject", Input).value == "Fwd: Q3 budget review"
         assert "Forwarding Finance Team <finance@corp.example>'s email" in str(
             screen.query_one("#compose-context").render())
@@ -73,6 +73,22 @@ async def test_f_forwards_the_email_to_who_you_write_in(app, mail):
         await pilot.pause()
     assert mail.sent == [{"forward_of": "m1", "to": ["boss@corp.example"], "cc": [],
                           "subject": "Fwd: Q3 budget review", "body": "FYI"}]
+
+
+async def test_forward_shows_the_original_below_but_doesnt_send_it_twice(app, mail):
+    original = mail.get_message("inbox", "m1")
+    async with app.run_test() as pilot:
+        screen = await open_forward(pilot, app)
+        quoted = screen.query_one("#compose-quoted", TextArea)
+        assert quoted.read_only
+        assert "From: Finance Team <finance@corp.example>" in quoted.text
+        assert "Subject: Q3 budget review" in quoted.text
+        assert original.body_text.strip() and original.body_text in quoted.text
+        assert screen.query_one("#compose-body", TextArea).text == ""  # Exchange appends the original itself
+        await pilot.press(*"boss@corp.example")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert mail.sent[0]["body"] == ""
 
 
 async def test_forward_without_recipients_isnt_sent(app, mail):
@@ -100,12 +116,15 @@ async def test_f_in_the_reading_pane_forwards_that_email(app, mail):
         assert screen.query_one("#compose-subject", Input).value.endswith(mail.get_message("inbox", "m2").subject)
 
 
-async def test_escape_saves_a_forward_to_drafts(app, mail):
+async def test_ctrl_q_saves_a_forward_to_drafts(app, mail):
     original = mail.get_message("inbox", "m1")
     async with app.run_test() as pilot:
         screen = await open_forward(pilot, app)
         screen.query_one("#compose-body", TextArea).insert("Have a look", (0, 0))
-        await pilot.press("escape")  # focus is in To (not the vim body), so Esc closes
+        await pilot.press("escape")  # To: vim's NORMAL mode, the window stays
+        await pilot.pause()
+        assert app.screen is screen
+        await pilot.press("ctrl+q")
         await pilot.pause()
         assert not isinstance(app.screen, ComposeScreen)
     assert mail.sent == []

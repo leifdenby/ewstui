@@ -1,22 +1,23 @@
 """A TextArea with vim's normal / insert / visual modes, for writing emails.
 The mode shows at the bottom right of its border.
 
-Starts in INSERT (type straight away); Esc goes to NORMAL; Esc in NORMAL
-is left to the screen (in the compose view: save to Drafts and close).
+Starts in INSERT (type straight away); Esc goes to NORMAL, and Esc in
+NORMAL does nothing more (it never closes anything).
 
 NORMAL:  h j k l · w b e · 0 ^ $ · gg G (counts: 3j, 2dd, …)
          x X · r{char} · dd dw de D · cc cw ce C s S · yy yw ye · p P · J · u, Ctrl+R
          i a I A o O (to INSERT) · v V (to VISUAL / V-LINE)
+         :{command} Enter — posted as Command for the screen (compose: :wq, :x, :q, :q!)
 VISUAL:  the motions extend the selection; d/x delete, y yank, c change, r{char} replace,
          Esc or v/V back to NORMAL
-Yanked and deleted text also goes to the system clipboard.
+Yanked and deleted text goes to one register for the whole app (p in another
+text box puts it there; Ctrl+V in a field pastes it) and to the system clipboard.
 """
 from __future__ import annotations
 
 import re
 
 from textual import events
-from textual.actions import SkipAction
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import TextArea
@@ -37,11 +38,19 @@ class VimTextArea(TextArea):
             self.mode = mode
             super().__init__()
 
+    class Command(Message):
+        """A `:` command line, Enter-ed in NORMAL ("wq", "q!", …)."""
+
+        def __init__(self, area: VimTextArea, command: str) -> None:
+            self.area = area
+            self.command = command
+            super().__init__()
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.mode = INSERT
         self._pending = ""  # a count and/or operator typed so far ("3", "d", "2d", "g")
-        self._register: tuple[str, bool] = ("", False)  # (text, linewise)
+        self._command: str | None = None  # the `:` command line being typed (without the colon)
         self._anchor: tuple[int, int] | None = None  # visual: where it started
         self._vcursor: tuple[int, int] = (0, 0)  # visual: vim's cursor (see _update_visual)
 
@@ -66,11 +75,17 @@ class VimTextArea(TextArea):
             self.post_message(self.ModeChanged(mode))
 
     def _show_mode(self) -> None:
+        if self._command is not None:
+            self.border_subtitle = f":{self._command}"
+            return
         label = f"-- {self.mode} --" if self.mode in (INSERT, VISUAL, VLINE) else self.mode
         self.border_subtitle = f"{label} {self._pending}".rstrip()
 
     def action_vim_escape(self) -> None:
-        if self.mode == INSERT:
+        if self._command is not None:  # drops the command line
+            self._command = None
+            self._show_mode()
+        elif self.mode == INSERT:
             row, col = self.cursor_location
             self._set_mode(NORMAL)
             self.move_cursor((row, max(0, col - 1)))  # vim steps back off the inserted text
@@ -80,8 +95,7 @@ class VimTextArea(TextArea):
             self.move_cursor(cursor)
         elif self._pending:
             self._set_mode(NORMAL)
-        else:
-            raise SkipAction()  # NORMAL: Esc is the screen's (compose: save & close)
+        # NORMAL with nothing pending: nothing to do (Esc never closes the screen)
 
     def check_consume_key(self, key: str, character: str | None = None) -> bool:
         if self.mode != INSERT:
@@ -154,15 +168,33 @@ class VimTextArea(TextArea):
         event.stop()
         event.prevent_default()
         key = event.character if event.is_printable and event.character else event.key
+        if self._command is not None:
+            self._command_key(key)
+            self._show_mode()
+            return
         key = {"backspace": "h", "delete": "x"}.get(key, key)  # (not deleting text in NORMAL)
         if key == "ctrl+r":
             self.redo()
             return
-        if self.mode in (VISUAL, VLINE):
+        elif key == ":" and self.mode == NORMAL and not self._pending:
+            self._command = ""
+        elif self.mode in (VISUAL, VLINE):
             self._visual_key(key)
         else:
             self._normal_key(key)
         self._show_mode()
+
+    def _command_key(self, key: str) -> None:
+        """Typing the `:` command line: Enter posts it, Backspace on an
+        empty one drops it (as Esc does)."""
+        if key == "enter":
+            command, self._command = self._command.strip(), None
+            if command:
+                self.post_message(self.Command(self, command))
+        elif key == "backspace":
+            self._command = self._command[:-1] if self._command else None
+        elif len(key) == 1:
+            self._command += key
 
     def _parse_pending(self) -> tuple[int, str, bool]:
         """What's been typed so far: (count, operator "d"/"c"/"y"/"", a "g"
@@ -296,12 +328,22 @@ class VimTextArea(TextArea):
         if op == "c":
             self._set_mode(INSERT)
 
+    # The register is the app's clipboard, shared by every text box (yank in
+    # To, put in Cc) and by Textual's own copying (Ctrl+C, mouse selections);
+    # the app remembers alongside whether the last yank was whole lines.
+
     def _yank(self, text: str, linewise: bool) -> None:
-        self._register = (text, linewise)
+        self.app._vim_register = (text, linewise)
         try:
-            self.app.copy_to_clipboard(text)
+            self.app.copy_to_clipboard(text)  # also to the system clipboard (OSC 52)
         except Exception:  # noqa: BLE001 - the terminal may not support it
-            pass
+            self.app._clipboard = text
+
+    def _register(self) -> tuple[str, bool]:
+        """(text, linewise): what was last yanked or copied anywhere in the app."""
+        text = self.app.clipboard
+        yanked = getattr(self.app, "_vim_register", ("", False))
+        return text, yanked[1] and yanked[0] == text  # copied since (Ctrl+C): characters
 
     def _cut(self, start, end, linewise: bool) -> None:
         if start == end:
@@ -339,7 +381,7 @@ class VimTextArea(TextArea):
         self._set_mode(INSERT)
 
     def _put(self, after: bool) -> None:
-        text, linewise = self._register
+        text, linewise = self._register()
         if not text:
             return
         row, col = self.cursor_location

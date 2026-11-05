@@ -23,6 +23,7 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore, note_with_dates, split_note
+from .recipients import format_person, format_recipients, parse_recipients
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
@@ -111,8 +112,9 @@ def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[
 
 
 def _split_addresses(field: str) -> list[str]:
-    """'a@x, b@y; c@z' -> ['a@x', 'b@y', 'c@z'] (the To field is free text)."""
-    return [a.strip() for a in field.replace(";", ",").split(",") if a.strip()]
+    """The To / Cc field's addresses: one per line (or comma / semicolon
+    separated), plain or "Name <address>" (see recipients.py)."""
+    return parse_recipients(field)
 
 
 @dataclass
@@ -208,6 +210,9 @@ class EwstuiApp(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        # Replaces Textual's Ctrl+Q (a priority binding, so it comes before the
+        # screens'): in the compose view it saves to Drafts and closes instead.
+        Binding("ctrl+q", "quit_or_close", "Quit", show=False, priority=True),
         Binding("question_mark", "show_help", "Help"),
         Binding("1", "show_mail", "Mail"),
         Binding("2", "show_priority", "Priority"),
@@ -359,10 +364,7 @@ class EwstuiApp(App):
         Sent Items that belong to those conversations (Outlook-style).
         Safe to call from the refresh worker thread.
         """
-        limit = self.config.page_size
-        if self._deeper_listing and self._deeper_listing[0] == folder_id:
-            limit = max(limit, self._deeper_listing[1])
-        messages = self.mail_client.list_messages(folder_id, limit=limit)
+        messages = self.mail_client.list_messages(folder_id, limit=self._listing_limit(folder_id))
         if not self.query_one("#messages", MessageTable).threaded:
             return messages
         try:
@@ -795,7 +797,8 @@ class EwstuiApp(App):
         def _on_result(result: dict | None) -> None:
             if result is not None:
                 self.notify("Sending your response…" if result["send"] else "Updating your calendar…", timeout=3)
-                self._respond_to_invite(folder_id, detail, result["response"], result["note"], result["send"])
+                self._respond_to_invite(folder_id, detail, result["response"], result["note"], result["send"],
+                                        result["proposed"])
 
         organizer = detail.names.get(meeting.organizer, meeting.organizer) if getattr(detail, "names", None) else meeting.organizer
         self.push_screen(
@@ -803,15 +806,18 @@ class EwstuiApp(App):
         )
 
     @work(thread=True, group="invite-respond")
-    def _respond_to_invite(self, folder_id: str, detail, response: str, note: str, send: bool) -> None:
+    def _respond_to_invite(self, folder_id: str, detail, response: str, note: str, send: bool, proposed=None) -> None:
         try:
-            self.mail_client.respond_to_invite(folder_id, detail.id, response, note=note, send=send)
+            self.mail_client.respond_to_invite(folder_id, detail.id, response, note=note, send=send, proposed=proposed)
         except Exception as e:  # noqa: BLE001
             log.warning("answering an invite failed", exc_info=True)
             self.call_from_thread(self.notify, f"Answering the invite failed: {e}", severity="error", timeout=10)
             return
         moved, error = self._archive_wherever(folder_id, detail)
-        self.call_from_thread(self._invite_done, detail, folder_id, INVITE_DONE[response], send, moved, error)
+        done = INVITE_DONE[response]
+        if proposed:
+            done += f", proposing {proposed[0]:%a %d %b %H:%M}–{proposed[1]:%H:%M}"
+        self.call_from_thread(self._invite_done, detail, folder_id, done, send, moved, error)
 
     @work(thread=True, group="invite-respond")
     def _remove_cancelled(self, folder_id: str, detail) -> None:
@@ -957,6 +963,58 @@ class EwstuiApp(App):
         self.select_folder(event.folder.id)
         self.query_one("#messages", MessageTable).focus()
 
+    def on_message_table_more_requested(self, event: MessageTable.MoreRequested) -> None:
+        """j on the last row: the next page of older emails; G: the rest of
+        the folder, then the cursor on its oldest. Nothing to do once the
+        last listing came back short (the whole folder is loaded)."""
+        folder_id = self.current_folder_id
+        if not folder_id:
+            return
+        table = self.query_one("#messages", MessageTable)
+        loaded = sum(m.folder_id == folder_id for m in table._messages)
+        if loaded < self._listing_limit(folder_id):
+            return
+        self.notify("Loading older emails…", timeout=3)
+        self._load_more(folder_id, loaded, event.to_end)
+
+    def _listing_limit(self, folder_id: str) -> int:
+        """How many of the folder's emails _fetch_messages asks for."""
+        limit = self.config.page_size
+        if self._deeper_listing and self._deeper_listing[0] == folder_id:
+            limit = max(limit, self._deeper_listing[1])
+        return limit
+
+    @work(thread=True, exclusive=True, group="more")
+    def _load_more(self, folder_id: str, loaded: int, to_end: bool) -> None:
+        total = next((f.total_count for f in self.query_one("#folders", FolderList).folders if f.id == folder_id), 0)
+        limit = loaded + self.config.page_size
+        if to_end:  # the folder's count may be stale: keep going until a listing comes back short
+            limit = max(limit, total + self.config.page_size)
+        before = self._deeper_listing
+        try:
+            while True:
+                self._deeper_listing = (folder_id, limit)
+                messages = self._fetch_messages(folder_id)
+                if not to_end or sum(m.folder_id == folder_id for m in messages) < limit:
+                    break
+                limit *= 2
+        except Exception as e:  # noqa: BLE001 - what's listed stays
+            self._deeper_listing = before
+            self.call_from_thread(self.notify, f"Loading older emails failed: {e}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._show_more, folder_id, messages, to_end)
+
+    def _show_more(self, folder_id: str, messages: list, to_end: bool) -> None:
+        if folder_id != self.current_folder_id:  # moved on meanwhile
+            return
+        table = self.query_one("#messages", MessageTable)
+        table.set_messages(messages, keep_cursor_on=self.current_message_id, home_folder_id=folder_id,
+                           priorities=self.priority_store.priorities_by_message())
+        self._message_snapshot = [(m.id, m.is_read) for m in messages]
+        if to_end and table.row_count:
+            table.move_cursor(row=table.row_count - 1)  # opens it in the reading pane, like G
+        self._update_status()
+
     def on_message_table_message_opened(self, event: MessageTable.MessageOpened) -> None:
         self.open_message(event.message_id)
         if event.explicit and self._folder_of(event.message_id) == self._drafts_folder_id():
@@ -977,7 +1035,7 @@ class EwstuiApp(App):
     @ews_guard("Opening the draft")
     def _edit_draft(self, message_id: str) -> None:
         """Enter / o on a draft: the compose view with it filled in; Ctrl+S
-        sends that draft, Esc saves the changes into it."""
+        sends that draft, Ctrl+Q / :wq saves the changes into it."""
         folder_id = self._folder_of(message_id)
         detail = self._previewed(message_id) or self.mail_client.get_message(folder_id, message_id)
 
@@ -996,8 +1054,9 @@ class EwstuiApp(App):
 
         subject = "" if detail.subject == "(no subject)" else detail.subject
         self._compose_and_send(
-            ComposeScreen(to=", ".join(detail.to), cc=", ".join(detail.cc), subject=subject,
-                          body=detail.body_text or "", context="Ctrl+S sends it, Esc keeps it in Drafts", title="Draft"),
+            ComposeScreen(to=format_recipients(detail.to, detail.names), cc=format_recipients(detail.cc, detail.names),
+                          subject=subject,
+                          body=detail.body_text or "", context="Ctrl+S sends it, Ctrl+Q keeps it in Drafts", title="Draft"),
             _send, sent_message="Draft sent", save_draft=_save,
         )
 
@@ -1042,14 +1101,24 @@ class EwstuiApp(App):
 
     def _open_forward(self, folder_id: str, message_id: str, detail) -> None:
         """The compose view for a forward: To empty (and focused), your note
-        in the body. Exchange adds the original below it, with its
-        attachments, so it isn't pasted in here too."""
-        name = (getattr(detail, "names", None) or {}).get(detail.sender)
+        in the body, the original shown read-only under it. Exchange adds
+        the original below your note, with its attachments, so it isn't
+        part of the body too."""
+        names = getattr(detail, "names", None) or {}
+        name = names.get(detail.sender)
         who = f"{name} <{detail.sender}>" if name else detail.sender
         context = f"Forwarding {who}'s email — it goes along below what you write" + (
             ", with its attachments" if detail.has_attachments else ""
         )
         subject = detail.subject if re.match(r"(?i)\s*(fw|fwd)\s*:", detail.subject) else f"Fwd: {detail.subject}"
+        header = [f"From: {who}"]
+        if detail.received:
+            header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
+        for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
+            if addresses:
+                header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
+        header.append(f"Subject: {detail.subject}")
+        quoted = "\n".join(header) + "\n\n" + (detail.body_text or "")
 
         def _fields(result: dict) -> dict:
             return {"subject": result["subject"], "body": result["body"],
@@ -1062,7 +1131,7 @@ class EwstuiApp(App):
             self.mail_client.forward(folder_id, message_id, **fields)
 
         self._compose_and_send(
-            ComposeScreen(subject=subject, context=context, title="Forward"),
+            ComposeScreen(subject=subject, context=context, title="Forward", quoted=quoted),
             _send,
             sent_message="Forwarded",
             save_draft=lambda result: self.mail_client.save_forward_draft(folder_id, message_id, **_fields(result)),
@@ -1106,15 +1175,15 @@ class EwstuiApp(App):
             )
 
         self._compose_and_send(
-            ComposeScreen(to=", ".join(to), cc=", ".join(cc), subject=f"Re: {detail.subject}", body=prefill_body,
-                          context=context),
+            ComposeScreen(to=format_recipients(to, detail.names), cc=format_recipients(cc, detail.names),
+                          subject=f"Re: {detail.subject}", body=prefill_body, context=context),
             _send,
             sent_message="Reply sent",
             save_draft=_save_draft,
         )
 
     def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str, save_draft) -> None:
-        """Show `screen`; on Ctrl+S call `send(result)`, on Esc (with
+        """Show `screen`; on Ctrl+S call `send(result)`, on Ctrl+Q / :wq (with
         something written) `save_draft(result)`. If either fails, say why
         and reopen the compose screen with the text intact, so a server
         error never throws away what the user wrote.
@@ -1122,11 +1191,13 @@ class EwstuiApp(App):
 
         if screen.fetch_events is None:  # Ctrl+O: your calendar beside the email
             screen.fetch_events = self.calendar_client.list_events
+        if screen.find_people is None:  # To / Cc: Ctrl+Space lookups and the directory check
+            screen.find_people = getattr(self.mail_client, "find_people", None)
 
         def _reopen(result: dict) -> None:
             self._compose_and_send(
                 ComposeScreen(to=result["to"], cc=result.get("cc", ""), subject=result["subject"], body=result["body"],
-                              context=screen.context, unsaved=True, title=screen.title_text),
+                              context=screen.context, unsaved=True, title=screen.title_text, quoted=screen.quoted),
                 send, sent_message, save_draft,
             )
 
@@ -1891,10 +1962,13 @@ class EwstuiApp(App):
             table = self.query_one("#messages", MessageTable)
             messages = table._messages
             unread = sum(not m.is_read for m in messages)
-            folder = next(
-                (f.name for f in self.query_one("#folders", FolderList).folders if f.id == self.current_folder_id), ""
-            )
-            items = [(folder, "normal"), (f"{len(messages)} messages", "dim")]
+            summary = next((f for f in self.query_one("#folders", FolderList).folders if f.id == self.current_folder_id), None)
+            folder = summary.name if summary else ""
+            loaded = sum(m.folder_id == self.current_folder_id for m in messages)
+            count = f"{len(messages)} messages"
+            if summary and summary.total_count > loaded:  # older ones not loaded yet (G loads them)
+                count = f"{len(messages)} of {summary.total_count + len(messages) - loaded} messages"
+            items = [(folder, "normal"), (count, "dim")]
             if unread:
                 items.append((f"{unread} unread", "accent"))
             if table.threaded:
@@ -1974,6 +2048,17 @@ class EwstuiApp(App):
                 table.move_cursor(row=table.get_row_index(restored.message_id))
             except RowDoesNotExist:
                 pass  # not listed here (older than the loaded page, or another folder)
+
+    async def action_quit_or_close(self) -> None:
+        """Ctrl+Q: in the compose view, save to Drafts and close it; with a
+        compose view open under a popup, nothing (no text is thrown away);
+        else quit."""
+        if isinstance(self.screen, ComposeScreen):
+            self.screen.action_cancel()
+        elif any(isinstance(s, ComposeScreen) for s in self.screen_stack):
+            self.bell()
+        else:
+            await self.action_quit()
 
     def action_compose_new(self) -> None:
         def _send(result: dict) -> None:

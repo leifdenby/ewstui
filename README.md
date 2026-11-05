@@ -299,6 +299,106 @@ itself an embedded email or calendar item (e.g. a forwarded message)
 shows up greyed out in the list since EWS represents those
 differently and this doesn't handle that case yet.
 
+## Exporting a folder (`ewstui export`)
+
+Copies one mail folder to plain files, for reading and searching outside
+ewstui (grep, scripts, an AI assistant), without opening the UI:
+
+```bash
+ewstui export "Projects/0 - Proposals/SBEP" --out ~/proposals/sbep/emails --with-sent
+ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
+```
+
+- The folder is its path in the folder pane, `/`-separated, any case.
+  If there's no such folder, the closest paths are listed.
+- `--with-sent` also exports your replies from Sent Items to the
+  folder's conversations (matched on Exchange's conversation id, going
+  back 30 days before the folder's oldest email).
+  `--no-attachments` skips downloading attachments.
+- Connection options are the usual ones (`--account`, `--email`,
+  `--auth`, ...); with none, the default account is used. Logging in
+  works as for the UI (Keychain + Touch ID, or a password prompt).
+- Re-running only fetches emails that are new or changed (by Exchange's
+  change key); the rest is left as it is. `--update DIR` reads the
+  folder, account and options from the earlier export. One directory
+  holds one folder of one mailbox: exporting another one into it is
+  refused.
+
+What it writes:
+
+```
+emails/
+  index.json                                        where it came from + one record per email
+  2026-10-20_0931_kick-off_1a2b3c4d.md              headers + the email's plain text
+  attachments/2026-10-20_0931_kick-off_1a2b3c4d/plan.docx
+```
+
+`index.json` (format `ewstui-export/1`) has:
+- `source`: the mailbox, account, EWS URL, folder path and id, and the
+  options used.
+- `exported_by`: the ewstui version, git commit and command line (the
+  password is never on the command line).
+- `first_synced` and `last_synced`.
+- `counts`.
+- `emails`, newest first. Each email has its file, date, subject,
+  from/to/cc (name and address), the folder it came from, its
+  attachments, and `present` (false once it's gone from the folder; its
+  file is kept).
+
+Each email also carries the ids to find it on the server again:
+- `message_id`, the Internet Message-ID, which never changes, even when
+  the email is moved.
+- `ews_item_id` and `ews_folder_id`, Exchange's own ids. They're a
+  direct lookup, but Exchange gives an email a new id when it's moved.
+- `changekey`.
+
+File names end in a hash of the Message-ID, so they stay the same across
+runs.
+
+### Searching and exporting single emails (`ewstui search`, `export --message`)
+
+To find an email without opening the UI, and export just it (or its
+whole thread) rather than a folder:
+
+```bash
+ewstui search Joel CV                       # Inbox + Sent Items, newest first
+ewstui search "budget" --folder Archive --folder "Projects/SBEP"
+ewstui search "budget" --folder all --json  # every mail folder, as JSON
+ewstui export --message "<abc123@mail.example>" --thread --out ~/letters/joel/emails
+ewstui export --message "<def456@mail.example>" --out ~/letters/joel/emails   # adds to it
+```
+
+- `search` uses Exchange's own search (words in the subject, body and
+  people; a word also matches the start of a longer one). Exchange
+  searches one folder per request, so each folder is a separate request,
+  merged newest first; `--limit` (default 25) caps the hits. Each hit
+  is printed with its Message-ID (`@` marks attachments).
+- `export --message ID` finds the email in whichever folder it is in.
+  Repeat `--message` for more. `--thread` adds the rest of each email's
+  conversation from any folder, your replies in Sent Items included.
+- The directory's `index.json` has `source.kind: "messages"` and the
+  Message-IDs in `source.message_ids`. Exporting more emails into the
+  same directory adds to that list. `--update DIR` refreshes them all
+  (and their threads, if exported with `--thread`). A directory holds
+  either a folder export or selected emails, never both.
+
+### Listing calendar events (`ewstui calendar`)
+
+To list your calendar over a date range without opening the UI (e.g. to
+look back over a year's trips):
+
+```bash
+ewstui calendar --from 2026-01-01 --to 2026-12-31          # oldest first, one line each
+ewstui calendar --from 2026-01-01 --json > calendar.json   # --to defaults to today
+```
+
+- Both days are included. The range is fetched a month at a time
+  (Exchange caps one calendar view), and an event spanning months is
+  listed once.
+- Each line shows start, end, Exchange's "show as" status (Busy, OOF,
+  WorkingElsewhere, ...), subject and location. `--json` gives the same
+  fields plus the organizer.
+
 ## Keybindings
 
 Press `?` inside the app for the full list: a panel with every section
@@ -328,23 +428,40 @@ background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it
 off) and shows e.g. "New mail: Inbox (+2)". Fetching happens off the UI
 thread, and the cursor and open message stay where they were.
 
-**vim in the text box**: the email's text box has vim's modes, shown at
-its bottom right. It starts in INSERT (type straight away); Esc goes to
-NORMAL, where Esc again does what it does below (save to Drafts and
-close). NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
+**vim in the text boxes**: the email's text box and the To / Cc fields
+have vim's modes, shown at their bottom right. They start in INSERT
+(type straight away); Esc goes to NORMAL, and Esc never closes the
+window. NORMAL: `h j k l`, `w b e`, `0 ^ $`, `gg G` (with counts: `3j`,
 `2dd`), `x X`, `r`{char} (`3rx`), `dd dw de D`, `cc cw C s S`,
 `yy yw p P`, `J`, `u` / Ctrl+R, `i a I A o O` into INSERT, `v` / `V`
 into VISUAL / V-LINE (move to select; `d`/`x`, `y`, `c`, `r`{char}). Yanked and deleted text also goes to the
-system clipboard. Ctrl+S, Tab and Ctrl+O work in every mode.
+system clipboard. `:wq` (or `:x`) saves to Drafts and closes, `:q`
+closes a window you haven't written in, `:q!` closes it and throws away
+what you wrote. Ctrl+S, Ctrl+Q, Tab and Ctrl+O work in every mode. In
+To / Cc, `V` then `j`/`k` and `d` drops whole addresses.
 
-**Writing**: Ctrl+S (or Cmd+Enter) sends; Esc saves what you've written
-to your Drafts folder and closes (a reply stays a reply to its email;
-an untouched window just closes). If sending or saving fails, the
+**Writing**: Ctrl+S (or Cmd+Enter) sends; Ctrl+Q (or `:wq`) saves what
+you've written to your Drafts folder and closes (a reply stays a reply
+to its email; an untouched window just closes). Outside the compose
+view Ctrl+Q still quits ewstui. If sending or saving fails, the
 window comes back with your text. To go on with a draft, open Drafts
 and press Enter / `o` on it: the compose view opens with it filled in;
-Ctrl+S sends that draft (a copy goes to Sent Items), Esc saves your
+Ctrl+S sends that draft (a copy goes to Sent Items), Ctrl+Q saves your
 changes into it. (Drafts are edited as plain text: formatting from
-Outlook doesn't survive an edit here.) Ctrl+O shows your calendar beside the
+Outlook doesn't survive an edit here.)
+
+**To / Cc**: one recipient per line, either `Name <address>` or just the
+address (commas and semicolons also separate). Nothing is selected when
+you move into a field, so typing adds to what's there (a reply-all opens
+with everyone filled in, one per line). Ctrl+Space looks the current
+line up in your organisation's directory. Type part of a name or address
+and press Ctrl+Space: one match fills the line in, and with several you
+pick one (`j`/`k`, Enter). A line under each field says which addresses
+are in the directory and flags the ones that aren't ("? not in the
+directory: …"). Those may be fine (people outside the organisation),
+but it catches typos.
+
+Ctrl+O shows your calendar beside the
 email, to check when you're free: the working days (Mon–Fri) as columns,
 three weeks as rows (from this week, or next week at the weekend), each
 day listing its booked time slots; Ctrl+B / Ctrl+F go three weeks back
@@ -428,7 +545,12 @@ strip of half-hour cells (`·` free, `█` busy, `▒` the meeting, `×` the
 meeting on top of something else). `i` opens the answer popup with the
 same availability: `a` accept, `t` tentative, `d` decline; `s` switches
 off sending your response to the organizer (only your calendar
-changes); `n` (or Tab) types an optional note to send with it. The
+changes); `n` (or Tab) types an optional note to send with it; `p`
+types a new time to propose with a tentative or decline (`14` keeps the
+meeting's day and length, `thu 10:30`, `tomorrow 9-10:30`; the line
+below shows what it read). The organizer gets Outlook's "New time
+proposed", which they can accept. A proposal needs the response to be
+sent, and the field is absent when the organizer turned proposals off. The
 invite email is then archived (`u` brings the email back; your answer
 stays). A cancellation (`cancelled ·`) shows the meeting's time and
 place, and `i` offers to remove it from your calendar.
@@ -525,7 +647,8 @@ event, `[`/`]` shift the visible date range.
 **Finding a room** (`f` in the Calendar tab): shows one day as a grid —
 a row per room in your account's config, a column per half hour of your
 working day (taken from your Outlook working hours if the server
-provides them, else 08:00–17:00), `███` busy and `·` free. It's one EWS
+provides them, else 08:00–17:00), `███` busy and `·` free; `e` widens
+it to 06:00–22:00 to book outside working hours (`e` again to go back). It's one EWS
 GetUserAvailability call per day, with no access to the rooms' calendars
 needed. `[`/`]` go to the previous/next day (`t` back to today), or Tab
 to the date field, type a date and Enter; `j`/`k` pick the room and
@@ -562,7 +685,9 @@ instant; press `r` to throw that away and fetch fresh availability.
 **Priority list**: `A`-`Z` set priority, `V` visual-select, `x` toggle
 complete, `d` remove, `Enter`/`o` jump to email.
 
-**Compose/new-event modals**: `Ctrl+S` send/save, `Esc` discard.
+**Compose/new-event modals**: `Ctrl+S` send/save. New event: `Esc`
+discards. Compose: `Ctrl+Q` / `:wq` save to Drafts and close, `:q!`
+discards (Esc is only vim's).
 In compose, `Cmd+Enter` also sends — if your terminal passes the Cmd
 key through (Ghostty, kitty and WezTerm do; in iTerm2 enable Profiles →
 Keys → "Report keys using CSI u"; Terminal.app can't).
@@ -578,6 +703,8 @@ ewstui/
   keymap.py          Single source of truth for the help-screen text
   screens.py         Modal screens: compose/reply, new event, help
   priority_store.py  Local todo.txt-backed priority list (parse/format/store)
+  export.py          `ewstui export`: a folder or selected emails -> files + index.json
+  cli_search.py      `ewstui search`: Exchange search over several folders, printed
   app.py             Main Textual App: three-pane mail view + calendar + priority views
   widgets/
     folder_list.py    Left pane

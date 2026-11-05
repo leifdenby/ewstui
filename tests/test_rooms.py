@@ -323,6 +323,46 @@ async def test_default_hours_when_server_has_none(tmp_path):
         assert len(screen.query_one(RoomGrid).columns) == 1 + 18
 
 
+async def test_e_widens_grid_beyond_working_hours_and_books_there(tmp_path):
+    app, fetch = make_app(tmp_path), FakeDays()
+    results = []
+    async with app.run_test(size=(200, 40)) as pilot:
+        screen = FindRoomScreen([ROOM_A, ROOM_B, ROOM_C], fetch, now=at(10, 5))
+        app.push_screen(screen, results.append)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        grid = screen.query_one(RoomGrid)
+        await pilot.press("e")
+        await pilot.pause()
+        headers = [str(c.label) for c in grid.columns.values()]
+        assert headers[1] == "06:00" and len(headers) == 1 + 32  # 06:00-22:00
+        assert "extended hours" in str(screen.query_one("#room-title").render())
+        assert screen._slots[grid.cursor_coordinate.column - 1] == at(10, 30)  # same time as before
+        assert fetch.calls == [DAY]  # the day's free/busy already covers it
+        # Stormen at 20:00, outside working hours
+        grid.move_cursor(row=1, column=1 + screen._slots.index(at(20)), animate=False)
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+    assert results == [{"rooms": [ROOM_B], "start": at(20), "end": at(21), "attendees": []}]
+
+
+async def test_e_again_returns_to_working_hours(tmp_path):
+    app, fetch = make_app(tmp_path), FakeDays()
+    async with app.run_test(size=(200, 40)) as pilot:
+        screen = await open_grid(app, pilot, fetch)
+        grid = screen.query_one(RoomGrid)
+        grid.move_cursor(column=1, animate=False)  # 06:00 once widened
+        await pilot.press("e")
+        await pilot.pause()
+        grid.move_cursor(column=1, animate=False)
+        await pilot.press("e")
+        await pilot.pause()
+        assert len(grid.columns) == 1 + 18
+        assert screen._slots[grid.cursor_coordinate.column - 1] == at(8)  # nearest slot still shown
+
+
 async def test_enter_books_free_slot_and_refuses_busy_one(tmp_path):
     app, fetch = make_app(tmp_path), FakeDays()
     results = []

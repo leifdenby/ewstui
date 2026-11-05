@@ -3,7 +3,8 @@
 slots (your working hours) as columns. [/] change the day, the date can
 also be typed; Enter on a free cell books from that slot for the chosen
 duration, or `v` selects a rectangle of rooms × times and Enter books
-all those rooms for that span in one invite.
+all those rooms for that span in one invite. `e` widens the columns to
+EXTENDED_HOURS, for booking early or late, and back.
 
 `a` adds an attendee: type the address into the new row and press Enter.
 Attendees are listed above the rooms (and stay put while the rooms
@@ -29,7 +30,10 @@ from .ews_client import DEFAULT_WORK_HOURS, Room, RoomAvailability, RoomMatch, R
 from .screens import split_addresses
 
 SLOT = timedelta(minutes=30)
-FREE = Text(" · ", style="green")
+# `e`: the grid's span outside working hours (widened further if your
+# working day starts earlier or ends later)
+EXTENDED_HOURS = (time(6, 0), time(22, 0))
+FREE =Text(" · ", style="green")
 FREE_PAST = Text(" · ", style="dim")
 BUSY = Text("███", style="red")
 UNKNOWN = Text(" ? ", style="yellow")
@@ -101,6 +105,7 @@ class RoomGrid(DataTable):
         Binding("r", "refresh", "Refresh"),
         Binding("a", "add_attendee", "Add attendee"),
         Binding("x", "remove_attendee", "Remove attendee", show=False),
+        Binding("e", "toggle_hours", "More hours"),
     ]
 
     # Visual-mode anchor (row, column) where `v` was pressed; the
@@ -128,6 +133,12 @@ class RoomGrid(DataTable):
 
     def action_refresh(self) -> None:
         self.post_message(self.RefreshRequested())
+
+    class HoursToggled(Message):
+        """e: switch between working hours and EXTENDED_HOURS."""
+
+    def action_toggle_hours(self) -> None:
+        self.post_message(self.HoursToggled())
 
     class EditChanged(Message):
         """The typed attendee address changed (or typing started)."""
@@ -377,6 +388,7 @@ class FindRoomScreen(ModalScreen[dict | None]):
         self._kinds: list[list[str] | None] = []  # per row, per slot: a CELL/SELECTED key; None: not a room/person
         self._room_offset = 0  # grid row of the first room (after the attendees, if any)
         self._painted: set[tuple[int, int]] = set()  # cells currently drawn as selected
+        self._extended = False  # `e`: columns span EXTENDED_HOURS, not just working hours
 
     def compose(self) -> ComposeResult:
         with Vertical(id="room-box"):
@@ -390,7 +402,7 @@ class FindRoomScreen(ModalScreen[dict | None]):
             yield Label("", id="room-status", markup=False)
             yield Label(
                 "[/] day · j/k room · h/l time · v select rooms × times · Enter book · / find a room · "
-                "a add attendee · x remove attendee · r refresh · t today · Tab edit date · Esc close",
+                "a add attendee · x remove attendee · e more hours · r refresh · t today · Tab edit date · Esc close",
                 id="room-help",
                 markup=False,  # "[/]" would otherwise parse as a closing tag
             )
@@ -432,9 +444,12 @@ class FindRoomScreen(ModalScreen[dict | None]):
         grid = self.query_one(RoomGrid)
         keep = grid.cursor_coordinate if self._shown is not None else None
         hours = result.work_hours or DEFAULT_WORK_HOURS
+        source = "your Outlook working hours" if result.work_hours else "default hours"
+        if self._extended:
+            hours = (min(hours[0], EXTENDED_HOURS[0]), max(hours[1], EXTENDED_HOURS[1]))
+            source = "extended hours — e for working hours"
         self._shown, self._slots = result, day_slots(result.day, hours)
 
-        source = "your Outlook working hours" if result.work_hours else "default hours"
         self.query_one("#room-title", Label).update(
             f"Rooms — {result.day:%A %d %B %Y} · {hours[0]:%H:%M}–{hours[1]:%H:%M} ({source})"
         )
@@ -754,6 +769,22 @@ class FindRoomScreen(ModalScreen[dict | None]):
 
     def on_room_grid_refresh_requested(self, event: RoomGrid.RefreshRequested) -> None:
         self._reload()
+
+    def on_room_grid_hours_toggled(self, event: RoomGrid.HoursToggled) -> None:
+        """Rebuild the columns (the day's free/busy already covers all of
+        it, so nothing is fetched); the cursor stays on the same time, or
+        the nearest one still shown."""
+        self._extended = not self._extended
+        if self._shown is None:
+            return
+        grid = self.query_one(RoomGrid)
+        grid.cancel_visual()  # its columns are about to move
+        col = grid.cursor_coordinate.column
+        at = self._slots[col - 1] if 0 < col <= len(self._slots) else None
+        self._show(self._shown)
+        if at is not None and self._slots:
+            nearest = min(range(len(self._slots)), key=lambda i: abs(self._slots[i] - at))
+            grid.move_cursor(column=nearest + 1, animate=False)
 
     def _reload(self) -> None:
         """Forget every cached day and fetch the shown one again (cursor

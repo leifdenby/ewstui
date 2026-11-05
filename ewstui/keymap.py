@@ -97,7 +97,10 @@ COMPOSE_KEYS = [
     ("Tab", "next field"),
     ("Ctrl+s", "send / save"),
     ("Cmd+Enter", "send (if the terminal passes Cmd)"),
-    ("Esc", "save to Drafts and close"),
+    ("Ctrl+Q / :wq", "save to Drafts and close"),
+    (":q / :q!", "close if nothing written / throw it away"),
+    ("Esc", "vim normal mode (never closes)"),
+    ("Ctrl+Space", "To / Cc: look the line up in the directory"),
     ("Ctrl+O", "your calendar beside the email"),
     ("Ctrl+B / F", "calendar: earlier / later weeks"),
 ]

@@ -126,6 +126,28 @@ _LOREM = (
 )
 
 
+def _summarize_message(m: MessageDetail, folder_id: str) -> MessageSummary:
+    """Build the message-list row of a demo email, as the live client's ``_summary`` does.
+
+    Parameters
+    ----------
+    m : MessageDetail
+        The demo email.
+    folder_id : str
+        The folder it is in.
+
+    Returns
+    -------
+    MessageSummary
+        The row, with its folder and Internet Message-ID.
+    """
+    return MessageSummary(
+        m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
+        conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
+        conversation_index=m.conversation_index, kind=m.kind, internet_message_id=m.internet_message_id,
+    )
+
+
 class DemoMailClient:
     def __init__(self, page_size: int = 50, calendar: DemoCalendarClient | None = None, with_invites: bool = False):
         """`with_invites` adds a meeting invite, a cancellation and a
@@ -236,18 +258,21 @@ class DemoMailClient:
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
         msgs = self._messages.get(folder_id, [])
         limit = limit or self.page_size
-        return [
-            MessageSummary(
-                m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
-                conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
-                conversation_index=m.conversation_index, kind=m.kind,
-            )
-            for m in msgs[offset : offset + limit]
-        ]
+        return [_summarize_message(m, folder_id) for m in msgs[offset : offset + limit]]
 
     def message_position(self, folder_id: str, message_id: str) -> int | None:
         ids = [m.id for m in self._messages.get(folder_id, [])]
         return ids.index(message_id) if message_id in ids else None
+
+    def find_people(self, query: str) -> list[tuple[str, str]]:
+        """Like Exchange's ResolveNames over a small demo directory: every
+        word of the query in the name or address."""
+        words = query.casefold().split()
+        if not words:
+            return []
+        people = {**_NAMES, **{p.email: p.name for p in DEMO_PEOPLE}}
+        return [(name, email) for email, name in people.items()
+                if all(w in f"{name} {email}".casefold() for w in words)]
 
     def sent_folder_id(self) -> str:
         return "sent"
@@ -283,11 +308,13 @@ class DemoMailClient:
     def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
         return self.move_message(folder_id, message_id, "archive")
 
-    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True) -> None:
+    def respond_to_invite(self, folder_id: str, message_id: str, response: str, note: str = "", send: bool = True,
+                          proposed=None) -> None:
         m = self.get_message(folder_id, message_id)
         if m.meeting is None or m.meeting.kind != "invite":
             raise ValueError("not a meeting invite")
-        self.invite_responses.append({"id": message_id, "response": response, "note": note, "send": send})
+        self.invite_responses.append({"id": message_id, "response": response, "note": note, "send": send}
+                                     | ({"proposed": proposed} if proposed else {}))
         m.meeting.my_response = {"accept": "Accept", "tentative": "Tentative", "decline": "Decline"}[response]
         m.changekey += "+"
         if self.calendar is not None:
@@ -336,13 +363,26 @@ class DemoMailClient:
         for m in self._messages.get(folder_id, []):
             haystack = f"{m.subject} {m.sender} {m.body_text}".casefold()
             if words and all(any(w.startswith(word) for w in haystack.split()) or word in haystack for word in words):
-                out.append(MessageSummary(
-                    m.id, m.changekey, m.subject, m.sender, m.received, m.is_read, m.has_attachments,
-                    conversation_id=m.conversation_id, depth=m.depth, folder_id=folder_id,
-                    conversation_index=m.conversation_index, kind=m.kind,
-                ))
+                out.append(_summarize_message(m, folder_id))
         out.sort(key=lambda m: m.received or datetime.min, reverse=True)
         return out[:limit]
+
+    def find_conversation(self, conversation_id: str) -> list[MessageSummary]:
+        """Find every email of a conversation, in any folder (like the live client).
+
+        Parameters
+        ----------
+        conversation_id : str
+            The conversation's id.
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first, each with its folder as ``folder_id``.
+        """
+        found = [_summarize_message(m, folder_id) for folder_id, msgs in self._messages.items()
+                 for m in msgs if m.conversation_id == conversation_id]
+        return sorted(found, key=lambda m: m.received or datetime.min, reverse=True)
 
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])
