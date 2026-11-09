@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from exchangelib.properties import HTMLBody
 
-from ewstui.compose_markdown import render_markdown_email, render_markdown_fragment
+from ewstui.compose_markdown import convert_html_to_markdown, render_markdown_email, render_markdown_fragment
 from ewstui.ews_client import build_html_body
 
 
@@ -47,3 +47,39 @@ def test_email_document_has_font_and_styles() -> None:
 def test_build_html_body_is_an_exchange_html_body() -> None:
     body = build_html_body("**hi**")
     assert isinstance(body, HTMLBody) and "<strong>hi</strong>" in body
+
+
+# -- HTML -> Markdown, for quoting an HTML email in a reply ------------------
+
+
+def test_html_to_markdown_keeps_emphasis_links_and_lists() -> None:
+    md = convert_html_to_markdown(
+        '<p><b>bold</b> <i>it</i> <a href="https://x.example">site</a></p><ul><li>a</li><li>b</li></ul>'
+    )
+    assert md == "**bold** *it* [site](https://x.example)\n\n- a\n- b"
+
+
+def test_html_to_markdown_drops_head_styles_scripts_hidden_and_comments() -> None:
+    html = (
+        "<html><head><title>T</title><style>p{}</style></head><body>"
+        '<div style="display: none">preheader</div><script>x()</script><!-- note --><p>seen</p></body></html>'
+    )
+    assert convert_html_to_markdown(html) == "seen"
+
+
+def test_html_to_markdown_outlook_lines_are_lines() -> None:
+    html = "<p class=MsoNormal>Hi,</p><p class=MsoNormal>&nbsp;</p><p class=MsoNormal>Text\nwrapped</p>"
+    assert convert_html_to_markdown(html) == "Hi,\n\nText wrapped"
+
+
+def test_html_to_markdown_nested_quotes_and_tables() -> None:
+    md = convert_html_to_markdown(
+        "<blockquote>old<blockquote>older</blockquote></blockquote>"
+        "<table><tr><th>a</th></tr><tr><td>1</td></tr></table>"
+    )
+    assert "> old" in md and "> > older" in md and "| a |" in md and "| 1 |" in md
+
+
+def test_markdown_quote_round_trips_to_html_formatting() -> None:
+    quoted = "\n".join(f"> {line}" for line in convert_html_to_markdown("<p><b>key</b> point</p>").splitlines())
+    assert "<blockquote>\n<p><strong>key</strong> point</p>\n</blockquote>" in render_markdown_fragment(quoted)

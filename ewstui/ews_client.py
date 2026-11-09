@@ -883,20 +883,50 @@ class MailClient:
         in Sent Items and removes the draft."""
         self._updated_draft(folder_id, message_id, to, cc, subject, body).send(save_copy=True)
 
+    @staticmethod
+    def _create_reply(item, subject: str, body, to: list[str] | None, cc: list[str] | None, reply_all: bool):
+        """Return Exchange's reply (not yet saved or sent) to `item`: to `to`
+        and `cc` as written, or, with neither, to whom Exchange picks."""
+        if not to and not cc:
+            return item.create_reply_all(subject=subject, body=body) if reply_all else item.create_reply(subject=subject, body=body)
+        return item.create_reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
+
+    def _save_reply_with_full_body(self, item, subject: str, body: str, to: list[str] | None,
+                                   cc: list[str] | None, reply_all: bool):
+        """Save a reply draft whose body is exactly `body`, nothing added.
+
+        Exchange adds the original below a reply's text when it creates the
+        reply; replacing the saved draft's body afterwards leaves only what
+        was written (for inline answers, where the quote is in `body`). The
+        draft stays a reply (threaded, In-Reply-To set).
+
+        Returns
+        -------
+        Message
+            The saved draft.
+        """
+        saved = self._create_reply(item, subject, build_html_body(""), to, cc, reply_all).save(self.account.drafts)
+        draft_id = getattr(saved, "id", None)
+        if not draft_id:
+            raise RuntimeError("Exchange didn't say which draft it saved the reply as")
+        draft = self.account.drafts.get(id=draft_id)
+        draft.body = build_html_body(body)
+        draft.save(update_fields=["body"])
+        return draft
+
     def save_reply_draft(
         self, folder_id: str, message_id: str, subject: str, body: str,
         to: list[str] | None = None, reply_all: bool = False, cc: list[str] | None = None,
+        full_body: bool = False,
     ) -> None:
         """An unsent reply, saved to Drafts — still a reply to the email
         (Outlook/OWA show it threaded and send it as a reply), to the
         recipients as written (see reply)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
-        body = build_html_body(body)
-        if not to and not cc:
-            draft = item.create_reply_all(subject=subject, body=body) if reply_all else item.create_reply(subject=subject, body=body)
-        else:
-            draft = item.create_reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
-        draft.save(self.account.drafts)
+        if full_body:
+            self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
+            return
+        self._create_reply(item, subject, build_html_body(body), to, cc, reply_all).save(self.account.drafts)
 
     def reply(
         self,
@@ -907,12 +937,21 @@ class MailClient:
         to: list[str] | None = None,
         reply_all: bool = False,
         cc: list[str] | None = None,
+        full_body: bool = False,
     ) -> None:
         """Sent as a reply to the email (same conversation), to exactly `to`
         and `cc` as written in the compose view — for reply-all too, which
         prefills them with everyone. Only with no recipients at all does
-        Exchange pick them (the sender; everyone for reply-all)."""
+        Exchange pick them (the sender; everyone for reply-all).
+
+        Exchange adds the original email below `body`, in its own
+        formatting; with `full_body` (the quote was answered inline or
+        trimmed, so it's in `body`), nothing is added.
+        """
         item = self._folder_by_id(folder_id).get(id=message_id)
+        if full_body:
+            self._save_reply_with_full_body(item, subject, body, to, cc, reply_all).send(save_copy=True)
+            return
         body = build_html_body(body)
         if not to and not cc:
             (item.reply_all if reply_all else item.reply)(subject=subject, body=body)

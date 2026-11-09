@@ -501,8 +501,10 @@ already past, and not overlapping anything shown as Busy, Tentative or
 Out of office — an all-day one (a holiday) takes the whole day, while
 Free / Working-elsewhere entries don't count.
 
-**Mail**: `r` reply, `R` reply-all (the original goes along below what
-you write, in its own formatting, shown read-only under the text box),
+**Mail**: `r` reply, `R` reply-all (the original is quoted below your
+text, as Markdown so its bold, links and lists survive: leave the quote
+as it is and Exchange sends the original underneath in its full
+formatting; answer inline or trim it and the reply goes out as written),
 `f` forward (the original and its attachments go along below what you
 write), `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,

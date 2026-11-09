@@ -5,7 +5,9 @@ forward), and does an HTML body stay HTML?
     uv run --directory ~/git-repos/ewstui python scripts/probe_reply_body.py [ewstui options]
 
 Saves a reply to the newest Inbox email as a *draft* (nothing is sent),
-reads the draft back, reports, and deletes the draft again.
+reads the draft back, reports, and deletes the draft again. Then does the
+same with the draft's body replaced afterwards (how ewstui saves a reply
+answered inline) and checks nothing of the original is left.
 """
 from __future__ import annotations
 
@@ -58,6 +60,22 @@ def main(argv: list[str]) -> int:
         print(f"  text after marker:   {tail[:200]!r}")
     finally:
         account.drafts.get(id=saved_id).delete()
+        print("draft deleted")
+
+    # How ewstui saves an inline-answered reply: create the reply draft,
+    # then replace its whole body. Nothing of the original should remain.
+    print("inline reply: replacing the reply draft's body")
+    saved = original.create_reply(subject=f"Re: {original.subject}", body=HTMLBody("<p></p>")).save(account.drafts)
+    try:
+        item = account.drafts.get(id=saved.id)
+        item.body = HTMLBody(f"<p><b>{MARKER}</b></p>")
+        item.save(update_fields=["body"])
+        item = account.drafts.get(id=saved.id)
+        text = " ".join((item.text_body or "").split())
+        print(f"  body is ours only:   {bool(snippet) and snippet not in text and MARKER in text}")
+        print(f"  still a reply:       in_reply_to={getattr(item, 'in_reply_to', None)!r}")
+    finally:
+        account.drafts.get(id=saved.id).delete()
         print("draft deleted")
     return 0
 

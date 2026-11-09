@@ -349,10 +349,12 @@ class DemoMailClient:
         to: list[str] | None = None,
         reply_all: bool = False,
         cc: list[str] | None = None,
+        full_body: bool = False,
     ) -> None:
         self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         self.sent.append(
-            {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body, "reply_all": reply_all}
+            {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body,
+             "reply_all": reply_all, "full_body": full_body}
         )
 
     def forward(self, folder_id, message_id, subject, body, to, cc=None) -> None:
@@ -398,13 +400,15 @@ class DemoMailClient:
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])
 
-    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None) -> None:
+    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None,
+                         full_body=False) -> None:
         original = self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         if not to and not cc:  # as Exchange would pick them
             to = [original.sender, *original.to] if reply_all else [original.sender]
             cc = list(original.cc) if reply_all else []
-        # As Exchange saves it: the original below what you wrote.
-        self._add_draft(subject, f"{body}\n\n{original.body_text}", to or [], cc or [])
+        # As Exchange saves it: the original below what you wrote (unless
+        # the body, with its inline-answered quote, replaced it all).
+        self._add_draft(subject, body if full_body else f"{body}\n\n{original.body_text}", to or [], cc or [])
 
     def update_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
         m = self.get_message(folder_id, message_id)
