@@ -12,6 +12,8 @@ dependencies = [
     "keyring>=25.7.0",
     "pyobjc-framework-localauthentication>=12.2.2 ; sys_platform == 'darwin'",
     "tomlkit>=0.15.1",
+    "markdown-it-py[linkify]>=3.0",
+    "markdownify>=0.13",
 ]
 
 [project.optional-dependencies]

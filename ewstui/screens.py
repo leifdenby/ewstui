@@ -206,8 +206,8 @@ class ComposeScreen(ModalScreen[dict | None]):
         self._cc = cc
         self._subject = subject
         self._body = body
-        # A forward's original, shown read-only under the body: Exchange adds
-        # it below what you write, so it isn't part of the body itself.
+        # The original of a reply or forward, shown read-only under the body:
+        # Exchange adds it below what you write, so it isn't part of the body.
         self.quoted = quoted
         self.context = context  # for a reply: who sent the email and when
         # Opened with text that isn't saved anywhere (reopened after a failed

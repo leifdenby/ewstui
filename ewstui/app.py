@@ -19,6 +19,7 @@ from textual import events
 from textual.widgets import Input, Tab, Tabs
 
 from . import config_file, connection, teams
+from .compose_markdown import convert_html_to_markdown
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
@@ -88,6 +89,82 @@ def ews_guard(what: str):
 def _local(dt: datetime) -> datetime:
     """A time from Exchange (UTC-aware) as this machine's local time."""
     return dt.astimezone() if dt.tzinfo is not None else dt
+
+
+def format_original_below(detail: object) -> str:
+    """Format an email the way Exchange puts it below a reply or forward.
+
+    Shown read-only under the compose body, so you see what goes along:
+    a From / Sent / To / Cc / Subject header, then the email's text.
+    (Exchange adds the original itself, in its own formatting, so it
+    isn't part of what you write.)
+
+    Parameters
+    ----------
+    detail : object
+        The email (a MessageDetail).
+
+    Returns
+    -------
+    str
+        The header and text.
+    """
+    names = getattr(detail, "names", None) or {}
+    header = [f"From: {format_person(names.get(detail.sender, ''), detail.sender)}"]
+    if detail.received:
+        header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
+    for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
+        if addresses:
+            header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
+    header.append(f"Subject: {detail.subject}")
+    return "\n".join(header) + "\n\n" + (detail.body_text or "")
+
+
+def format_quote_block(detail: object) -> str:
+    """Quote an email for a reply: its text with ``> `` before every line.
+
+    An HTML email is quoted as Markdown converted from its HTML, so bold,
+    links, lists etc. survive in the parts you keep; a plain-text one as
+    its text.
+
+    Parameters
+    ----------
+    detail : object
+        The email (a MessageDetail).
+
+    Returns
+    -------
+    str
+        The quoted lines (``>`` alone on blank ones).
+    """
+    html = getattr(detail, "body_html", "")
+    text = convert_html_to_markdown(html) if html else (detail.body_text or "").strip("\n")
+    return "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
+
+
+def split_untouched_quote(body: str, quote_suffix: str) -> tuple[str, bool]:
+    """Separate what was written from a reply's quote, if it wasn't edited.
+
+    Parameters
+    ----------
+    body : str
+        The reply as written in the compose view.
+    quote_suffix : str
+        The attribution line and quote the body was prefilled with.
+
+    Returns
+    -------
+    tuple[str, bool]
+        ``(text before the quote, True)`` when the body still ends with
+        the quote exactly as prefilled: Exchange then adds the original
+        itself, in its own formatting. Otherwise ``(body, False)``: the
+        quote was edited (answered inline, trimmed, deleted), so the body
+        is sent as written, and nothing is added.
+    """
+    stripped = body.rstrip()
+    if stripped.endswith(quote_suffix.rstrip()):
+        return stripped[: len(stripped) - len(quote_suffix.rstrip())].rstrip(), True
+    return body, False
 
 
 def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[str]]:
@@ -1111,14 +1188,7 @@ class EwstuiApp(App):
             ", with its attachments" if detail.has_attachments else ""
         )
         subject = detail.subject if re.match(r"(?i)\s*(fw|fwd)\s*:", detail.subject) else f"Fwd: {detail.subject}"
-        header = [f"From: {who}"]
-        if detail.received:
-            header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
-        for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
-            if addresses:
-                header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
-        header.append(f"Subject: {detail.subject}")
-        quoted = "\n".join(header) + "\n\n" + (detail.body_text or "")
+        quoted = format_original_below(detail)
 
         def _fields(result: dict) -> dict:
             return {"subject": result["subject"], "body": result["body"],
@@ -1139,44 +1209,38 @@ class EwstuiApp(App):
 
     def _open_reply(self, folder_id: str, message_id: str, reply_all: bool, detail) -> None:
         event = SimpleNamespace(message_id=message_id, reply_all=reply_all)
-        quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
-        # Who wrote it and when: shown while writing, and as the usual
-        # attribution line above the quote (the recipients see that one).
         name = (getattr(detail, "names", None) or {}).get(detail.sender)
         who = f"{name} <{detail.sender}>" if name else detail.sender
         when = _local(detail.received).strftime("%a %d %b %Y %H:%M") if detail.received else None
+        # The original, quoted (as Markdown, so its formatting survives in
+        # what you keep of it), under the usual attribution line. Left as
+        # is, it's dropped on sending and Exchange adds the original itself
+        # in full fidelity; edited (inline answers, trimmed), the whole body
+        # is sent as written. See split_untouched_quote.
         attribution = f"On {when}, {who} wrote:" if when else f"{who} wrote:"
-        prefill_body = f"\n\n{attribution}\n{quoted}"
+        quote_suffix = f"{attribution}\n{format_quote_block(detail)}"
         context = f"Replying to {who}" + (f" · sent {when}" if when else "")
         to, cc = reply_recipients(detail, reply_all, getattr(self.mail_client, "my_address", "") or self.config.email or "")
         if reply_all:
             context += f" · to everyone ({len(to) + len(cc)})"
 
+        def _fields(result: dict) -> dict:
+            body, untouched = split_untouched_quote(result["body"], quote_suffix)
+            return {
+                "subject": result["subject"], "body": body, "full_body": not untouched,
+                "to": _split_addresses(result["to"]), "cc": _split_addresses(result["cc"]),
+                "reply_all": event.reply_all,
+            }
+
         def _send(result: dict) -> None:
-            self.mail_client.reply(
-                folder_id,
-                event.message_id,
-                subject=result["subject"],
-                body=result["body"],
-                to=_split_addresses(result["to"]),
-                cc=_split_addresses(result["cc"]),
-                reply_all=event.reply_all,
-            )
+            self.mail_client.reply(folder_id, event.message_id, **_fields(result))
 
         def _save_draft(result: dict) -> None:
-            self.mail_client.save_reply_draft(
-                folder_id,
-                event.message_id,
-                subject=result["subject"],
-                body=result["body"],
-                to=_split_addresses(result["to"]),
-                cc=_split_addresses(result["cc"]),
-                reply_all=event.reply_all,
-            )
+            self.mail_client.save_reply_draft(folder_id, event.message_id, **_fields(result))
 
         self._compose_and_send(
             ComposeScreen(to=format_recipients(to, detail.names), cc=format_recipients(cc, detail.names),
-                          subject=f"Re: {detail.subject}", body=prefill_body, context=context),
+                          subject=f"Re: {detail.subject}", body=f"\n\n{quote_suffix}", context=context),
             _send,
             sent_message="Reply sent",
             save_draft=_save_draft,

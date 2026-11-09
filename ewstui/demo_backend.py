@@ -54,6 +54,17 @@ _MAINTENANCE = (
     "Background reading (see www.corp.example/it/faq).\n\n"
     "Unsubscribe <https://lists.corp.example/unsubscribe?id=42>\n"
 )
+# The same email as HTML, for the formatted reading pane (H: plain text).
+_MAINTENANCE_HTML = """<html><head><style>p {margin: 0}</style></head><body>
+<p class=MsoNormal>Hi all,</p><p class=MsoNormal>&nbsp;</p>
+<p class=MsoNormal>Email will be <b><span style="color:#C00000">unavailable Saturday 02:00-06:00</span></b>.
+Details on the <a href="https://status.corp.example/maintenance">status page</a>.</p>
+<ul><li>Questions? Join the <a href="https://meet.corp.example/j/123456">drop-in call</a></li>
+<li>or write to <a href="mailto:it-support@corp.example">it-support@corp.example</a></li>
+<li><i>Background reading</i> (see www.corp.example/it/faq)</li></ul>
+<p class=MsoNormal><span style="color:#808080;font-size:8pt">
+<a href="https://lists.corp.example/unsubscribe?id=42">Unsubscribe</a></span></p>
+</body></html>"""
 
 # Display names, and a long recipient list (for the folded To/Cc line, e).
 _STAFF = [
@@ -198,7 +209,7 @@ class DemoMailClient:
                     sender="it-notifications@corp.example", received=now - timedelta(days=1),
                     is_read=True, has_attachments=False,
                     to=_STAFF_ADDRESSES[:20], cc=_STAFF_ADDRESSES[20:] + ["team@corp.example"],
-                    body_text=_MAINTENANCE,
+                    body_text=_MAINTENANCE, body_html=_MAINTENANCE_HTML,
                 ),
                 MessageDetail(
                     id="m4", changekey="c4", subject="Lunch Friday?",
@@ -338,10 +349,12 @@ class DemoMailClient:
         to: list[str] | None = None,
         reply_all: bool = False,
         cc: list[str] | None = None,
+        full_body: bool = False,
     ) -> None:
         self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         self.sent.append(
-            {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body, "reply_all": reply_all}
+            {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body,
+             "reply_all": reply_all, "full_body": full_body}
         )
 
     def forward(self, folder_id, message_id, subject, body, to, cc=None) -> None:
@@ -387,12 +400,15 @@ class DemoMailClient:
     def save_draft(self, to, subject, body, cc=None) -> None:
         self._add_draft(subject, body, to or [], cc or [])
 
-    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None) -> None:
+    def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None,
+                         full_body=False) -> None:
         original = self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         if not to and not cc:  # as Exchange would pick them
             to = [original.sender, *original.to] if reply_all else [original.sender]
             cc = list(original.cc) if reply_all else []
-        self._add_draft(subject, body, to or [], cc or [])
+        # As Exchange saves it: the original below what you wrote (unless
+        # the body, with its inline-answered quote, replaced it all).
+        self._add_draft(subject, body if full_body else f"{body}\n\n{original.body_text}", to or [], cc or [])
 
     def update_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
         m = self.get_message(folder_id, message_id)

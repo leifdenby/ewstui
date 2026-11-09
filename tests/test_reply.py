@@ -10,7 +10,7 @@ from textual.widgets import Input, TextArea
 from ewstui.app import EwstuiApp, _split_addresses
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
-from ewstui.ews_client import MailClient
+from ewstui.ews_client import MailClient, build_html_body
 from ewstui.screens import ComposeScreen, PickPersonScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
@@ -28,14 +28,15 @@ def live():
 def test_reply_passes_subject_body_and_recipients(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test"])
-    item.reply.assert_called_once_with(subject="Re: Hi", body="thanks", to_recipients=["a@x.test"], cc_recipients=None)
+    item.reply.assert_called_once_with(subject="Re: Hi", body=build_html_body("thanks"), to_recipients=["a@x.test"],
+                                       cc_recipients=None)
 
 
 def test_reply_all_goes_to_the_recipients_as_written(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test", "b@x.test"], cc=["c@x.test"], reply_all=True)
     item.reply.assert_called_once_with(
-        subject="Re: Hi", body="thanks", to_recipients=["a@x.test", "b@x.test"], cc_recipients=["c@x.test"],
+        subject="Re: Hi", body=build_html_body("thanks"), to_recipients=["a@x.test", "b@x.test"], cc_recipients=["c@x.test"],
     )
     item.reply_all.assert_not_called()
 
@@ -43,7 +44,7 @@ def test_reply_all_goes_to_the_recipients_as_written(live):
 def test_with_no_recipients_exchange_picks_them(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", reply_all=True)
-    item.reply_all.assert_called_once_with(subject="Re: Hi", body="thanks")
+    item.reply_all.assert_called_once_with(subject="Re: Hi", body=build_html_body("thanks"))
 
 
 def test_reply_recipients():
@@ -72,7 +73,7 @@ def test_send_mail_uses_exchangelib_message(monkeypatch):
         account=account,
         folder=account.sent,
         subject="Hi",
-        body="Hello",
+        body=build_html_body("Hello"),
         to_recipients=["a@x.test", "b@y.test"],
         cc_recipients=None,
     )
@@ -127,6 +128,64 @@ async def test_reply_shows_who_sent_it_and_when(app, mail):
         assert context == f"Replying to Finance Team <finance@corp.example> · sent {when}"
         body = app.screen.query_one("#compose-body", TextArea).text
         assert f"On {when}, Finance Team <finance@corp.example> wrote:\n> " in body
+        assert not app.screen.query("#compose-quoted")  # the quote is in the body, to answer inline
+
+
+async def test_untouched_quote_is_left_to_exchange(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Sounds good")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    # Only your text: Exchange adds the original below it, fully formatted.
+    assert mail.sent[0]["body"] == "Sounds good" and mail.sent[0]["full_body"] is False
+
+
+async def test_answering_inline_sends_the_body_as_written(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "")
+        area = app.screen.query_one("#compose-body", TextArea)
+        quote_line = next(i for i, line in enumerate(area.text.splitlines()) if line.startswith("> ") and line != "> ")
+        area.insert("\nYes, agreed.\n", (quote_line + 1, 0))
+        written = area.text
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    sent = mail.sent[0]
+    assert sent["full_body"] is True and sent["body"] == written and "Yes, agreed." in sent["body"]
+
+
+async def test_html_email_is_quoted_as_markdown(app, mail):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("j", "j", "r")  # m3: the HTML demo email
+        await pilot.pause()
+        body = app.screen.query_one("#compose-body", TextArea).text
+    assert "> Email will be **unavailable Saturday 02:00-06:00**." in body
+    assert "> - Questions? Join the [drop-in call](https://meet.corp.example/j/123456)" in body
+
+
+def test_split_untouched_quote():
+    from ewstui.app import split_untouched_quote
+
+    suffix = "X wrote:\n> a\n>\n> b"
+    assert split_untouched_quote(f"Hi\n\n{suffix}\n", suffix) == ("Hi", True)
+    assert split_untouched_quote(f"\n\n{suffix}", suffix) == ("", True)
+    edited = "Hi\n\nX wrote:\n> a\nmine\n> b"
+    assert split_untouched_quote(edited, suffix) == (edited, False)
+    assert split_untouched_quote("Hi, quote deleted", suffix) == ("Hi, quote deleted", False)
+
+
+def test_live_inline_reply_replaces_the_whole_body_then_sends(live):
+    client, item = live
+    draft = create_autospec(Message, instance=True)
+    client.account.drafts = SimpleNamespace(get=lambda id: draft)
+    client.reply("inbox", "m1", subject="Re: Hi", body="> q\nanswer", to=["a@x.test"], full_body=True)
+    item.create_reply.assert_called_once_with(subject="Re: Hi", body=build_html_body(""), to_recipients=["a@x.test"],
+                                              cc_recipients=None)
+    item.create_reply.return_value.save.assert_called_once_with(client.account.drafts)
+    assert draft.body == build_html_body("> q\nanswer")
+    draft.save.assert_called_once_with(update_fields=["body"])
+    draft.send.assert_called_once_with(save_copy=True)
+    item.reply.assert_not_called()
 
 
 async def test_failed_send_keeps_the_reply_context(app, mail, monkeypatch):
@@ -148,7 +207,7 @@ def test_live_drafts_are_saved_to_the_drafts_folder(monkeypatch):
     monkeypatch.setattr(ews_client, "Message", message_cls)
     MailClient(account).save_draft(to=["a@x.test"], subject="Hi", body="Hello")
     message_cls.assert_called_once_with(
-        account=account, folder=account.drafts, subject="Hi", body="Hello", to_recipients=["a@x.test"], cc_recipients=None,
+        account=account, folder=account.drafts, subject="Hi", body=build_html_body("Hello"), to_recipients=["a@x.test"], cc_recipients=None,
     )
     message_cls.return_value.save.assert_called_once_with()  # saved, not sent
 
@@ -157,7 +216,7 @@ def test_live_reply_drafts_stay_replies(live):
     client, item = live
     client.account.drafts = "drafts-folder"
     client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="later", to=["a@x.test"])
-    item.create_reply.assert_called_once_with(subject="Re: Hi", body="later", to_recipients=["a@x.test"], cc_recipients=None)
+    item.create_reply.assert_called_once_with(subject="Re: Hi", body=build_html_body("later"), to_recipients=["a@x.test"], cc_recipients=None)
     item.create_reply.return_value.save.assert_called_once_with("drafts-folder")
     client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="all", reply_all=True)  # no recipients: Exchange's
     item.create_reply_all.return_value.save.assert_called_once_with("drafts-folder")

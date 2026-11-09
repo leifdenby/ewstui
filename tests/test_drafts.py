@@ -11,7 +11,7 @@ from textual.widgets import Input, TextArea
 from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
-from ewstui.ews_client import MailClient
+from ewstui.ews_client import MailClient, build_html_body
 from ewstui.screens import ComposeScreen, RecipientsArea
 from ewstui.widgets.folder_list import FolderList
 from ewstui.widgets.message_table import MessageTable
@@ -118,6 +118,6 @@ def test_live_send_draft_updates_then_sends_the_same_item():
     folder = SimpleNamespace(id="drafts", get=lambda id: item, children=[])
     client = MailClient(SimpleNamespace(msg_folder_root=folder))
     client.send_draft("drafts", "d1", ["a@x.test"], [], "Hi", "Hello")
-    assert item.subject == "Hi" and item.body == "Hello" and item.cc_recipients is None
+    assert item.subject == "Hi" and item.body == build_html_body("Hello") and item.cc_recipients is None
     item.save.assert_called_once_with(update_fields=["to_recipients", "cc_recipients", "subject", "body"])
     item.send.assert_called_once_with(save_copy=True)

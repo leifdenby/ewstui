@@ -422,6 +422,17 @@ mutt/aerc; only an explicit open shifts focus there.
 view (also shown as clickable mode tabs under the header, with the
 active one highlighted), `Ctrl+l` refresh, `q` quit, `?` help.
 
+**HTML emails**: emails written in HTML are shown formatted in the
+reading pane: bold, italics, underline, strike-through, text colours and
+highlights, links (clickable in terminals with OSC 8 hyperlinks, e.g.
+iTerm2, kitty, WezTerm), headings, bulleted / numbered lists, quoted
+replies and paragraph breaks; tables become one line per row. Fonts and
+sizes can't carry over to a terminal. Colours are adapted to the theme:
+greys, black and white use the theme's text colour, and other colours are
+lightened (or darkened) until readable on its background. `H` in the
+reading pane switches to the email's plain-text version and back.
+Replies, forwards, search and export keep using the plain text.
+
 **New mail**: `Ctrl+l` checks for new mail now (in the calendar or
 priority view it reloads that view instead). ewstui also checks in the
 background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it
@@ -449,6 +460,14 @@ and press Enter / `o` on it: the compose view opens with it filled in;
 Ctrl+S sends that draft (a copy goes to Sent Items), Ctrl+Q saves your
 changes into it. (Drafts are edited as plain text: formatting from
 Outlook doesn't survive an edit here.)
+
+**Markdown**: what you write is sent as an HTML email, with Markdown
+formatting: `**bold**`, `*italic*`, `~~strike~~`, `- bullets`,
+`1. numbers`, `[text](https://...)`, `> quotes`, `` `code` `` and fenced
+code blocks, and tables. Plain text written without Markdown in mind
+comes out as typed: every line break is kept, bare URLs become links,
+raw HTML is shown as text, and a `--` signature line or indented text
+stay as they are (they don't become a heading or code).
 
 **To / Cc**: one recipient per line, either `Name <address>` or just the
 address (commas and semicolons also separate). Nothing is selected when
@@ -482,8 +501,12 @@ already past, and not overlapping anything shown as Busy, Tentative or
 Out of office — an all-day one (a holiday) takes the whole day, while
 Free / Working-elsewhere entries don't count.
 
-**Mail**: `r` reply, `R` reply-all, `f` forward (the original and its
-attachments go along below what you write), `w` compose new, `d` delete,
+**Mail**: `r` reply, `R` reply-all (the original is quoted below your
+text, as Markdown so its bold, links and lists survive: leave the quote
+as it is and Exchange sends the original underneath in its full
+formatting; answer inline or trim it and the reply goes out as written),
+`f` forward (the original and its attachments go along below what you
+write), `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note (on an email that's
 already listed, `p` edits that entry's note instead), `A` archive, `m`
