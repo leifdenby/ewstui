@@ -48,6 +48,7 @@ PREVIEW_KEYS = [
     ("h", "back to the message list"),
     ("U", "links in this email"),
     ("e", "all To / Cc recipients"),
+    ("H", "formatted (HTML) / plain text"),
     ("r R f", "reply / all, forward"),
     ("d A m", "delete, archive, move"),
     ("P / p v", "priority (+ note), attachments"),

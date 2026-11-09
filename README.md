@@ -422,6 +422,17 @@ mutt/aerc; only an explicit open shifts focus there.
 view (also shown as clickable mode tabs under the header, with the
 active one highlighted), `Ctrl+l` refresh, `q` quit, `?` help.
 
+**HTML emails**: emails written in HTML are shown formatted in the
+reading pane: bold, italics, underline, strike-through, text colours and
+highlights, links (clickable in terminals with OSC 8 hyperlinks, e.g.
+iTerm2, kitty, WezTerm), headings, bulleted / numbered lists, quoted
+replies and paragraph breaks; tables become one line per row. Fonts and
+sizes can't carry over to a terminal. Colours are adapted to the theme:
+greys, black and white use the theme's text colour, and other colours are
+lightened (or darkened) until readable on its background. `H` in the
+reading pane switches to the email's plain-text version and back.
+Replies, forwards, search and export keep using the plain text.
+
 **New mail**: `Ctrl+l` checks for new mail now (in the calendar or
 priority view it reloads that view instead). ewstui also checks in the
 background every 5 minutes (`--refresh-interval MINUTES`, `0` turns it

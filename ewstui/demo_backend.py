@@ -54,6 +54,17 @@ _MAINTENANCE = (
     "Background reading (see www.corp.example/it/faq).\n\n"
     "Unsubscribe <https://lists.corp.example/unsubscribe?id=42>\n"
 )
+# The same email as HTML, for the formatted reading pane (H: plain text).
+_MAINTENANCE_HTML = """<html><head><style>p {margin: 0}</style></head><body>
+<p class=MsoNormal>Hi all,</p><p class=MsoNormal>&nbsp;</p>
+<p class=MsoNormal>Email will be <b><span style="color:#C00000">unavailable Saturday 02:00-06:00</span></b>.
+Details on the <a href="https://status.corp.example/maintenance">status page</a>.</p>
+<ul><li>Questions? Join the <a href="https://meet.corp.example/j/123456">drop-in call</a></li>
+<li>or write to <a href="mailto:it-support@corp.example">it-support@corp.example</a></li>
+<li><i>Background reading</i> (see www.corp.example/it/faq)</li></ul>
+<p class=MsoNormal><span style="color:#808080;font-size:8pt">
+<a href="https://lists.corp.example/unsubscribe?id=42">Unsubscribe</a></span></p>
+</body></html>"""
 
 # Display names, and a long recipient list (for the folded To/Cc line, e).
 _STAFF = [
@@ -198,7 +209,7 @@ class DemoMailClient:
                     sender="it-notifications@corp.example", received=now - timedelta(days=1),
                     is_read=True, has_attachments=False,
                     to=_STAFF_ADDRESSES[:20], cc=_STAFF_ADDRESSES[20:] + ["team@corp.example"],
-                    body_text=_MAINTENANCE,
+                    body_text=_MAINTENANCE, body_html=_MAINTENANCE_HTML,
                 ),
                 MessageDetail(
                     id="m4", changekey="c4", subject="Lunch Friday?",

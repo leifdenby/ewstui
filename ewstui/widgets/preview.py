@@ -7,6 +7,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from ..ews_client import EventSummary, MessageDetail
+from ..html_render import render_html
 from ..invites import render_invite_card
 from .message_header import render_header
 
@@ -36,6 +37,7 @@ class PreviewPane(VerticalScroll):
         Binding("P", "email('priority')", "Add to priority", show=False),
         Binding("p", "email('priority_note')", "Add to priority + note", show=False),
         Binding("v", "email('attachments')", "Attachments", show=False),
+        Binding("H", "toggle_html", "Formatted / plain text", show=False),
     ]
 
     def action_email(self, action: str) -> None:
@@ -88,6 +90,9 @@ class PreviewPane(VerticalScroll):
         super().__init__(*args, **kwargs)
         self._message: MessageDetail | None = None  # the email shown, if any
         self.recipients_expanded = False
+        # H: show HTML emails as their plain-text version instead (sticks
+        # across emails until H again).
+        self.show_plain_text = False
         # For an invite: your calendar on the meeting's day, once looked up.
         self._invite_events: list[EventSummary] | None = None
 
@@ -119,8 +124,39 @@ class PreviewPane(VerticalScroll):
         header = render_header(msg, width, self.recipients_expanded, colors)
         if getattr(msg, "meeting", None) is not None:
             header += render_invite_card(msg.meeting, self._invite_events, width, colors)
-        # The body is plain text: brackets in an email are never markup.
-        self.query_one("#preview-body", Static).update(header + Content(msg.body_text or "(empty message)"))
+        self.query_one("#preview-body", Static).update(header + self._render_body(msg, colors))
+
+    def _render_body(self, msg: MessageDetail, colors: dict[str, str]) -> Content:
+        """Return the email's body: formatted from its HTML when it has one
+        (and H hasn't switched to plain text), otherwise its plain text.
+
+        Parameters
+        ----------
+        msg : MessageDetail
+            The email shown.
+        colors : dict[str, str]
+            The theme's colour variables.
+
+        Returns
+        -------
+        Content
+            The body, ready to put under the header.
+        """
+        html = getattr(msg, "body_html", "")
+        if html and not self.show_plain_text:
+            body = render_html(html, background=colors.get("background", "#000000"),
+                               link_color=colors.get("accent"), dim_color=colors.get("tux-dim"))
+            if body.plain.strip():
+                return body
+        # Plain text: brackets in an email are never markup.
+        return Content(msg.body_text or "(empty message)")
+
+    def action_toggle_html(self) -> None:
+        """H: switch between the formatted (HTML) and plain-text body."""
+        self.show_plain_text = not self.show_plain_text
+        if self._message is not None:
+            self._render_message()
+            self.notify("Plain text" if self.show_plain_text else "Formatted (HTML)", timeout=1.5)
 
     def on_mount(self) -> None:
         self.watch(self.app, "theme", self._rerender, init=False)  # colours come from the theme

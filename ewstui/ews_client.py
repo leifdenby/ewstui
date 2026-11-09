@@ -146,6 +146,9 @@ class MessageDetail(MessageSummary):
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     body_text: str = ""
+    # The HTML body, for emails written in HTML ("" for plain-text ones);
+    # the reading pane shows it formatted, everything else uses body_text.
+    body_html: str = ""
     # Display names of the sender and recipients, by address ("Jane Doe"),
     # for the reading pane; sender/to/cc stay plain addresses for replying.
     names: dict[str, str] = field(default_factory=dict)
@@ -287,6 +290,26 @@ def _email(mailbox) -> str:
     """Mailbox or Attendee (which wraps a Mailbox) -> address or name."""
     mailbox = getattr(mailbox, "mailbox", mailbox)
     return str(getattr(mailbox, "email_address", None) or getattr(mailbox, "name", None) or "")
+
+
+def read_html_body(item: object) -> str:
+    """Return an item's body if it is HTML, else "".
+
+    Parameters
+    ----------
+    item : object
+        An exchangelib item; its `body` is an `HTMLBody` for HTML emails
+        and a plain `Body` otherwise.
+
+    Returns
+    -------
+    str
+        The HTML, or "" for plain-text emails (and items without a body).
+    """
+    from exchangelib.properties import HTMLBody
+
+    body = getattr(item, "body", None)
+    return str(body) if isinstance(body, HTMLBody) else ""
 
 
 def _sender(item) -> str:
@@ -597,6 +620,7 @@ class MailClient:
             to=_addresses(item, "to_recipients", "required_attendees"),
             cc=_addresses(item, "cc_recipients", "optional_attendees"),
             body_text=getattr(item, "text_body", None) or "",
+            body_html=read_html_body(item),
             internet_message_id=getattr(item, "message_id", None),
             names=_names(item),
             kind=_kind(item),
