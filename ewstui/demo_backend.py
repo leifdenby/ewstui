@@ -403,7 +403,8 @@ class DemoMailClient:
         if not to and not cc:  # as Exchange would pick them
             to = [original.sender, *original.to] if reply_all else [original.sender]
             cc = list(original.cc) if reply_all else []
-        self._add_draft(subject, body, to or [], cc or [])
+        # As Exchange saves it: the original below what you wrote.
+        self._add_draft(subject, f"{body}\n\n{original.body_text}", to or [], cc or [])
 
     def update_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
         m = self.get_message(folder_id, message_id)

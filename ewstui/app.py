@@ -90,6 +90,35 @@ def _local(dt: datetime) -> datetime:
     return dt.astimezone() if dt.tzinfo is not None else dt
 
 
+def format_original_below(detail: object) -> str:
+    """Format an email the way Exchange puts it below a reply or forward.
+
+    Shown read-only under the compose body, so you see what goes along:
+    a From / Sent / To / Cc / Subject header, then the email's text.
+    (Exchange adds the original itself, in its own formatting, so it
+    isn't part of what you write.)
+
+    Parameters
+    ----------
+    detail : object
+        The email (a MessageDetail).
+
+    Returns
+    -------
+    str
+        The header and text.
+    """
+    names = getattr(detail, "names", None) or {}
+    header = [f"From: {format_person(names.get(detail.sender, ''), detail.sender)}"]
+    if detail.received:
+        header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
+    for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
+        if addresses:
+            header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
+    header.append(f"Subject: {detail.subject}")
+    return "\n".join(header) + "\n\n" + (detail.body_text or "")
+
+
 def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[str]]:
     """(To, Cc) to prefill: the sender; for reply-all also everyone the
     email went to (its To in To, its Cc in Cc) — without you, and each once."""
@@ -1111,14 +1140,7 @@ class EwstuiApp(App):
             ", with its attachments" if detail.has_attachments else ""
         )
         subject = detail.subject if re.match(r"(?i)\s*(fw|fwd)\s*:", detail.subject) else f"Fwd: {detail.subject}"
-        header = [f"From: {who}"]
-        if detail.received:
-            header.append(f"Sent: {_local(detail.received).strftime('%a %d %b %Y %H:%M')}")
-        for label, addresses in (("To", detail.to), ("Cc", detail.cc)):
-            if addresses:
-                header.append(f"{label}: " + "; ".join(format_person(names.get(a, ""), a) for a in addresses))
-        header.append(f"Subject: {detail.subject}")
-        quoted = "\n".join(header) + "\n\n" + (detail.body_text or "")
+        quoted = format_original_below(detail)
 
         def _fields(result: dict) -> dict:
             return {"subject": result["subject"], "body": result["body"],
@@ -1139,14 +1161,13 @@ class EwstuiApp(App):
 
     def _open_reply(self, folder_id: str, message_id: str, reply_all: bool, detail) -> None:
         event = SimpleNamespace(message_id=message_id, reply_all=reply_all)
-        quoted = "\n".join(f"> {line}" for line in detail.body_text.splitlines())
-        # Who wrote it and when: shown while writing, and as the usual
-        # attribution line above the quote (the recipients see that one).
+        # Exchange puts the original (with a From / Sent / To header, in its
+        # own formatting) below the reply, as for a forward: it's shown
+        # read-only under the body rather than quoted into it.
+        quoted = format_original_below(detail)
         name = (getattr(detail, "names", None) or {}).get(detail.sender)
         who = f"{name} <{detail.sender}>" if name else detail.sender
         when = _local(detail.received).strftime("%a %d %b %Y %H:%M") if detail.received else None
-        attribution = f"On {when}, {who} wrote:" if when else f"{who} wrote:"
-        prefill_body = f"\n\n{attribution}\n{quoted}"
         context = f"Replying to {who}" + (f" · sent {when}" if when else "")
         to, cc = reply_recipients(detail, reply_all, getattr(self.mail_client, "my_address", "") or self.config.email or "")
         if reply_all:
@@ -1176,7 +1197,7 @@ class EwstuiApp(App):
 
         self._compose_and_send(
             ComposeScreen(to=format_recipients(to, detail.names), cc=format_recipients(cc, detail.names),
-                          subject=f"Re: {detail.subject}", body=prefill_body, context=context),
+                          subject=f"Re: {detail.subject}", context=context, quoted=quoted),
             _send,
             sent_message="Reply sent",
             save_draft=_save_draft,

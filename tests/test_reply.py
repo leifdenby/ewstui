@@ -126,8 +126,20 @@ async def test_reply_shows_who_sent_it_and_when(app, mail):
         await open_reply(pilot, app, "")
         context = str(app.screen.query_one("#compose-context").render())
         assert context == f"Replying to Finance Team <finance@corp.example> · sent {when}"
-        body = app.screen.query_one("#compose-body", TextArea).text
-        assert f"On {when}, Finance Team <finance@corp.example> wrote:\n> " in body
+        # The body is yours alone: Exchange adds the original below it, which
+        # is shown read-only underneath (not quoted into the body twice).
+        assert app.screen.query_one("#compose-body", TextArea).text == ""
+        quoted = app.screen.query_one("#compose-quoted", TextArea).text
+        assert quoted.startswith(f"From: Finance Team <finance@corp.example>\nSent: {when}\n")
+        assert mail.get_message("inbox", "m1").body_text in quoted
+
+
+async def test_sent_reply_body_does_not_quote_the_original(app, mail):
+    async with app.run_test() as pilot:
+        await open_reply(pilot, app, "Sounds good")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    assert mail.sent[0]["body"] == "Sounds good"
 
 
 async def test_failed_send_keeps_the_reply_context(app, mail, monkeypatch):
