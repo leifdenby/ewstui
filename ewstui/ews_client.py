@@ -292,6 +292,27 @@ def _email(mailbox) -> str:
     return str(getattr(mailbox, "email_address", None) or getattr(mailbox, "name", None) or "")
 
 
+def build_html_body(text: str) -> object:
+    """Turn a body written in the compose view into the HTML body to send.
+
+    Parameters
+    ----------
+    text : str
+        The body as written: plain text, optionally with Markdown.
+
+    Returns
+    -------
+    object
+        An exchangelib `HTMLBody` (Exchange then also derives the
+        plain-text version for clients that want one).
+    """
+    from exchangelib.properties import HTMLBody
+
+    from .compose_markdown import render_markdown_email
+
+    return HTMLBody(render_markdown_email(text))
+
+
 def read_html_body(item: object) -> str:
     """Return an item's body if it is HTML, else "".
 
@@ -824,7 +845,7 @@ class MailClient:
             account=self.account,
             folder=self.account.sent,
             subject=subject,
-            body=body,
+            body=build_html_body(body),
             to_recipients=to,
             cc_recipients=cc or None,
         )
@@ -836,7 +857,7 @@ class MailClient:
             account=self.account,
             folder=self.account.drafts,
             subject=subject,
-            body=body,
+            body=build_html_body(body),
             to_recipients=to or None,
             cc_recipients=cc or None,
         ).save()
@@ -846,7 +867,7 @@ class MailClient:
         item.to_recipients = to or None
         item.cc_recipients = cc or None
         item.subject = subject
-        item.body = body
+        item.body = build_html_body(body)
         item.save(update_fields=["to_recipients", "cc_recipients", "subject", "body"])
         return item
 
@@ -870,6 +891,7 @@ class MailClient:
         (Outlook/OWA show it threaded and send it as a reply), to the
         recipients as written (see reply)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
+        body = build_html_body(body)
         if not to and not cc:
             draft = item.create_reply_all(subject=subject, body=body) if reply_all else item.create_reply(subject=subject, body=body)
         else:
@@ -891,6 +913,7 @@ class MailClient:
         prefills them with everyone. Only with no recipients at all does
         Exchange pick them (the sender; everyone for reply-all)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
+        body = build_html_body(body)
         if not to and not cc:
             (item.reply_all if reply_all else item.reply)(subject=subject, body=body)
             return
@@ -902,14 +925,14 @@ class MailClient:
         original below it (its From / Sent / To / Subject header and text)
         with its attachments."""
         item = self._folder_by_id(folder_id).get(id=message_id)
-        item.forward(subject=subject, body=body, to_recipients=to, cc_recipients=cc or None)
+        item.forward(subject=subject, body=build_html_body(body), to_recipients=to, cc_recipients=cc or None)
 
     def save_forward_draft(self, folder_id: str, message_id: str, subject: str, body: str,
                            to: list[str] | None = None, cc: list[str] | None = None) -> None:
         """An unsent forward, saved to Drafts — the original and its
         attachments stay with it (see forward)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
-        item.create_forward(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None).save(
+        item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to or None, cc_recipients=cc or None).save(
             self.account.drafts
         )
 

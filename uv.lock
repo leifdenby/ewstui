@@ -411,6 +411,7 @@ source = { editable = "." }
 dependencies = [
     { name = "exchangelib" },
     { name = "keyring" },
+    { name = "markdown-it-py", extra = ["linkify"] },
     { name = "msal" },
     { name = "pyobjc-framework-localauthentication", marker = "sys_platform == 'darwin'" },
     { name = "textual" },
@@ -432,6 +433,7 @@ dev = [
 requires-dist = [
     { name = "exchangelib", specifier = ">=5.0" },
     { name = "keyring", specifier = ">=25.7.0" },
+    { name = "markdown-it-py", extras = ["linkify"], specifier = ">=3.0" },
     { name = "msal", specifier = ">=1.28" },
     { name = "pyobjc-framework-localauthentication", marker = "sys_platform == 'darwin'", specifier = ">=12.2.2" },
     { name = "requests-gssapi", marker = "extra == 'kerberos'", specifier = ">=1.2" },

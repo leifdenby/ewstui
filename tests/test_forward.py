@@ -10,7 +10,7 @@ from textual.widgets import Input, TextArea
 from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
-from ewstui.ews_client import MailClient
+from ewstui.ews_client import MailClient, build_html_body
 from ewstui.screens import ComposeScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
@@ -27,13 +27,13 @@ def live():
 def test_live_forward_is_exchanges_forward(live):
     client, item = live
     client.forward("inbox", "m1", subject="Fwd: Hi", body="FYI", to=["a@x.test"], cc=["b@x.test"])
-    item.forward.assert_called_once_with(subject="Fwd: Hi", body="FYI", to_recipients=["a@x.test"], cc_recipients=["b@x.test"])
+    item.forward.assert_called_once_with(subject="Fwd: Hi", body=build_html_body("FYI"), to_recipients=["a@x.test"], cc_recipients=["b@x.test"])
 
 
 def test_live_forward_drafts_stay_forwards(live):
     client, item = live
     client.save_forward_draft("inbox", "m1", subject="Fwd: Hi", body="later", to=[], cc=[])
-    item.create_forward.assert_called_once_with(subject="Fwd: Hi", body="later", to_recipients=None, cc_recipients=None)
+    item.create_forward.assert_called_once_with(subject="Fwd: Hi", body=build_html_body("later"), to_recipients=None, cc_recipients=None)
     item.create_forward.return_value.save.assert_called_once_with("drafts-folder")
 
 

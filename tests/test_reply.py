@@ -10,7 +10,7 @@ from textual.widgets import Input, TextArea
 from ewstui.app import EwstuiApp, _split_addresses
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
-from ewstui.ews_client import MailClient
+from ewstui.ews_client import MailClient, build_html_body
 from ewstui.screens import ComposeScreen, PickPersonScreen, RecipientsArea
 
 # -- live client against exchangelib's real method signatures --------------
@@ -28,14 +28,15 @@ def live():
 def test_reply_passes_subject_body_and_recipients(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test"])
-    item.reply.assert_called_once_with(subject="Re: Hi", body="thanks", to_recipients=["a@x.test"], cc_recipients=None)
+    item.reply.assert_called_once_with(subject="Re: Hi", body=build_html_body("thanks"), to_recipients=["a@x.test"],
+                                       cc_recipients=None)
 
 
 def test_reply_all_goes_to_the_recipients_as_written(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", to=["a@x.test", "b@x.test"], cc=["c@x.test"], reply_all=True)
     item.reply.assert_called_once_with(
-        subject="Re: Hi", body="thanks", to_recipients=["a@x.test", "b@x.test"], cc_recipients=["c@x.test"],
+        subject="Re: Hi", body=build_html_body("thanks"), to_recipients=["a@x.test", "b@x.test"], cc_recipients=["c@x.test"],
     )
     item.reply_all.assert_not_called()
 
@@ -43,7 +44,7 @@ def test_reply_all_goes_to_the_recipients_as_written(live):
 def test_with_no_recipients_exchange_picks_them(live):
     client, item = live
     client.reply("inbox", "m1", subject="Re: Hi", body="thanks", reply_all=True)
-    item.reply_all.assert_called_once_with(subject="Re: Hi", body="thanks")
+    item.reply_all.assert_called_once_with(subject="Re: Hi", body=build_html_body("thanks"))
 
 
 def test_reply_recipients():
@@ -72,7 +73,7 @@ def test_send_mail_uses_exchangelib_message(monkeypatch):
         account=account,
         folder=account.sent,
         subject="Hi",
-        body="Hello",
+        body=build_html_body("Hello"),
         to_recipients=["a@x.test", "b@y.test"],
         cc_recipients=None,
     )
@@ -148,7 +149,7 @@ def test_live_drafts_are_saved_to_the_drafts_folder(monkeypatch):
     monkeypatch.setattr(ews_client, "Message", message_cls)
     MailClient(account).save_draft(to=["a@x.test"], subject="Hi", body="Hello")
     message_cls.assert_called_once_with(
-        account=account, folder=account.drafts, subject="Hi", body="Hello", to_recipients=["a@x.test"], cc_recipients=None,
+        account=account, folder=account.drafts, subject="Hi", body=build_html_body("Hello"), to_recipients=["a@x.test"], cc_recipients=None,
     )
     message_cls.return_value.save.assert_called_once_with()  # saved, not sent
 
@@ -157,7 +158,7 @@ def test_live_reply_drafts_stay_replies(live):
     client, item = live
     client.account.drafts = "drafts-folder"
     client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="later", to=["a@x.test"])
-    item.create_reply.assert_called_once_with(subject="Re: Hi", body="later", to_recipients=["a@x.test"], cc_recipients=None)
+    item.create_reply.assert_called_once_with(subject="Re: Hi", body=build_html_body("later"), to_recipients=["a@x.test"], cc_recipients=None)
     item.create_reply.return_value.save.assert_called_once_with("drafts-folder")
     client.save_reply_draft("inbox", "m1", subject="Re: Hi", body="all", reply_all=True)  # no recipients: Exchange's
     item.create_reply_all.return_value.save.assert_called_once_with("drafts-folder")

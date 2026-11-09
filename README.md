@@ -461,6 +461,14 @@ Ctrl+S sends that draft (a copy goes to Sent Items), Ctrl+Q saves your
 changes into it. (Drafts are edited as plain text: formatting from
 Outlook doesn't survive an edit here.)
 
+**Markdown**: what you write is sent as an HTML email, with Markdown
+formatting: `**bold**`, `*italic*`, `~~strike~~`, `- bullets`,
+`1. numbers`, `[text](https://...)`, `> quotes`, `` `code` `` and fenced
+code blocks, and tables. Plain text written without Markdown in mind
+comes out as typed: every line break is kept, bare URLs become links,
+raw HTML is shown as text, and a `--` signature line or indented text
+stay as they are (they don't become a heading or code).
+
 **To / Cc**: one recipient per line, either `Name <address>` or just the
 address (commas and semicolons also separate). Nothing is selected when
 you move into a field, so typing adds to what's there (a reply-all opens
