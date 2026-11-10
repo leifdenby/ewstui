@@ -37,6 +37,7 @@ from .screens import (
     HelpScreen,
     InviteResponseScreen,
     NewEventScreen,
+    NoteResult,
 )
 from .folder_picker import MoveToFolderScreen
 from .path_picker import PathPickerScreen
@@ -1342,7 +1343,7 @@ class EwstuiApp(App):
         existing = self.priority_store.find_by_message_id(event.message_id)
         if existing is not None:  # leave its priority and note alone
             pri = f"priority {existing.priority}" if existing.priority else "no priority"
-            self.notify(f"Already on the priority list ({pri}) — p edits its note, 2 sets the priority")
+            self.notify(f"Already on the priority list ({pri}) — p edits its note and priority")
             return
         folder_id = self._folder_of(event.message_id)
         subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
@@ -1366,39 +1367,50 @@ class EwstuiApp(App):
         folder_id = self._folder_of(event.message_id)
         subject, sender, internet_id = self._priority_fields(folder_id, event.message_id)
         existing = self.priority_store.find_by_message_id(event.message_id)
-        if existing is not None:  # on the list already: edit its note
+        if existing is not None:  # on the list already: edit its note and priority
             _, current = split_note(existing.description, subject)
             current = note_with_dates(current, existing)  # due:/t: too, to see and change
 
-            def _on_edit(note: str | None) -> None:
-                if note is None or note == current:
+            def _on_edit(result: NoteResult | None) -> None:
+                if result is None:
                     return
-                if not self.priority_store.set_note(event.message_id, note, subject):
-                    self.notify("That entry changed in todo.txt meanwhile — try again", severity="warning")
-                    return
-                self.notify("Note removed" if not note else "Note updated")
-                self._priorities_changed()
+                changes = []
+                if result.priority != existing.priority:
+                    if not self.priority_store.set_priority(existing.key, result.priority):
+                        self.notify("That entry changed in todo.txt meanwhile — try again", severity="warning")
+                        return
+                    changes.append(f"priority {result.priority}" if result.priority else "no priority")
+                if result.note != current:
+                    if not self.priority_store.set_note(event.message_id, result.note, subject):
+                        self.notify("That entry changed in todo.txt meanwhile — try again", severity="warning")
+                        return
+                    changes.append("note removed" if not result.note else "note updated")
+                if changes:
+                    self.notify(", ".join(changes).capitalize())
+                    self._priorities_changed()
 
             self.push_screen(AddNoteScreen(label=f"Edit note for: {subject}  (Ctrl+S / Enter to save, Esc to cancel)",
-                                           value=current), _on_edit)
+                                           value=current, priority=existing.priority, show_priority=True), _on_edit)
             return
 
-        def _on_result(note: str | None) -> None:
-            if note is None:
+        def _on_result(result: NoteResult | None) -> None:
+            if result is None:
                 return
             self.priority_store.add_email(
                 message_id=event.message_id,
                 folder_id=folder_id,
                 subject=subject,
                 sender=sender,
-                priority=None,
-                note=note,
+                priority=result.priority,
+                note=result.note,
                 internet_id=internet_id,
             )
-            self.notify(f"Added to priority list with note ({self._priority_path()})")
+            pri = f"priority {result.priority}" if result.priority else "no priority"
+            note = "with note" if result.note else "no note"
+            self.notify(f"Added to priority list, {pri}, {note} ({self._priority_path()})")
             self._priorities_changed()
 
-        self.push_screen(AddNoteScreen(label=f"Note for: {subject}"), _on_result)
+        self.push_screen(AddNoteScreen(label=f"Note for: {subject}", show_priority=True), _on_result)
 
     def on_message_table_archive_requested(self, event: MessageTable.ArchiveRequested) -> None:
         if not self.current_folder_id:
