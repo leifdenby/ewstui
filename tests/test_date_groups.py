@@ -154,6 +154,43 @@ async def test_cursor_steps_over_separators(tmp_path) -> None:
         assert table._current_message_id() == "m1"
 
 
+async def test_curly_brackets_jump_between_groups(tmp_path) -> None:
+    """} to the next group's first email, { back to this group's first
+    email, then to the previous group's; a bell at either end."""
+    app = make_app(tmp_path)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#messages", MessageTable)
+        bells = []
+        app.bell = lambda: bells.append(1)
+        visited = []
+        for _ in range(2):
+            await pilot.press("right_curly_bracket")
+            visited.append(table._current_message_id())
+        assert visited == ["m3", "m4"]
+        await pilot.press("right_curly_bracket")  # no group after the last
+        assert table._current_message_id() == "m4" and bells == [1]
+        await pilot.press("left_curly_bracket")  # m4 heads its group: back to Yesterday's
+        assert table._current_message_id() == "m3"
+        await pilot.press("left_curly_bracket")
+        assert table._current_message_id() == "m1"
+        await pilot.press("j", "left_curly_bracket")  # from m2: to the top of Today
+        assert table._current_message_id() == "m1"
+        await pilot.press("left_curly_bracket")  # nothing above Today
+        assert table._current_message_id() == "m1" and bells == [1, 1]
+
+
+async def test_curly_brackets_without_groups_just_ring(tmp_path) -> None:
+    """With --no-date-groups there are no groups to jump between."""
+    app = make_app(tmp_path, "--no-date-groups")
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        bells = []
+        app.bell = lambda: bells.append(1)
+        await pilot.press("right_curly_bracket")
+        assert app.query_one("#messages", MessageTable)._current_message_id() == "m1" and bells == [1]
+
+
 async def test_deleting_the_last_email_of_a_day_goes_to_the_next_email(tmp_path) -> None:
     """After deleting m3 (Yesterday's only email) the cursor is on m4."""
     app = make_app(tmp_path)

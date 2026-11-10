@@ -41,6 +41,8 @@ class MessageTable(DataTable):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("g", "cursor_top", "Top", show=False),
         Binding("G", "cursor_bottom", "Bottom", show=False),
+        Binding("left_curly_bracket", "previous_group", "Previous date group", show=False),
+        Binding("right_curly_bracket", "next_group", "Next date group", show=False),
         Binding("l", "select_cursor", "Open", show=False),
         Binding("o", "select_cursor", "Open", show=False),
         Binding("h", "focus_folders", "Focus folders", show=False),
@@ -549,6 +551,48 @@ class MessageTable(DataTable):
             self.move_cursor(row=self.row_count - 1)
         if not self.search:
             self.post_message(self.MoreRequested(to_end=True))
+
+    def list_group_start_rows(self) -> list[int]:
+        """The row of the first email under each separator, top to bottom.
+
+        Returns
+        -------
+        list of int
+            Row indices; empty when there are no separators (date groups
+            off, or search results).
+        """
+        return [
+            row + 1
+            for row, mid in enumerate(self._row_ids)
+            if mid is None and row + 1 < len(self._row_ids) and self._row_ids[row + 1] is not None
+        ]
+
+    def action_next_group(self) -> None:
+        """}: to the first email of the next date group (bell on the last one).
+
+        Returns
+        -------
+        None
+        """
+        later = [row for row in self.list_group_start_rows() if row > self.cursor_row]
+        if later:
+            self.move_cursor(row=later[0])
+        else:
+            self.app.bell()
+
+    def action_previous_group(self) -> None:
+        """{: to the first email of this date group, or of the one before if
+        already there (bell at the top).
+
+        Returns
+        -------
+        None
+        """
+        earlier = [row for row in self.list_group_start_rows() if row < self.cursor_row]
+        if earlier:
+            self.move_cursor(row=earlier[-1])
+        else:
+            self.app.bell()
 
     def action_cursor_down(self) -> None:
         if self.row_count and self.cursor_row == self.row_count - 1 and not self.search:
