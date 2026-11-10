@@ -21,7 +21,7 @@ def quick_search(monkeypatch):
 
 
 def make_app(tmp_path, mail=None, page_size=50) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt"), "--page-size", str(page_size)])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "todo.txt"), "--page-size", str(page_size)])
     return EwstuiApp(mail or DemoMailClient(), DemoCalendarClient(), cfg)
 
 

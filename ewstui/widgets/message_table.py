@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from rich.text import Text
 from textual.binding import Binding
+from textual.coordinate import Coordinate
 from textual.geometry import Region
 from textual.message import Message
 from textual.widgets import DataTable
 from textual.widgets.data_table import RowDoesNotExist
 
+from ..date_groups import build_date_group_label
 from ..ews_client import MessageSummary
 from ..search import rank
 from ..threads import build_threads, topic, tree_rows
@@ -153,9 +155,14 @@ class MessageTable(DataTable):
             self.count = count  # selected messages; 0 = not in visual mode
             super().__init__()
 
-    def __init__(self, *args, threaded: bool = False, **kwargs) -> None:
+    def __init__(self, *args, threaded: bool = False, date_groups: bool = True, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.threaded = threaded
+        # Separator rows ("Today", "Yesterday", ...) between the emails; the
+        # cursor never stops on them. Not in search results (ranked, not by date).
+        self.date_groups = date_groups
+        # What each row is, top to bottom: a message id, or None for a separator.
+        self._row_ids: list[str | None] = []
         self._messages, self._by_id = [], {}
         self._priorities: dict[str, str | None] = {}  # message id -> priority letter (see _pri_cell)
         # Visual selection (V): the row where it started; the selection is
@@ -270,6 +277,7 @@ class MessageTable(DataTable):
                 pass  # gone (deleted/moved elsewhere); cursor stays at the top
 
     def _fill(self) -> None:
+        self._row_ids = []
         self.clear()
         self._row_cells, self._painted = {}, set()
         if self._anchor is not None:  # the rows changed under the selection: drop it
@@ -279,18 +287,53 @@ class MessageTable(DataTable):
             for m in self.shown_messages():
                 self._add_message_row(m, m.subject)
             return
+        today = date.today()
+        group: str | None = None  # the label of the last separator added
         if not self.threaded:
             for m in self._messages:
+                group = self._add_separator_if_new_group(m, group, today)
                 self._add_message_row(m, m.subject)
             return
         for thread in build_threads(self._messages):
             # Upside-down tree: newest message on top, the original at the bottom.
             for i, (m, prefix) in enumerate(tree_rows(thread, newest_on_top=True)):
+                if i == 0:  # a thread goes under the day of its newest message
+                    group = self._add_separator_if_new_group(m, group, today)
                 # The top row (newest) and the original show the subject; a
                 # reply in between with the thread's own topic shows only its
                 # tree guide (mutt-style); a changed subject is shown in full.
                 show = i == 0 or not prefix or topic(m.subject) != thread.topic
                 self._add_message_row(m, prefix + (m.subject if show else ""))
+
+    def _add_separator_if_new_group(self, m: MessageSummary, group: str | None, today: date) -> str | None:
+        """Add a separator row ("Today", "Yesterday", ...) above `m` if it
+        falls in a different date group than the rows before it.
+
+        Parameters
+        ----------
+        m : MessageSummary
+            The message about to be added (the newest of its thread in
+            thread view).
+        group : str or None
+            The label of the separator above the rows so far (None at the top).
+        today : date
+            The local date the groups count from.
+
+        Returns
+        -------
+        str or None
+            The label of the group `m` is in (`group` unchanged when date
+            groups are off).
+        """
+        if not self.date_groups:
+            return group
+        label = build_date_group_label(m.received, today)
+        if label == group:
+            return group
+        style = f"bold {self.app.theme_variables.get('accent', '')}".strip()
+        self._row_ids.append(None)  # before add_row: it re-validates the cursor
+        self.add_row("", "", Text(label, style=style), "", "", key=f"day:{len(self._row_ids)}")
+        return label
 
     def _add_message_row(self, m: MessageSummary, subject: str) -> None:
         flag = "" if m.is_read else "●"
@@ -304,7 +347,90 @@ class MessageTable(DataTable):
             subject = Text.assemble(guide, (tag, "dim"), subject[len(guide):], end="", no_wrap=True)
         cells = (flag, self._pri_cell(m.id), _fmt_when(m.received), m.sender, subject)
         self._row_cells[m.id] = cells
+        self._row_ids.append(m.id)
         self.add_row(*cells, key=m.id)
+
+    # -- separators: the cursor steps over them ----------------------------------
+
+    def _is_separator(self, row: int) -> bool:
+        """True if `row` is a date separator rather than an email.
+
+        Parameters
+        ----------
+        row : int
+            A row index.
+
+        Returns
+        -------
+        bool
+            Whether that row is a separator (False for an index out of range).
+        """
+        return 0 <= row < len(self._row_ids) and self._row_ids[row] is None
+
+    def find_message_row(self, row: int, step: int) -> int:
+        """`row`, or if it's a separator the nearest email row going in
+        direction `step`, or the other way if there's none that way.
+
+        Parameters
+        ----------
+        row : int
+            The row the cursor is heading for.
+        step : int
+            +1 to look down first, -1 to look up first.
+
+        Returns
+        -------
+        int
+            An email's row (or `row` itself if there are no emails).
+        """
+        for direction in (step, -step):
+            r = row
+            while 0 <= r < len(self._row_ids):
+                if self._row_ids[r] is not None:
+                    return r
+                r += direction
+        return row
+
+    def validate_cursor_coordinate(self, value: Coordinate) -> Coordinate:
+        """Keep the cursor off separators, whatever moved it (j/k, g/G, page
+        keys, a click, move_cursor): step on in the direction it was going.
+
+        Parameters
+        ----------
+        value : Coordinate
+            Where the cursor is being moved to.
+
+        Returns
+        -------
+        Coordinate
+            That place, clamped to the table and moved off any separator.
+        """
+        value = super().validate_cursor_coordinate(value)
+        if not self._is_separator(value.row):
+            return value
+        step = -1 if value.row < self.cursor_coordinate.row else 1
+        return Coordinate(self.find_message_row(value.row, step), value.column)
+
+    def list_message_ids_after(self, message_id: str, count: int) -> list[str]:
+        """The ids of the next `count` emails below `message_id` (separators
+        skipped), e.g. to fetch them ahead of time.
+
+        Parameters
+        ----------
+        message_id : str
+            The email to start below.
+        count : int
+            How many to return at most.
+
+        Returns
+        -------
+        list of str
+            Message ids, top to bottom; empty if `message_id` isn't listed.
+        """
+        if message_id not in self._row_ids:
+            return []
+        start = self._row_ids.index(message_id) + 1
+        return [mid for mid in self._row_ids[start:] if mid is not None][:count]
 
     # -- visual selection (V) ---------------------------------------------------
 
@@ -318,7 +444,11 @@ class MessageTable(DataTable):
         if self._anchor is None or not self.row_count:
             return []
         lo, hi = sorted((self._anchor, self.cursor_row))
-        return [self.coordinate_to_cell_key((row, 0)).row_key.value for row in range(lo, min(hi, self.row_count - 1) + 1)]
+        return [
+            self.coordinate_to_cell_key((row, 0)).row_key.value
+            for row in range(lo, min(hi, self.row_count - 1) + 1)
+            if not self._is_separator(row)
+        ]
 
     def action_toggle_visual(self) -> None:
         if self._anchor is None and self.row_count:
@@ -397,7 +527,7 @@ class MessageTable(DataTable):
         self.call_after_refresh(restore)
 
     def _current_message_id(self) -> str | None:
-        if self.row_count == 0:
+        if self.row_count == 0 or self._is_separator(self.cursor_row):
             return None
         try:
             cell_key = self.coordinate_to_cell_key(self.cursor_coordinate)
@@ -502,7 +632,7 @@ class MessageTable(DataTable):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         # Used by the app to drive the preview pane as you move j/k
         # through the list (mutt/aerc-style live preview).
-        if event.row_key is not None and event.row_key.value:
+        if event.row_key is not None and event.row_key.value and not event.row_key.value.startswith("day:"):
             self.post_message(self.MessageOpened(event.row_key.value))
         if self._anchor is not None:  # j/k grow or shrink the selection
             self._paint()

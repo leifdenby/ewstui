@@ -136,6 +136,8 @@ ntlm_no_cbt = true
 - `layout = "stacked"` (or `--layout stacked`) puts the message list
   above the email, both to the right of the folders; the default
   `"columns"` has all three side by side.
+- `date_groups = false` (or `--no-date-groups`) drops the Today /
+  Yesterday / This week / ... separators from the message list.
 - `theme = "nord"` (or `--theme nord`) picks the colour theme. The
   look — palette, header, status bar and help overlay — follows the
   [tuxedo](https://github.com/webstonehq/tuxedo) todo.txt TUI; its
@@ -642,6 +644,13 @@ Every row is still one message, so opening and `r`/`d`/`m`/... work on
 exactly the row you're on. Like Outlook, threads include your own
 replies from Sent Items, marked `(sent)` — ewstui fetches one page of
 recent Sent Items and matches them to the folder's conversations.
+
+**Date separators**: the message list is split into **Today**,
+**Yesterday**, **This week**, **Last week**, **This month**, then one
+group per month (with the year for earlier years). In thread view a
+thread goes under the day of its newest message; search results have
+none. The cursor steps over them. Turn them off with
+`date_groups = false` in your account (or `--no-date-groups`).
 
 **Moving mail** (`m`): opens a folder picker for the message under the
 cursor. Folders you've moved mail to this session are listed first,

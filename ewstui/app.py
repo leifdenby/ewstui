@@ -364,7 +364,7 @@ class EwstuiApp(App):
             with Vertical(id="folder-pane"):  # (the all-folder search bar goes on top)
                 yield FolderList(id="folders")
             with Container(id="reading", classes=self.config.layout):
-                yield MessageTable(id="messages", threaded=self.config.threads)
+                yield MessageTable(id="messages", threaded=self.config.threads, date_groups=self.config.date_groups)
                 yield PreviewPane(id="preview")
         yield CalendarView(id="calendar", classes="hidden")
         yield PriorityView(id="priority", classes="hidden")
@@ -959,13 +959,8 @@ class EwstuiApp(App):
         current = self.current_message_id
         if current is None:
             return
-        try:
-            row = table.get_row_index(current)
-        except RowDoesNotExist:
-            return
         todo = []
-        for r in range(row + 1, min(row + 1 + PREFETCH_COUNT, table.row_count)):  # the next few rows
-            message_id = table.coordinate_to_cell_key((r, 0)).row_key.value
+        for message_id in table.list_message_ids_after(current, PREFETCH_COUNT):  # the next few emails
             if self._previewed(message_id) is None:
                 todo.append((self._folder_of(message_id), message_id))
         if todo:

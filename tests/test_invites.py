@@ -283,7 +283,7 @@ def test_remove_cancelled_meeting_trashes_the_calendar_entry():
 # -- in the app (demo) -------------------------------------------------------
 
 def make_app(tmp_path) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt")])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "todo.txt")])
     calendar = DemoCalendarClient()
     return EwstuiApp(DemoMailClient(calendar=calendar, with_invites=True), calendar, cfg)
 

@@ -47,6 +47,7 @@ STORED_KEYS = (
     "refresh_interval",
     "layout",
     "threads",
+    "date_groups",
     "theme",
     "priority_file",
     "attachment_dir",
