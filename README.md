@@ -649,7 +649,9 @@ recent Sent Items and matches them to the folder's conversations.
 **Yesterday**, **This week**, **Last week**, **This month**, then one
 group per month (with the year for earlier years). In thread view a
 thread goes under the day of its newest message; search results have
-none. The cursor steps over them. Turn them off with
+none. The cursor steps over them; `}` jumps to the first email of the
+next group, `{` back to the start of this one (or the previous one).
+Turn them off with
 `date_groups = false` in your account (or `--no-date-groups`).
 
 **Moving mail** (`m`): opens a folder picker for the message under the
