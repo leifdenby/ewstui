@@ -6,7 +6,7 @@ from ewstui.app import EwstuiApp
 from ewstui.config import config_from_args
 from ewstui.demo_backend import DemoCalendarClient, DemoMailClient
 from ewstui.priority_store import PriorityStore, note_with_dates, split_date_fields, split_note
-from ewstui.screens import AddNoteScreen
+from ewstui.screens import AddNoteScreen, build_priority_levels, step_priority
 
 
 def test_split_note():
@@ -190,3 +190,89 @@ async def test_capital_p_on_a_prioritised_email_changes_nothing(tmp_path):
         await settle(app, pilot)
     assert PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1").priority == "B"
     assert any("Already on the priority list (priority B)" in m for m in seen)
+
+
+# -- the priority row in the note dialog ----------------------------------------
+
+
+def test_step_priority_cycles_none_a_b_c():
+    levels = build_priority_levels(None)
+    seen, current = [], None
+    for _ in range(4):
+        current = step_priority(levels, current, 1)
+        seen.append(current)
+    assert seen == ["A", "B", "C", None]
+    assert step_priority(levels, None, -1) == "C" and step_priority(levels, "A", -1) is None
+
+
+def test_other_letters_stay_in_the_cycle():
+    levels = build_priority_levels("E")
+    assert levels == [None, "A", "B", "C", "E"]
+    assert step_priority(levels, "C", 1) == "E" and step_priority(levels, "E", 1) is None
+
+
+def priority_row(app) -> str:
+    return str(app.screen.query_one("#note-priority").render())
+
+
+async def test_ctrl_up_sets_the_priority_when_adding(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        assert app.screen.priority is None and " - " in priority_row(app)
+        await pilot.press(*"call finance", "ctrl+up", "ctrl+up")  # while typing
+        await pilot.pause()
+        assert app.screen.priority == "B"
+        assert app.screen.query_one("#note-text").value == "call finance"
+        await pilot.press("enter")
+        await settle(app, pilot)
+    entry = PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1")
+    assert entry.priority == "B" and entry.description == "Q3 budget review — call finance"
+
+
+async def test_editing_changes_the_priority_and_keeps_the_note(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("p", *"call finance", "ctrl+up", "enter")  # added with A
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        assert app.screen.priority == "A"
+        await pilot.press("ctrl+down")  # back to none
+        await pilot.pause()
+        assert app.screen.priority is None
+        await pilot.press("enter")
+        await settle(app, pilot)
+    entry = PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1")
+    assert entry.priority is None and entry.description == "Q3 budget review — call finance"
+
+
+async def test_clicking_a_level_picks_it_and_escape_changes_nothing(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        app.screen.action_pick_priority("C")  # what a click on " C " runs
+        await pilot.pause()
+        assert app.screen.priority == "C"
+        await pilot.press("escape")
+        await settle(app, pilot)
+    assert PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1") is None
+
+
+async def test_ctrl_up_does_nothing_while_picking_a_date(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press(*"due:")
+        await pilot.pause()
+        assert app.screen.picking_date
+        await pilot.press("ctrl+up")
+        await pilot.pause()
+        assert app.screen.priority is None

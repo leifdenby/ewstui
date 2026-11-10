@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import NamedTuple
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static, TextArea
@@ -758,9 +760,63 @@ class PickPriorityScreen(ModalScreen[str | None]):
         self.dismiss(letter)
 
 
-class AddNoteScreen(ModalScreen[str | None]):
-    """A short text prompt. Dismisses with the entered text (empty string
-    if left blank but saved), or None if cancelled.
+PRIORITY_LEVELS: list[str | None] = [None, "A", "B", "C"]  # what Ctrl+↑/↓ cycles through
+
+
+class NoteResult(NamedTuple):
+    """What the note dialog was saved with."""
+
+    note: str
+    priority: str | None
+
+
+def build_priority_levels(current: str | None) -> list[str | None]:
+    """Return the priorities the note dialog cycles through.
+
+    Parameters
+    ----------
+    current : str | None
+        The entry's priority now; a letter beyond A-C (set in the priority
+        view) is kept in the cycle, after C, so it isn't lost by opening
+        the dialog.
+
+    Returns
+    -------
+    list[str | None]
+        None (no priority), A, B, C, and `current` if it's another letter.
+    """
+    return PRIORITY_LEVELS + ([current] if current and current not in PRIORITY_LEVELS else [])
+
+
+def step_priority(levels: list[str | None], current: str | None, step: int) -> str | None:
+    """Return the priority `step` places on from `current`, wrapping round.
+
+    Parameters
+    ----------
+    levels : list[str | None]
+        The cycle (see build_priority_levels).
+    current : str | None
+        The priority now.
+    step : int
+        +1 for the next one (none → A → B → C → none), -1 for the previous.
+
+    Returns
+    -------
+    str | None
+        The new priority.
+    """
+    at = levels.index(current) if current in levels else 0
+    return levels[(at + step) % len(levels)]
+
+
+class AddNoteScreen(ModalScreen[NoteResult | None]):
+    """A short text prompt, for an email's note on the priority list.
+    Dismisses with a NoteResult (the note, empty if left blank but saved,
+    and the priority), or None if cancelled.
+
+    With `show_priority`, a row above the note shows the priority:
+    Ctrl+↑ / Ctrl+↓ (or a click) go through none, A, B and C while you
+    type.
 
     Typing `due:` or `t:` (todo.txt's due and threshold dates) opens a
     month calendar, tuxedo-style: h/l j/k [ ] t pick the day, Enter puts it
@@ -773,11 +829,17 @@ class AddNoteScreen(ModalScreen[str | None]):
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
         Binding("enter", "pick_date", "Put the date in", show=False),  # (in the note field, Enter saves)
+        Binding("ctrl+up", "step_priority(1)", "Next priority", show=False, priority=True),
+        Binding("ctrl+down", "step_priority(-1)", "Previous priority", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
     AddNoteScreen {
         align: center middle;
+    }
+    #note-priority {
+        height: 1;
+        margin-bottom: 1;
     }
     #note-box {
         width: 60%;
@@ -799,10 +861,14 @@ class AddNoteScreen(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, label: str = "Note (Ctrl+S to save, Esc to cancel)", value: str = "") -> None:
+    def __init__(self, label: str = "Note (Ctrl+S to save, Esc to cancel)", value: str = "",
+                 priority: str | None = None, show_priority: bool = False) -> None:
         super().__init__()
         self._label = label
         self._value = value  # an existing note, to edit
+        self.priority = priority
+        self.show_priority = show_priority
+        self._levels = build_priority_levels(priority)
 
     def compose(self) -> ComposeResult:
         from .widgets.date_picker import DatePicker
@@ -810,6 +876,8 @@ class AddNoteScreen(ModalScreen[str | None]):
 
         with Vertical(id="note-box"):
             yield Label(self._label, markup=False)
+            if self.show_priority:
+                yield Static(self._render_priority_row(), id="note-priority")
             # (no select-on-focus: coming back from a picker, typing goes on after what it put in)
             yield Input(value=self._value, placeholder="Note (due: or t: picks a date, dur: how long)", id="note-text",
                         select_on_focus=False)
@@ -893,8 +961,28 @@ class AddNoteScreen(ModalScreen[str | None]):
             return
         self.dismiss(None)
 
+    def _render_priority_row(self) -> Content:
+        """The priority row: each level clickable, the current one highlighted."""
+        row = Content("Priority  ")
+        for level in self._levels:
+            text = f" {level or '-'} "
+            style = "reverse bold" if level == self.priority else "dim"
+            row += Content.from_markup(f"[{style} @click=screen.pick_priority('{level or ''}')]$t[/] ", t=text)
+        return row + Content.from_markup("[dim] Ctrl+↑/↓[/]")
+
+    def action_step_priority(self, step: int) -> None:
+        """Ctrl+↑ / Ctrl+↓: the next / previous priority (not while picking a date)."""
+        if not self.show_priority or self.picking_date or self.picking_duration:
+            return
+        self.action_pick_priority(step_priority(self._levels, self.priority, step) or "")
+
+    def action_pick_priority(self, letter: str) -> None:
+        """Set the priority ("" for none) and show it."""
+        self.priority = letter or None
+        self.query_one("#note-priority", Static).update(self._render_priority_row())
+
     def action_save(self) -> None:
-        self.dismiss(self.query_one("#note-text", Input).value.strip())
+        self.dismiss(NoteResult(self.query_one("#note-text", Input).value.strip(), self.priority))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.action_save()
