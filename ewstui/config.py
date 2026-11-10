@@ -63,6 +63,7 @@ class Config:
     refresh_interval: float = DEFAULT_REFRESH_MINUTES  # minutes between background mail checks; 0 = off
     layout: str = DEFAULT_LAYOUT          # "columns" or "stacked" (see LAYOUTS)
     threads: bool = False                 # start the message list in thread view (t toggles)
+    date_groups: bool = True              # "Today", "Yesterday", ... separators in the message list
     theme: str = DEFAULT_THEME            # "muted-slate" (tuxedo's default) or "nord"
     demo: bool = False                   # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
@@ -161,6 +162,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Start the message list grouped into conversation threads (t toggles while running). "
         "Save it with --account, or set threads = true in the config file",
+    )
+    ui.add_argument(
+        "--date-groups",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Separate the message list into Today, Yesterday, This week, Last week, This month and "
+        "earlier months (default on). Save it with --account, or set date_groups = false in the config file",
     )
     ui.add_argument(
         "--layout",
@@ -267,6 +275,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         refresh_interval=ns.refresh_interval,
         layout=ns.layout,
         threads=bool(ns.threads),
+        date_groups=bool(ns.date_groups),
         theme=theme,
         demo=ns.demo,
         debug=ns.debug,

@@ -116,7 +116,7 @@ def test_priorities_by_message_covers_open_email_entries_only(todo):
 
 
 def make_app(tmp_path, todo) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(todo)])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(todo)])
     return EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
 
 

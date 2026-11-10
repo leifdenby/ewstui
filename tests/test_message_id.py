@@ -19,7 +19,7 @@ from ewstui.widgets.message_table import MessageTable
 def make_app(tmp_path, lines: str = "") -> tuple[EwstuiApp, object]:
     todo = tmp_path / "todo.txt"
     todo.write_text(lines)
-    cfg = config_from_args(["--demo", "--priority-file", str(todo)])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(todo)])
     return EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg), todo
 
 

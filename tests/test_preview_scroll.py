@@ -15,7 +15,7 @@ LONG_BODY = "\n".join(f"line {i}" for i in range(300))
 def app(tmp_path) -> EwstuiApp:
     mail = DemoMailClient()
     mail.get_message("inbox", "m1").body_text = LONG_BODY
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "priorities.todo.txt")])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "priorities.todo.txt")])
     return EwstuiApp(mail, DemoCalendarClient(), cfg)
 
 

@@ -33,7 +33,7 @@ class LiveShapedMailClient(DemoMailClient):
 
 
 def make_app(tmp_path, mail) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "priorities.todo.txt")])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "priorities.todo.txt")])
     return EwstuiApp(mail, DemoCalendarClient(), cfg)
 
 

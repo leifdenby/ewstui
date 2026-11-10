@@ -159,7 +159,7 @@ def test_live_list_messages_reads_conversation_fields():
 
 
 def make_app(tmp_path, *extra) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "p.todo.txt"), *extra])
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "p.todo.txt"), *extra])
     return EwstuiApp(DemoMailClient(), DemoCalendarClient(), cfg)
 
 
