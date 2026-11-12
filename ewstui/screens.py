@@ -760,7 +760,7 @@ class PickPriorityScreen(ModalScreen[str | None]):
         self.dismiss(letter)
 
 
-PRIORITY_LEVELS: list[str | None] = [None, "A", "B", "C"]  # what Ctrl+↑/↓ cycles through
+PRIORITY_LEVELS: list[str | None] = [None, "A", "B", "C"]  # what ↑/↓ cycles through
 
 
 class NoteResult(NamedTuple):
@@ -815,7 +815,7 @@ class AddNoteScreen(ModalScreen[NoteResult | None]):
     and the priority), or None if cancelled.
 
     With `show_priority`, a row above the note shows the priority:
-    Ctrl+↑ / Ctrl+↓ (or a click) go through none, A, B and C while you
+    ↑ / ↓ (or a click) go through none, A, B and C while you
     type.
 
     Typing `due:` or `t:` (todo.txt's due and threshold dates) opens a
@@ -829,8 +829,11 @@ class AddNoteScreen(ModalScreen[NoteResult | None]):
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
         Binding("enter", "pick_date", "Put the date in", show=False),  # (in the note field, Enter saves)
-        Binding("ctrl+up", "step_priority(1)", "Next priority", show=False, priority=True),
-        Binding("ctrl+down", "step_priority(-1)", "Previous priority", show=False, priority=True),
+        # Plain arrows (the note is one line, so they're free there); not
+        # Ctrl+arrows, which macOS takes for switching Spaces. Not priority
+        # bindings, so an open date/duration picker keeps its own arrows.
+        Binding("up", "step_priority(1)", "Next priority", show=False),
+        Binding("down", "step_priority(-1)", "Previous priority", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -968,10 +971,10 @@ class AddNoteScreen(ModalScreen[NoteResult | None]):
             text = f" {level or '-'} "
             style = "reverse bold" if level == self.priority else "dim"
             row += Content.from_markup(f"[{style} @click=screen.pick_priority('{level or ''}')]$t[/] ", t=text)
-        return row + Content.from_markup("[dim] Ctrl+↑/↓[/]")
+        return row + Content.from_markup("[dim] ↑/↓[/]")
 
     def action_step_priority(self, step: int) -> None:
-        """Ctrl+↑ / Ctrl+↓: the next / previous priority (not while picking a date)."""
+        """↑ / ↓: the next / previous priority (not while picking a date)."""
         if not self.show_priority or self.picking_date or self.picking_duration:
             return
         self.action_pick_priority(step_priority(self._levels, self.priority, step) or "")

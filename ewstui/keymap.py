@@ -36,7 +36,7 @@ MAIL_KEYS = [
     ("i", "answer an invite / remove a cancelled meeting"),
     ("c", "calendar event from the email (save-the-dates)"),
     ("/", "search this folder (fuzzy, as you type)"),
-    ("p / P", "add to priority list (+ note, Ctrl+↑/↓ priority / none); p on a listed one edits both"),
+    ("p / P", "add to priority list (+ note, ↑/↓ priority / none); p on a listed one edits both"),
     ("F", "only emails without a priority on / off"),
     ("V", "select several (j/k), then d/A/m/Space/P"),
     ("Esc", "cancel the selection"),
