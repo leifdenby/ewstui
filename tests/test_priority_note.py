@@ -215,14 +215,14 @@ def priority_row(app) -> str:
     return str(app.screen.query_one("#note-priority").render())
 
 
-async def test_ctrl_up_sets_the_priority_when_adding(tmp_path):
+async def test_up_sets_the_priority_when_adding(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:
         await settle(app, pilot)
         await pilot.press("p")
         await settle(app, pilot)
         assert app.screen.priority is None and " - " in priority_row(app)
-        await pilot.press(*"call finance", "ctrl+up", "ctrl+up")  # while typing
+        await pilot.press(*"call finance", "up", "up")  # while typing
         await pilot.pause()
         assert app.screen.priority == "B"
         assert app.screen.query_one("#note-text").value == "call finance"
@@ -236,12 +236,12 @@ async def test_editing_changes_the_priority_and_keeps_the_note(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:
         await settle(app, pilot)
-        await pilot.press("p", *"call finance", "ctrl+up", "enter")  # added with A
+        await pilot.press("p", *"call finance", "up", "enter")  # added with A
         await settle(app, pilot)
         await pilot.press("p")
         await settle(app, pilot)
         assert app.screen.priority == "A"
-        await pilot.press("ctrl+down")  # back to none
+        await pilot.press("down")  # back to none
         await pilot.pause()
         assert app.screen.priority is None
         await pilot.press("enter")
@@ -264,7 +264,9 @@ async def test_clicking_a_level_picks_it_and_escape_changes_nothing(tmp_path):
     assert PriorityStore(tmp_path / "todo.txt").find_by_message_id("m1") is None
 
 
-async def test_ctrl_up_does_nothing_while_picking_a_date(tmp_path):
+async def test_up_does_nothing_while_picking_a_date(tmp_path):
+    from ewstui.widgets.date_picker import DatePicker
+
     app = make_app(tmp_path)
     async with app.run_test(size=(140, 40)) as pilot:
         await settle(app, pilot)
@@ -273,6 +275,9 @@ async def test_ctrl_up_does_nothing_while_picking_a_date(tmp_path):
         await pilot.press(*"due:")
         await pilot.pause()
         assert app.screen.picking_date
-        await pilot.press("ctrl+up")
+        picker = app.screen.query_one(DatePicker)
+        before = picker.value
+        await pilot.press("up")
         await pilot.pause()
         assert app.screen.priority is None
+        assert picker.value != before  # the picker's own ↑ (a week earlier) still works

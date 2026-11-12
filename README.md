@@ -511,8 +511,8 @@ formatting; answer inline or trim it and the reply goes out as written),
 write), `w` compose new, `d` delete,
 `Space` toggle read/unread, `P` add to priority list (no priority,
 no prompt), `p` add to priority list with a note and a priority:
-Ctrl+↑ / Ctrl+↓ in the note dialog go through none, A, B and C while you
-type (or click one); on an email that's already listed, `p` edits that
+↑ / ↓ in the note dialog go through none, A, B and C while you
+type (or click one; not Ctrl+arrows, which macOS uses to switch Spaces); on an email that's already listed, `p` edits that
 entry's note and priority instead, `A` archive, `m`
 move to folder, `t` thread view, `v` view/save/open attachments, `u`
 undo. `r` `R` `f` `d` `A` `m` `P` `p` `v` also work while you're reading the
