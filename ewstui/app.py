@@ -484,6 +484,23 @@ class EwstuiApp(App):
         self._update_status()
         self.notify("Thread view on (t to switch off)" if event.threaded else "Thread view off (t to switch on)")
 
+    def on_message_table_unprioritized_toggled(self, event: MessageTable.UnprioritizedToggled) -> None:
+        """F: say what the list now shows and update the header.
+
+        Parameters
+        ----------
+        event : MessageTable.UnprioritizedToggled
+            Whether only emails without a priority are shown now.
+
+        Returns
+        -------
+        None
+        """
+        self._update_status()
+        self.notify(
+            "Showing only emails without a priority (F to show all)" if event.only else "Showing all emails (F for only those without a priority)"
+        )
+
     # -- refresh (Ctrl+l, and every --refresh-interval minutes) ------------
 
     def action_refresh(self) -> None:
@@ -1702,6 +1719,7 @@ class EwstuiApp(App):
     def _priorities_changed(self) -> None:
         self.load_priority_list()
         self.query_one("#messages", MessageTable).set_priorities(self.priority_store.priorities_by_message())
+        self._update_status()  # the F filter's count in the header
 
     def on_priority_view_priority_changed(self, event: PriorityView.PriorityChanged) -> None:
         if not self.priority_store.set_priority_many(event.entry_keys, event.priority):
@@ -2044,6 +2062,8 @@ class EwstuiApp(App):
                 items.append((f"{unread} unread", "accent"))
             if table.threaded:
                 items.append(("threads", "dim"))
+            if table.unprioritized_only:
+                items.append((f"{len(table.shown_messages())} without a priority", "accent"))
             if self._search_scope == "folder":
                 found = len(table.shown_messages()) if table.search else 0
                 items = [(f"Search {folder}", "normal"), (f"“{table.search}”" if table.search else "type to search", "accent"),

@@ -56,6 +56,7 @@ class MessageTable(DataTable):
         Binding("A", "archive", "Archive"),
         Binding("m", "move", "Move"),
         Binding("t", "toggle_threads", "Threads"),
+        Binding("F", "toggle_unprioritized", "Only emails without a priority", show=False),
         Binding("v", "view_attachments", "Attachments"),
         Binding("V", "toggle_visual", "Select", show=False),
         Binding("escape", "cancel_visual", "Cancel selection", show=False),
@@ -117,6 +118,13 @@ class MessageTable(DataTable):
             self.message_id = message_id
             super().__init__()
 
+    class UnprioritizedToggled(Message):
+        """F: the list now shows only emails without a priority (or all again)."""
+
+        def __init__(self, only: bool) -> None:
+            self.only = only
+            super().__init__()
+
     class MoveRequested(Message):
         def __init__(self, message_id: str) -> None:
             self.message_id = message_id
@@ -167,6 +175,9 @@ class MessageTable(DataTable):
         self._row_ids: list[str | None] = []
         self._messages, self._by_id = [], {}
         self._priorities: dict[str, str | None] = {}  # message id -> priority letter (see _pri_cell)
+        # F: hide emails that have a priority letter (A-Z); those not on the
+        # list and those on it without a priority yet ("-") stay.
+        self.unprioritized_only = False
         # Visual selection (V): the row where it started; the selection is
         # every row between it and the cursor.
         self._anchor: int | None = None
@@ -196,8 +207,25 @@ class MessageTable(DataTable):
         return self._priorities[message_id] or "-"
 
     def set_priorities(self, priorities: dict[str, str | None]) -> None:
-        """Update just the P column (cursor and everything else untouched)."""
+        """Update the P column (cursor and everything else untouched).
+
+        With the F filter on, an email that just got a priority leaves the
+        list; the cursor goes on to the next email still shown.
+
+        Parameters
+        ----------
+        priorities : dict of str to str or None
+            Message id -> priority letter, None for one on the list
+            without a priority yet.
+
+        Returns
+        -------
+        None
+        """
         self._priorities = dict(priorities)
+        if self.unprioritized_only and any(self._is_prioritized(mid) for mid in self._row_ids if mid):
+            self._refill_keeping_place()
+            return
         for m in self._messages:
             if m.id in self._row_cells:
                 cells = list(self._row_cells[m.id])
@@ -207,6 +235,69 @@ class MessageTable(DataTable):
                 self.update_cell(m.id, "pri", self._pri_cell(m.id))
             except (RowDoesNotExist, KeyError):
                 pass
+
+    def _is_prioritized(self, message_id: str) -> bool:
+        """True if the email has a priority letter (not just "-" or blank).
+
+        Parameters
+        ----------
+        message_id : str
+            A message id.
+
+        Returns
+        -------
+        bool
+            Whether the F filter hides it.
+        """
+        return bool(self._priorities.get(message_id))
+
+    def _filter_unprioritized(self, messages: list[MessageSummary]) -> list[MessageSummary]:
+        """`messages` without the prioritized ones while the F filter is on.
+
+        Parameters
+        ----------
+        messages : list of MessageSummary
+            Messages in display order.
+
+        Returns
+        -------
+        list of MessageSummary
+            The same list (copied) when the filter is off.
+        """
+        if not self.unprioritized_only:
+            return list(messages)
+        return [m for m in messages if not self._is_prioritized(m.id)]
+
+    def _refill_keeping_place(self) -> None:
+        """Re-fill the rows (the filter changed what's shown) keeping the
+        cursor on its email, or if that's gone on the next email below it
+        (above, at the end) that's still shown; the preview follows then.
+
+        Returns
+        -------
+        None
+        """
+        current = self._current_message_id()
+        candidates = [mid for mid in self._row_ids if mid is not None]
+        if current in candidates:  # nearest first: below, then above
+            i = candidates.index(current)
+            candidates = [current, *candidates[i + 1 :], *reversed(candidates[:i])]
+        shown = {m.id for m in self.shown_messages()}
+        target = next((mid for mid in candidates if mid in shown), None)
+        self._render(target)
+        if target is not None and target != current:
+            self.post_message(self.MessageOpened(target))  # the preview follows
+
+    def action_toggle_unprioritized(self) -> None:
+        """F: show only emails without a priority letter, or all again.
+
+        Returns
+        -------
+        None
+        """
+        self.unprioritized_only = not self.unprioritized_only
+        self._refill_keeping_place()
+        self.post_message(self.UnprioritizedToggled(self.unprioritized_only))
 
     # -- rows: flat list, or threads ------------------------------------------
     #
@@ -259,10 +350,11 @@ class MessageTable(DataTable):
         self._render(None)
 
     def shown_messages(self) -> list[MessageSummary]:
-        """The rows, in order: all, or the matches while searching."""
+        """The rows, in order: all, or the matches while searching (without
+        the prioritized ones while the F filter is on)."""
         if not self.search:
-            return list(self._messages)
-        candidates = [*self._messages, *self._extra]
+            return self._filter_unprioritized(self._messages)
+        candidates = self._filter_unprioritized([*self._messages, *self._extra])
         ranked = rank(candidates, self.search)
         shown = {m.id for m in ranked}
         return ranked + [m for m in candidates if m.id in self.server_matches and m.id not in shown]
@@ -291,12 +383,13 @@ class MessageTable(DataTable):
             return
         today = date.today()
         group: str | None = None  # the label of the last separator added
+        messages = self.shown_messages()
         if not self.threaded:
-            for m in self._messages:
+            for m in messages:
                 group = self._add_separator_if_new_group(m, group, today)
                 self._add_message_row(m, m.subject)
             return
-        for thread in build_threads(self._messages):
+        for thread in build_threads(messages):
             # Upside-down tree: newest message on top, the original at the bottom.
             for i, (m, prefix) in enumerate(tree_rows(thread, newest_on_top=True)):
                 if i == 0:  # a thread goes under the day of its newest message
