@@ -8,7 +8,7 @@ from textual.coordinate import Coordinate
 from textual.geometry import Region
 from textual.message import Message
 from textual.widgets import DataTable
-from textual.widgets.data_table import RowDoesNotExist
+from textual.widgets.data_table import CellDoesNotExist, RowDoesNotExist
 
 from ..date_groups import build_date_group_label
 from ..ews_client import MessageSummary
@@ -227,13 +227,16 @@ class MessageTable(DataTable):
             self._refill_keeping_place()
             return
         for m in self._messages:
-            if m.id in self._row_cells:
-                cells = list(self._row_cells[m.id])
-                cells[1] = self._pri_cell(m.id)
-                self._row_cells[m.id] = tuple(cells)
+            # Only emails with a row: a search or the F filter hides the
+            # rest, and Textual raises CellDoesNotExist for a missing row.
+            if m.id not in self._row_cells:
+                continue
+            cells = list(self._row_cells[m.id])
+            cells[1] = self._pri_cell(m.id)
+            self._row_cells[m.id] = tuple(cells)
             try:
-                self.update_cell(m.id, "pri", self._pri_cell(m.id))
-            except (RowDoesNotExist, KeyError):
+                self.update_cell(m.id, "pri", cells[1])
+            except (CellDoesNotExist, RowDoesNotExist, KeyError):
                 pass
 
     def _is_prioritized(self, message_id: str) -> bool:
@@ -572,7 +575,7 @@ class MessageTable(DataTable):
                 shown = Text(str(value), style=f"bold on {colour}") if message_id in wanted else value
                 try:
                     self.update_cell(message_id, column_key, shown)
-                except (RowDoesNotExist, KeyError):
+                except (CellDoesNotExist, RowDoesNotExist, KeyError):
                     pass
         self._painted = wanted
         self.post_message(self.VisualChanged(len(wanted)))
