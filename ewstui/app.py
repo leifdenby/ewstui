@@ -24,7 +24,7 @@ from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
 from .opener import OpenError, open_with_default_app
 from .priority_store import PriorityStore, note_with_dates, split_note
-from .recipients import format_person, format_recipients, parse_recipients
+from .recipients import format_person, format_recipients, parse_recipients, reply_recipients  # noqa: F401 - re-exported
 from .event_panel import EventFromEmailPanel
 from .invites import when_text
 from .widgets.date_picker import DatePicker
@@ -166,27 +166,6 @@ def split_untouched_quote(body: str, quote_suffix: str) -> tuple[str, bool]:
     if stripped.endswith(quote_suffix.rstrip()):
         return stripped[: len(stripped) - len(quote_suffix.rstrip())].rstrip(), True
     return body, False
-
-
-def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[str]]:
-    """(To, Cc) to prefill: the sender; for reply-all also everyone the
-    email went to (its To in To, its Cc in Cc) — without you, and each once."""
-    mine = me.casefold()
-    seen: set[str] = set()
-
-    def keep(addresses: list[str]) -> list[str]:
-        out = []
-        for a in addresses:
-            if a and "@" in a and a.casefold() != mine and a.casefold() not in seen:
-                seen.add(a.casefold())
-                out.append(a)
-        return out
-
-    if not reply_all:
-        return [detail.sender], []
-    to = keep([detail.sender, *detail.to])
-    cc = keep(list(detail.cc))
-    return (to or [detail.sender]), cc
 
 
 def _split_addresses(field: str) -> list[str]:

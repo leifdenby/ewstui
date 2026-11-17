@@ -18,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
         return _search(argv[1:])
     if argv[:1] == ["calendar"]:
         return _calendar(argv[1:])
+    if argv[:1] == ["draft"]:
+        return _draft(argv[1:])
     cfg = config_from_args(argv)
     _setup_logging(cfg)
 
@@ -123,7 +125,7 @@ def _split_positionals(p, argv: list[str]) -> tuple:
 
     ns, rest = p.parse_known_args(argv)
     _, leftover = build_arg_parser().parse_known_args(rest)
-    unknown = [arg for arg in leftover if arg.startswith("-")]
+    unknown = [arg for arg in leftover if arg.startswith("-") and arg != "-"]  # "-" is stdin
     if unknown:
         p.error(f"unrecognized arguments: {' '.join(unknown)}")
     for arg in leftover:
@@ -387,6 +389,94 @@ def _calendar(argv: list[str]) -> int:
     else:
         print("\n".join(cli_calendar.format_event_lines(events)) if events else "No events.")
         print(f"\n{len(events)} events from {ns.start} to {ns.end}", file=sys.stderr)
+    return 0
+
+
+def _draft(argv: list[str]) -> int:
+    """`ewstui draft FILE [--send]`: a new email, reply or forward written
+    elsewhere as Markdown, saved to Drafts or sent (see cli_draft.py). Any
+    other options are the usual connection/account ones.
+
+    Parameters
+    ----------
+    argv : list[str]
+        The arguments after ``draft``.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 if the file, the connection or Exchange failed.
+    """
+    import argparse
+
+    from . import cli_draft
+    from .recipients import parse_recipients
+
+    p = argparse.ArgumentParser(
+        prog="ewstui draft",
+        usage="ewstui draft FILE [--send] [--to ADDR ...] [--subject TEXT] [--in-reply-to ID [--reply-all]] "
+        "[--forward ID] [options]",
+        description="Save an email written in a file (Markdown, sent as HTML) to Drafts, or send it. FILE ('-' "
+        "for stdin) may start with a header block between --- lines: to, cc, subject, in-reply-to (the "
+        "Message-ID of the email answered, as `ewstui search` prints it), reply-all (yes/no), forward (a "
+        "Message-ID), quote (yes/no: Exchange adds the original below a reply). The options below override "
+        "the file's headers. Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
+    )
+    p.add_argument("--send", action="store_true", help="Send it instead of saving it to Drafts")
+    p.add_argument("--to", action="append", default=[], metavar="ADDR", help="Recipient (repeat for more)")
+    p.add_argument("--cc", action="append", default=[], metavar="ADDR", help="Cc recipient (repeat for more)")
+    p.add_argument("--subject", help="Subject (default for a reply / forward: Re: / Fwd: the original's)")
+    p.add_argument("--in-reply-to", metavar="ID", help="Reply to the email with this Message-ID")
+    p.add_argument("--reply-all", action="store_true", help="With --in-reply-to: reply to everyone")
+    p.add_argument("--forward", metavar="ID", help="Forward the email with this Message-ID (with its attachments)")
+    p.add_argument("--no-quote", action="store_true",
+                   help="With --in-reply-to: send only the text, without Exchange adding the original below")
+    ns, positionals, rest = _split_positionals(p, argv)
+    if len(positionals) != 1:
+        p.error("give one FILE (or - for stdin)")
+    source = positionals[0]
+
+    try:
+        text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"error: can't read {source}: {e}", file=sys.stderr)
+        return 1
+    try:
+        spec = cli_draft.parse_draft(text)
+        if ns.to:
+            spec.to = parse_recipients("\n".join(ns.to))
+        if ns.cc:
+            spec.cc = parse_recipients("\n".join(ns.cc))
+        if ns.subject is not None:
+            spec.subject = ns.subject
+        if ns.in_reply_to:
+            spec.in_reply_to = cli_draft.normalize_message_id(ns.in_reply_to)
+        if ns.forward:
+            spec.forward = cli_draft.normalize_message_id(ns.forward)
+        spec.reply_all = spec.reply_all or ns.reply_all
+        spec.quote = spec.quote and not ns.no_quote
+        cli_draft.check_draft(spec, ns.send)  # before logging in
+    except cli_draft.DraftError as e:
+        print(f"error: {source}: {e}", file=sys.stderr)
+        return 1
+
+    cfg = config_from_args(rest)
+    opened = _open_mail_client(cfg)
+    if opened is None:
+        return 1
+    client, mailbox = opened
+    me = getattr(client, "my_address", "") or mailbox or ""
+    try:
+        result = cli_draft.submit_draft(client, spec, send=ns.send, me=me)
+    except cli_draft.DraftError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 - Exchange's reason, not a traceback
+        print(f"error: {'sending' if ns.send else 'saving to Drafts'} failed: {e}", file=sys.stderr)
+        if cfg.debug:
+            traceback.print_exc()
+        return 1
+    print("\n".join(cli_draft.format_result_lines(result, ns.send)))
     return 0
 
 
