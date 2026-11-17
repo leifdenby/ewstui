@@ -679,6 +679,19 @@ the message back.
 scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
 `Space`) a full page, `g`/`G` top/bottom, `h` back to the list.
 
+**Copying text from an email**: drag over the text in the reading pane
+with the mouse to select it (double-click selects the whole email,
+header included), then press `y` (or `Ctrl+c`) to copy it; `Y` copies
+the whole body of the email shown, as displayed (formatted, or plain
+text after `H`). A notice says how many characters were copied (a bell
+and a hint if nothing is selected). The text goes to the system
+clipboard via `pbcopy` on macOS, and to the terminal's clipboard via
+OSC 52 (which works over SSH in terminals that allow it, e.g. iTerm2,
+kitty, WezTerm, Ghostty; not macOS Terminal). The selection is ewstui's
+own, since the app captures the mouse: to use your terminal's native
+selection instead, hold Option (iTerm2), Fn (macOS Terminal) or Shift
+(kitty, WezTerm, most Linux terminals) while dragging.
+
 **Deleting and undo**: `d` moves the message to Exchange's **Deleted
 Items** folder (same as Delete in Outlook) — nothing is purged. `u`
 moves the most recently deleted, archived or moved message back to the folder
@@ -753,6 +766,7 @@ ewstui/
   export.py          `ewstui export`: a folder or selected emails -> files + index.json
   cli_search.py      `ewstui search`: Exchange search over several folders, printed
   app.py             Main Textual App: three-pane mail view + calendar + priority views
+  clipboard.py       Copy to the system clipboard (pbcopy on macOS, beside OSC 52)
   widgets/
     folder_list.py    Left pane
     message_table.py  Middle pane

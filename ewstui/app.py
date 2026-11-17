@@ -18,7 +18,7 @@ from textual.widgets.data_table import RowDoesNotExist
 from textual import events
 from textual.widgets import Input, Tab, Tabs
 
-from . import config_file, connection, teams
+from . import clipboard, config_file, connection, teams
 from .compose_markdown import convert_html_to_markdown
 from .config import Config
 from .ews_client import CalendarClient, MailClient, MovedMessage
@@ -346,6 +346,20 @@ class EwstuiApp(App):
         self._folder_unread: dict[str, int] = {}
         self._message_snapshot: list[tuple[str, bool]] = []
         self._last_refresh_failed = False
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy text to the clipboard: the app's own (what Ctrl+V / vim `p`
+        put), the terminal's via OSC 52 (Textual's way) and, on macOS, the
+        system clipboard via `pbcopy` too, since not every terminal (macOS
+        Terminal, for one) honours OSC 52.
+
+        Parameters
+        ----------
+        text : str
+            The text to copy.
+        """
+        super().copy_to_clipboard(text)
+        clipboard.copy_to_system_clipboard(text)
 
     # -- layout -------------------------------------------------------
 
