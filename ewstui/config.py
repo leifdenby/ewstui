@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import config_file
 from .folder_tree import FolderPrefs
+from .log_file import LOG_FILE_ENV, build_default_log_path, resolve_log_path
 from .theme import ALIASES, DEFAULT_THEME, THEMES
 from .opener import default_attachment_dir
 from .priority_store import DEFAULT_PATH as DEFAULT_PRIORITY_PATH
@@ -67,6 +68,7 @@ class Config:
     theme: str = DEFAULT_THEME            # "muted-slate" (tuxedo's default) or "nord"
     demo: bool = False                   # run against fake in-memory data, no network
     debug: bool = False                   # verbose exchangelib logging to the log file + tracebacks
+    log_file: Path = field(default_factory=resolve_log_path)  # see log_file.py
     priority_file: Path = field(default_factory=lambda: DEFAULT_PRIORITY_PATH)
     attachment_dir: Path = field(default_factory=lambda: default_attachment_dir(None, None))
 
@@ -182,8 +184,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ui.add_argument(
         "--debug",
         action="store_true",
-        help="Log full EWS request/response traffic to ewstui.log and print tracebacks on connection errors "
-        "(the log can contain mail content — delete it afterwards)",
+        help="Log full EWS request/response traffic to the log file (see --log-file) and print tracebacks on "
+        "connection errors (the log can contain mail content — delete it afterwards)",
+    )
+    ui.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,  # resolved in config_from_args
+        metavar="PATH",
+        help=f"Where to write the log (default: ${LOG_FILE_ENV} if set, else {build_default_log_path()})",
     )
     ui.add_argument(
         "--priority-file",
@@ -279,6 +288,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         theme=theme,
         demo=ns.demo,
         debug=ns.debug,
+        log_file=resolve_log_path(ns.log_file),
         priority_file=ns.priority_file,
         attachment_dir=ns.attachment_dir or default_attachment_dir(account, ns.email),
     )

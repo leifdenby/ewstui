@@ -6,9 +6,8 @@ import traceback
 from pathlib import Path
 
 from .app import EwstuiApp
-from .config import config_from_args
-
-LOG_FILE = Path("ewstui.log")
+from .config import Config, config_from_args
+from .log_file import ensure_log_dir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,12 +46,26 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _setup_logging(cfg) -> None:
-    # exchangelib is chatty at INFO; keep it quiet unless the user wants
-    # verbose diagnostics. Logging goes to a file, never stdout/stderr,
-    # since Textual owns the terminal once the app starts.
+def _setup_logging(cfg: Config) -> None:
+    """Send logging to ``cfg.log_file``, creating its directory if needed.
+
+    exchangelib is chatty at INFO; keep it quiet unless the user wants
+    verbose diagnostics. Logging goes to a file, never stdout/stderr,
+    since Textual owns the terminal once the app starts.
+
+    Parameters
+    ----------
+    cfg : Config
+        From ``config_from_args``; its ``log_file`` and ``debug`` are used.
+
+    Raises
+    ------
+    OSError
+        If the log directory can't be created.
+    """
+    ensure_log_dir(cfg.log_file)
     logging.basicConfig(
-        filename=LOG_FILE,
+        filename=cfg.log_file,
         level=logging.DEBUG if cfg.debug else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
@@ -64,7 +77,7 @@ def _connect(cfg):
     from . import auth
 
     if cfg.debug:
-        print(f"Debug logging to {LOG_FILE.resolve()}", file=sys.stderr)
+        print(f"Debug logging to {cfg.log_file.resolve()}", file=sys.stderr)
     offered = None  # auth schemes the server advertises, once probed
     try:
         if cfg.ews_url:
@@ -79,7 +92,8 @@ def _connect(cfg):
         if cfg.debug:
             traceback.print_exc()
         else:
-            print("Re-run with --debug for a traceback and full EWS traffic in the log.", file=sys.stderr)
+            print(f"Re-run with --debug for a traceback and full EWS traffic in the log ({cfg.log_file}).",
+                  file=sys.stderr)
         _drop_rejected_keychain_password(cfg, e, offered)
         return None
     return account
