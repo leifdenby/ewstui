@@ -131,8 +131,8 @@ ntlm_no_cbt = true
 - With `--account NAME`, any other flags you pass are saved into that
   account. Without it (default account), flags only apply to that run.
 - Keys are the option names with `_` instead of `-` (`ews_url`,
-  `priority_file`, `refresh_interval`, ...). The password, `--debug`
-  and `--demo` are never stored.
+  `priority_file`, `refresh_interval`, ...). The password, `--debug`,
+  `--log-file` and `--demo` are never stored.
 - `layout = "stacked"` (or `--layout stacked`) puts the message list
   above the email, both to the right of the folders; the default
   `"columns"` has all three side by side.
@@ -155,8 +155,19 @@ the server offers), then fetches the Inbox once with your credentials
 (30 s timeout). On failure it exits with the error and hints instead
 of opening an empty UI.
 
-- `--debug` prints tracebacks and logs full EWS traffic to
-  `ewstui.log` (it can contain mail content and auth tokens — delete it
+- **Log file**: warnings and errors (and, with `--debug`, full EWS
+  traffic) go to a per-user log file, not the current directory:
+  - macOS: `~/Library/Logs/ewstui/ewstui.log` (also visible in
+    Console.app)
+  - Linux: `$XDG_STATE_HOME/ewstui/ewstui.log`, i.e.
+    `~/.local/state/ewstui/ewstui.log` by default
+  - Windows: `%LOCALAPPDATA%\ewstui\Logs\ewstui.log`
+
+  Override it with `--log-file PATH` or the `EWSTUI_LOG_FILE`
+  environment variable (`--log-file` wins). `ewstui --help` shows the
+  default for your machine, and `--debug` prints the path in use.
+- `--debug` prints tracebacks and logs full EWS traffic to the log
+  file (it can contain mail content and auth tokens — delete it
   afterwards).
 - **NTLM login hangs** (the Inbox check never answers, while
   `--auth basic` at least gets a quick reply): the server is likely
@@ -192,7 +203,7 @@ of opening an empty UI.
   the next request, requests time out after 30 s (not exchangelib's
   120 s) with one retry for reads, and emails load in the background so
   the UI stays usable. A `connection problem ... retrying` line in
-  `ewstui.log` shows a retry; with `--debug` you also see `session idle
+  the log file shows a retry; with `--debug` you also see `session idle
   ... reconnecting` each time a stale connection is replaced.
 
 ## Priority list (`2`)
