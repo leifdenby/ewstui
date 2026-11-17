@@ -401,6 +401,53 @@ ewstui calendar --from 2026-01-01 --json > calendar.json   # --to defaults to to
   WorkingElsewhere, ...), subject and location. `--json` gives the same
   fields plus the organizer.
 
+### Emails written elsewhere (`ewstui draft`)
+
+To write an email in another program — your editor, a script, an AI
+assistant — and hand it to Exchange as a new email, a reply or a forward:
+
+```bash
+ewstui draft reply.md                 # saved to Drafts (the default)
+ewstui draft reply.md --send          # or sent straight away
+pbpaste | ewstui draft - --in-reply-to "<abc123@mail.example>" --reply-all   # text from stdin
+```
+
+The file is the email's text in Markdown (sent as HTML, as from the
+compose view), optionally under a header block between `---` lines:
+
+```markdown
+---
+in-reply-to: <abc123@mail.example>
+reply-all: yes
+---
+Hi Jane,
+
+Thanks, **that works for me**.
+```
+
+- Headers: `to`, `cc` (comma-separated, or one `- address` per line
+  below; `Name <address>` works), `subject`, `in-reply-to` (the
+  Message-ID of the email you answer, as `ewstui search` and `export`
+  print it), `reply-all` (yes/no), `forward` (a Message-ID), `quote`
+  (yes/no). An unknown header is an error, so a typo isn't silently
+  dropped. Options (`--to`, `--cc`, `--subject`, `--in-reply-to`,
+  `--reply-all`, `--forward`, `--no-quote`) override the file's headers.
+- A reply is a real reply, found by its Message-ID in any folder: it's
+  threaded, and Outlook shows the original as answered. Without `to` /
+  `cc` it goes to the sender, or with `reply-all` to everyone but you
+  (as `r` / `R` prefill them). The subject defaults to `Re: ` the
+  original's. Exchange adds the original below your text, as with
+  Outlook's replies; `quote: no` sends only what you wrote (for inline
+  answers you quote yourself).
+- A forward carries the original and its attachments below your text;
+  the subject defaults to `Fwd: ` the original's.
+- A new email needs a subject; sending needs a recipient, saving to
+  Drafts doesn't.
+- The file is checked before logging in. It prints what was saved or
+  sent, the email it answers and the recipients. A draft is then in
+  Drafts: open it in ewstui (Enter on it), Outlook or OWA to check,
+  change and send it.
+
 ## Keybindings
 
 Press `?` inside the app for the full list: a panel with every section
@@ -741,6 +788,7 @@ ewstui/
   priority_store.py  Local todo.txt-backed priority list (parse/format/store)
   export.py          `ewstui export`: a folder or selected emails -> files + index.json
   cli_search.py      `ewstui search`: Exchange search over several folders, printed
+  cli_draft.py       `ewstui draft`: an email from a Markdown file -> Drafts (or sent)
   app.py             Main Textual App: three-pane mail view + calendar + priority views
   widgets/
     folder_list.py    Left pane
