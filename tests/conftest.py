@@ -81,6 +81,22 @@ def memory_keyring(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def system_clipboard(monkeypatch) -> list[str]:
+    """Never touch the real clipboard (pbcopy) in tests; returns what was
+    copied, in order."""
+    from ewstui import clipboard
+
+    copied: list[str] = []
+
+    def copy_to_system_clipboard(text: str) -> bool:
+        copied.append(text)
+        return True
+
+    monkeypatch.setattr(clipboard, "copy_to_system_clipboard", copy_to_system_clipboard)
+    return copied
+
+
+@pytest.fixture(autouse=True)
 def touch_id(monkeypatch) -> FakePresence:
     presence = FakePresence()
     monkeypatch.setattr(keychain, "require_user_presence", presence)
