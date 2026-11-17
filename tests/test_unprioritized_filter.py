@@ -108,6 +108,35 @@ async def test_adding_without_a_priority_keeps_the_email(tmp_path):
         assert app.query_one("#messages", MessageTable)._current_message_id() == "m2"
 
 
+async def test_priority_change_with_hidden_rows_does_not_crash(tmp_path):
+    """Regression: set_priorities used to update the P cell of every loaded
+    email, and Textual raised CellDoesNotExist for those the F filter hides."""
+    app = make_app(tmp_path)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("F")  # m1 hidden
+        await pilot.pause()
+        table = app.query_one("#messages", MessageTable)
+        table.set_priorities({"m1": "A", "m3": None, "m2": None})
+        await pilot.pause()
+        assert list_row_ids(app) == ["m2", "m3", "m4"]
+        assert str(table.get_cell("m2", "pri")) == "-"
+
+
+async def test_priority_change_during_search_does_not_crash(tmp_path):
+    """Regression: the same crash for emails a search (/) hides."""
+    app = make_app(tmp_path)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#messages", MessageTable)
+        table.set_search("budget")
+        await pilot.pause()
+        assert "m4" not in list_row_ids(app)
+        table.set_priorities({"m1": "B", "m4": "C"})
+        await pilot.pause()
+        assert str(table.get_cell("m1", "pri")) == "B"
+
+
 async def test_filter_works_in_thread_view(tmp_path):
     app = make_app(tmp_path, "--threads")
     async with app.run_test(size=(160, 40)) as pilot:
