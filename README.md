@@ -131,8 +131,8 @@ ntlm_no_cbt = true
 - With `--account NAME`, any other flags you pass are saved into that
   account. Without it (default account), flags only apply to that run.
 - Keys are the option names with `_` instead of `-` (`ews_url`,
-  `priority_file`, `refresh_interval`, ...). The password, `--debug`
-  and `--demo` are never stored.
+  `priority_file`, `refresh_interval`, ...). The password, `--debug`,
+  `--log-file` and `--demo` are never stored.
 - `layout = "stacked"` (or `--layout stacked`) puts the message list
   above the email, both to the right of the folders; the default
   `"columns"` has all three side by side.
@@ -155,8 +155,19 @@ the server offers), then fetches the Inbox once with your credentials
 (30 s timeout). On failure it exits with the error and hints instead
 of opening an empty UI.
 
-- `--debug` prints tracebacks and logs full EWS traffic to
-  `ewstui.log` (it can contain mail content and auth tokens — delete it
+- **Log file**: warnings and errors (and, with `--debug`, full EWS
+  traffic) go to a per-user log file, not the current directory:
+  - macOS: `~/Library/Logs/ewstui/ewstui.log` (also visible in
+    Console.app)
+  - Linux: `$XDG_STATE_HOME/ewstui/ewstui.log`, i.e.
+    `~/.local/state/ewstui/ewstui.log` by default
+  - Windows: `%LOCALAPPDATA%\ewstui\Logs\ewstui.log`
+
+  Override it with `--log-file PATH` or the `EWSTUI_LOG_FILE`
+  environment variable (`--log-file` wins). `ewstui --help` shows the
+  default for your machine, and `--debug` prints the path in use.
+- `--debug` prints tracebacks and logs full EWS traffic to the log
+  file (it can contain mail content and auth tokens — delete it
   afterwards).
 - **NTLM login hangs** (the Inbox check never answers, while
   `--auth basic` at least gets a quick reply): the server is likely
@@ -192,7 +203,7 @@ of opening an empty UI.
   the next request, requests time out after 30 s (not exchangelib's
   120 s) with one retry for reads, and emails load in the background so
   the UI stays usable. A `connection problem ... retrying` line in
-  `ewstui.log` shows a retry; with `--debug` you also see `session idle
+  the log file shows a retry; with `--debug` you also see `session idle
   ... reconnecting` each time a stale connection is replaced.
 
 ## Priority list (`2`)
@@ -715,6 +726,19 @@ the message back.
 scroll a line, `Ctrl+d`/`Ctrl+u` half a page, `Ctrl+f`/`Ctrl+b` (or
 `Space`) a full page, `g`/`G` top/bottom, `h` back to the list.
 
+**Copying text from an email**: drag over the text in the reading pane
+with the mouse to select it (double-click selects the whole email,
+header included), then press `y` (or `Ctrl+c`) to copy it; `Y` copies
+the whole body of the email shown, as displayed (formatted, or plain
+text after `H`). A notice says how many characters were copied (a bell
+and a hint if nothing is selected). The text goes to the system
+clipboard via `pbcopy` on macOS, and to the terminal's clipboard via
+OSC 52 (which works over SSH in terminals that allow it, e.g. iTerm2,
+kitty, WezTerm, Ghostty; not macOS Terminal). The selection is ewstui's
+own, since the app captures the mouse: to use your terminal's native
+selection instead, hold Option (iTerm2), Fn (macOS Terminal) or Shift
+(kitty, WezTerm, most Linux terminals) while dragging.
+
 **Deleting and undo**: `d` moves the message to Exchange's **Deleted
 Items** folder (same as Delete in Outlook) — nothing is purged. `u`
 moves the most recently deleted, archived or moved message back to the folder
@@ -790,6 +814,7 @@ ewstui/
   cli_search.py      `ewstui search`: Exchange search over several folders, printed
   cli_draft.py       `ewstui draft`: an email from a Markdown file -> Drafts (or sent)
   app.py             Main Textual App: three-pane mail view + calendar + priority views
+  clipboard.py       Copy to the system clipboard (pbcopy on macOS, beside OSC 52)
   widgets/
     folder_list.py    Left pane
     message_table.py  Middle pane

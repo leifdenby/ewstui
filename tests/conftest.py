@@ -70,6 +70,12 @@ def isolated_config_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_log_file(tmp_path, monkeypatch):
+    """Never create or write the user's real log (e.g. ~/Library/Logs/ewstui)."""
+    monkeypatch.setenv("EWSTUI_LOG_FILE", str(tmp_path / "logs" / "ewstui.log"))
+
+
+@pytest.fixture(autouse=True)
 def memory_keyring(monkeypatch):
     """Never touch the real Keychain or pop a real Touch ID dialog in tests."""
     backend = MemoryKeyring()
@@ -78,6 +84,22 @@ def memory_keyring(monkeypatch):
     monkeypatch.setattr(keychain, "available", lambda: True)
     yield backend
     keyring.set_keyring(previous)
+
+
+@pytest.fixture(autouse=True)
+def system_clipboard(monkeypatch) -> list[str]:
+    """Never touch the real clipboard (pbcopy) in tests; returns what was
+    copied, in order."""
+    from ewstui import clipboard
+
+    copied: list[str] = []
+
+    def copy_to_system_clipboard(text: str) -> bool:
+        copied.append(text)
+        return True
+
+    monkeypatch.setattr(clipboard, "copy_to_system_clipboard", copy_to_system_clipboard)
+    return copied
 
 
 @pytest.fixture(autouse=True)

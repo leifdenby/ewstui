@@ -38,6 +38,10 @@ class PreviewPane(VerticalScroll):
         Binding("p", "email('priority_note')", "Add to priority + note", show=False),
         Binding("v", "email('attachments')", "Attachments", show=False),
         Binding("H", "toggle_html", "Formatted / plain text", show=False),
+        # Copying: drag over the text with the mouse (double-click: all of
+        # it), then y (or Ctrl+C, as in other apps); Y copies the whole body.
+        Binding("y,ctrl+c", "copy_selection", "Copy selected text", show=False),
+        Binding("Y", "copy_body", "Copy the email's text", show=False),
     ]
 
     def action_email(self, action: str) -> None:
@@ -118,13 +122,28 @@ class PreviewPane(VerticalScroll):
         self._render_message()
 
     def _render_message(self) -> None:
+        """(Re)draw the email shown: header, invite card if any, body."""
         msg = self._message
         width = self.scrollable_content_region.width or 80  # 0 before the first layout
         colors = self.app.theme_variables
         header = render_header(msg, width, self.recipients_expanded, colors)
         if getattr(msg, "meeting", None) is not None:
             header += render_invite_card(msg.meeting, self._invite_events, width, colors)
-        self.query_one("#preview-body", Static).update(header + self._render_body(msg, colors))
+        self._set_body(header + self._render_body(msg, colors))
+
+    def _set_body(self, content: Content | str) -> None:
+        """Show `content` in the pane, dropping any mouse selection in it
+        (it was made on the text that was there before).
+
+        Parameters
+        ----------
+        content : Content or str
+            What to show (a str is Textual markup).
+        """
+        body = self.query_one("#preview-body", Static)
+        if body in self.screen.selections:
+            self.screen.selections = {w: s for w, s in self.screen.selections.items() if w is not body}
+        body.update(content)
 
     def _render_body(self, msg: MessageDetail, colors: dict[str, str]) -> Content:
         """Return the email's body: formatted from its HTML when it has one
@@ -158,6 +177,38 @@ class PreviewPane(VerticalScroll):
             self._render_message()
             self.notify("Plain text" if self.show_plain_text else "Formatted (HTML)", timeout=1.5)
 
+    def action_copy_selection(self) -> None:
+        """y / Ctrl+C: copy the text selected with the mouse to the clipboard
+        (a bell and a hint when nothing is selected)."""
+        text = self.screen.get_selected_text()
+        if not text:
+            self.app.bell()
+            self.notify("Nothing selected: drag over the text with the mouse "
+                        "(double-click: all of it), or Y for the whole email",
+                        severity="warning", timeout=3)
+            return
+        self.copy_text_to_clipboard(text)
+
+    def action_copy_body(self) -> None:
+        """Y: copy the body of the email shown, as displayed (formatted or
+        plain text, per H), to the clipboard."""
+        if self._message is None:
+            self.app.bell()
+            self.notify("No email shown", severity="warning", timeout=2)
+            return
+        self.copy_text_to_clipboard(self._render_body(self._message, self.app.theme_variables).plain)
+
+    def copy_text_to_clipboard(self, text: str) -> None:
+        """Put `text` on the clipboard and say how much was copied.
+
+        Parameters
+        ----------
+        text : str
+            The text to copy.
+        """
+        self.app.copy_to_clipboard(text)
+        self.notify(f"Copied {len(text)} character{'' if len(text) == 1 else 's'}", timeout=1.5)
+
     def on_mount(self) -> None:
         self.watch(self.app, "theme", self._rerender, init=False)  # colours come from the theme
 
@@ -174,8 +225,14 @@ class PreviewPane(VerticalScroll):
             self._render_message()
 
     def show_event(self, ev: EventSummary) -> None:
+        """Show a calendar event's summary (subject, when, organizer, where).
+
+        Parameters
+        ----------
+        ev : EventSummary
+            The event to show.
+        """
         self._message = None
-        body = self.query_one("#preview-body", Static)
         when = (
             "All day" if ev.is_all_day
             else f"{ev.start.strftime('%Y-%m-%d %H:%M')} \u2013 {ev.end.strftime('%H:%M')}"
@@ -185,14 +242,16 @@ class PreviewPane(VerticalScroll):
             f"Organizer: {ev.organizer}\n"
             + (f"Location: {ev.location}\n" if ev.location else "")
         )
-        body.update(text)
+        self._set_body(text)
         self.scroll_home(animate=False)
 
     def show_loading(self) -> None:
+        """Show "Loading…" while an email is fetched."""
         self._message = None
-        self.query_one("#preview-body", Static).update("[dim]Loading…[/dim]")
+        self._set_body("[dim]Loading…[/dim]")
         self.scroll_home(animate=False)
 
     def clear(self) -> None:
+        """Empty the pane (no email shown)."""
         self._message = None
-        self.query_one("#preview-body", Static).update("")
+        self._set_body("")
