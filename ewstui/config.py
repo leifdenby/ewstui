@@ -88,10 +88,37 @@ class Config:
     contacts_sync_from: list[Path] = field(default_factory=list)
 
 
+# The command-line subcommands __main__.main() dispatches before this parser
+# runs, with a one-line summary each: listed in `ewstui -h`.
+SUBCOMMANDS = {
+    "export": "copy a mail folder, or selected emails, to text files + index.json",
+    "search": "search the mailbox; prints Message-IDs for `export --message`",
+    "calendar": "list your calendar events for a date range",
+    "draft": "save a Markdown email to Drafts, or --send it (new, reply or forward)",
+    "contacts": "sync or search your address book (contacts.toml)",
+}
+
+
+def build_subcommands_epilog() -> str:
+    """Build the `ewstui -h` epilog listing the subcommands.
+
+    Returns
+    -------
+    str
+        A "subcommands:" block, one indented line per subcommand.
+    """
+    width = max(len(name) for name in SUBCOMMANDS)
+    lines = ["subcommands (run `ewstui COMMAND -h` for their options):"]
+    lines += [f"  {name:<{width}}  {summary}" for name, summary in SUBCOMMANDS.items()]
+    return "\n".join(lines)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ewstui",
         description="Terminal email + calendar client for Exchange (EWS), vim-style bindings.",
+        epilog=build_subcommands_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,  # keep the epilog's one-per-line layout
     )
 
     prof = p.add_argument_group("config file")
