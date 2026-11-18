@@ -159,6 +159,34 @@ def test_sync_drops_a_deleted_note_and_skips_when_nothing_changed(tmp_path):
     assert "chris.romick@knmi.nl" not in {c.email for c in contacts.load_contacts(path)}
 
 
+def test_repeated_syncs_leave_your_grouped_entries_unchanged(tmp_path):
+    """Regression: each sync added a blank line after every one of your
+    entries. Group comments between entries must stay where they are."""
+    folder = write_notes(tmp_path / "people")
+    path = tmp_path / "contacts.toml"
+    path.write_text(
+        "# my partners\n\n# FMI\n\n"
+        '[[contact]]\nname = "A"\nemail = "a@fmi.fi"\n\n'
+        '[[contact]]\nname = "B"\nemail = "b@fmi.fi"\n\n'
+        "# KNMI\n\n"
+        '[[contact]]\nname = "C"\nemail = "c@knmi.nl"\n',
+        encoding="utf-8",
+    )
+    contacts.sync_contacts_from_notes(path, [folder], force=True)
+    once = path.read_text(encoding="utf-8")
+    contacts.sync_contacts_from_notes(path, [folder], force=True)
+    contacts.sync_contacts_from_notes(path, [folder], force=True)
+    assert path.read_text(encoding="utf-8") == once
+    assert once.startswith(
+        "# my partners\n\n# FMI\n\n"
+        '[[contact]]\nname = "A"\nemail = "a@fmi.fi"\n\n'
+        '[[contact]]\nname = "B"\nemail = "b@fmi.fi"\n\n'
+        "# KNMI\n\n"
+        '[[contact]]\nname = "C"\nemail = "c@knmi.nl"\n\n'
+        '[[contact]]\nname = "'
+    )
+
+
 def test_new_file_gets_the_explaining_header(tmp_path):
     folder = write_notes(tmp_path / "people")
     path = tmp_path / "sub" / "contacts.toml"

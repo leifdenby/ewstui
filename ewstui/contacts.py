@@ -353,9 +353,11 @@ def build_contact_table(contact: Contact) -> tomlkit.items.Table:
     Returns
     -------
     tomlkit.items.Table
-        name, email, then org and source when set.
+        name, email, then org and source when set, with a blank line
+        before its header.
     """
     table = tomlkit.table()
+    table.trivia.indent = "\n"  # (synced entries are recreated each time, so this never piles up)
     table["name"] = contact.name
     table["email"] = contact.email
     if contact.org:
@@ -363,6 +365,24 @@ def build_contact_table(contact: Contact) -> tomlkit.items.Table:
     if contact.source:
         table["source"] = contact.source
     return table
+
+
+def strip_trailing_blank_lines(table: tomlkit.items.Table) -> None:
+    """Remove the blank lines at the end of a parsed [[contact]] entry
+    (comments stay).
+
+    Parameters
+    ----------
+    table : tomlkit.items.Table
+        The entry; changed in place.
+
+    Returns
+    -------
+    None
+    """
+    body = table.value.body
+    while body and body[-1][0] is None and isinstance(body[-1][1], tomlkit.items.Whitespace):
+        body.pop()
 
 
 def sync_contacts_from_notes(path: Path, folders: list[Path], force: bool = False) -> SyncResult:
@@ -397,16 +417,24 @@ def sync_contacts_from_notes(path: Path, folders: list[Path], force: bool = Fals
     notes = list_note_files(folders)
     synced = [contact for note in notes for contact in parse_person_note(note)]
 
-    entries = tomlkit.aot()
-    for entry in doc.get("contact", []):
-        if not str(entry.get("source", "")).strip():  # yours: kept as is
-            entries.append(entry)
+    # Edit the [[contact]] array in place: your entries are never touched,
+    # so they keep their comments and blank lines (rebuilding the array
+    # added a blank line after each of them on every sync).
+    if "contact" not in doc:
+        doc["contact"] = tomlkit.aot()
+    entries = doc["contact"]
+    for i in reversed(range(len(entries))):
+        if str(entries[i].get("source", "")).strip():
+            del entries[i]
+    if len(entries) and synced:
+        # Reading the file back puts the blank line before the first synced
+        # entry at the end of your last one; drop it (the synced entry
+        # brings its own), else each sync would add one more there.
+        strip_trailing_blank_lines(entries[len(entries) - 1])
     for contact in synced:
         entries.append(build_contact_table(contact))
-    if "contact" in doc:
+    if not len(entries):
         del doc["contact"]
-    if entries:
-        doc["contact"] = entries
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")
