@@ -184,6 +184,50 @@ def save_folder_prefs(path: Path, name: str, prefs: FolderPrefs, names: dict[str
     path.chmod(0o600)
 
 
+def read_contacts_settings(doc: TOMLDocument, config_path: Path) -> tuple[Path, list[Path]]:
+    """The address book settings, from the top-level [contacts] table:
+
+        [contacts]
+        file = "~/.config/ewstui/contacts.toml"   # optional; this is the default
+        sync_from = ["~/Notes/people"]            # folders of person notes
+
+    Parameters
+    ----------
+    doc : TOMLDocument
+        The loaded config file.
+    config_path : Path
+        Where it lives (the address book defaults to its directory).
+
+    Returns
+    -------
+    tuple of (Path, list of Path)
+        The address book file and the folders to sync it from (paths
+        expanded).
+
+    Raises
+    ------
+    ConfigFileError
+        On unknown keys or values of the wrong type.
+    """
+    from .contacts import build_default_contacts_path
+
+    table = doc.get("contacts", {})
+    unknown = set(table) - {"file", "sync_from"}
+    if unknown:
+        raise ConfigFileError(f"Unknown setting(s) in [contacts]: {', '.join(sorted(unknown))}. Allowed: file, sync_from")
+    file = table.get("file")
+    if file is not None and not isinstance(file, str):
+        raise ConfigFileError("[contacts] file must be a path")
+    folders = table.get("sync_from", [])
+    folders = folders.unwrap() if hasattr(folders, "unwrap") else folders
+    if isinstance(folders, str):
+        folders = [folders]
+    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+        raise ConfigFileError("[contacts] sync_from must be a list of folder paths")
+    path = Path(str(file)).expanduser() if file else build_default_contacts_path(config_path)
+    return path, [Path(f).expanduser() for f in folders]
+
+
 def has_account(doc: TOMLDocument, name: str) -> bool:
     return name in doc.get("accounts", {})
 

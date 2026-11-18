@@ -37,6 +37,30 @@ def format_person(name: str, address: str) -> str:
     return f"{name} <{address}>" if name and name != address else address
 
 
+def merge_people(*groups: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Lookup results from several sources, in order, each address once
+    (the first source's name wins).
+
+    Parameters
+    ----------
+    *groups : list of tuple of (str, str)
+        (name, address) lists, e.g. your address book's, then the directory's.
+
+    Returns
+    -------
+    list of tuple of (str, str)
+        All of them, without repeated addresses (ignoring case).
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for name, address in group:
+            if address.casefold() not in seen:
+                seen.add(address.casefold())
+                out.append((name, address))
+    return out
+
+
 def reply_recipients(detail, reply_all: bool, me: str) -> tuple[list[str], list[str]]:
     """(To, Cc) to prefill: the sender; for reply-all also everyone the
     email went to (its To in To, its Cc in Cc) — without you, and each once."""
