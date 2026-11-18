@@ -452,10 +452,18 @@ Thanks, **that works for me**.
   answers you quote yourself).
 - A forward carries the original and its attachments below your text;
   the subject defaults to `Fwd: ` the original's.
+- Attachments: `attach:` lists files, one per line (`attach: report.pdf`
+  or `- path` lines below it), relative to the draft file's folder (the
+  current one for stdin); `~` works. `--attach PATH` (repeatable) adds
+  more, relative to the current folder. They go with a new email, a
+  reply or a forward (on top of the forwarded email's own). A reply or
+  forward with files is saved to Drafts, the files attached there, then
+  sent, as Exchange's reply can't carry files itself.
 - A new email needs a subject; sending needs a recipient, saving to
   Drafts doesn't.
-- The file is checked before logging in. It prints what was saved or
-  sent, the email it answers and the recipients. A draft is then in
+- The file is checked before logging in (a missing attachment too). It
+  prints what was saved or sent, the email it answers, the recipients
+  and the files attached. A draft is then in
   Drafts: open it in ewstui (Enter on it), Outlook or OWA to check,
   change and send it.
 

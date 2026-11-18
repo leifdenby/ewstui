@@ -11,21 +11,27 @@ compose view), optionally under a header block between ``---`` lines::
     subject: Q3 budget
     in-reply-to: <abc123@mail.corp.example>
     reply-all: yes
+    attach:
+      - budget.xlsx
+      - ~/Desktop/figures/q3.png
     ---
     Hi Jane,
 
     Thanks — **looks good** to me.
 
 A list can also continue on the next lines (``  - bob@corp.example``).
+``attach`` takes one file per line; a relative path is relative to the
+draft file's folder (to the current one for stdin).
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .recipients import format_recipients, parse_recipients, reply_recipients
 
-KEYS = ("to", "cc", "subject", "in-reply-to", "reply-all", "forward", "quote")
+KEYS = ("to", "cc", "subject", "in-reply-to", "reply-all", "forward", "quote", "attach")
 _TRUE = {"yes", "y", "true", "on", "1"}
 _FALSE = {"no", "n", "false", "off", "0"}
 
@@ -53,6 +59,7 @@ class DraftSpec:
     reply_all: bool = False
     forward: str | None = None
     quote: bool = True
+    attachments: list[Path] = field(default_factory=list)
 
 
 @dataclass
@@ -65,6 +72,50 @@ class DraftResult:
     cc: list[str]
     original: object | None = None  # the MessageDetail answered / forwarded
     names: dict[str, str] = field(default_factory=dict)
+    attachments: list[Path] = field(default_factory=list)
+
+
+def resolve_attachment_path(value: str, base_dir: Path | None = None) -> Path:
+    """Where a file to attach is: ``~`` expanded, a relative path taken
+    relative to `base_dir`.
+
+    Parameters
+    ----------
+    value : str
+        The path as written.
+    base_dir : Path, optional
+        The folder relative paths start from (default: the current one).
+
+    Returns
+    -------
+    Path
+        An absolute path (not checked to exist).
+    """
+    path = Path(value.strip()).expanduser()
+    if not path.is_absolute():
+        path = (base_dir or Path.cwd()) / path
+    return path.absolute()
+
+
+def format_size(n: int) -> str:
+    """A file size for people: "850 B", "85 kB", "1.2 MB".
+
+    Parameters
+    ----------
+    n : int
+        Bytes.
+
+    Returns
+    -------
+    str
+    """
+    if n < 1000:
+        return f"{n} B"
+    if n < 1000**2:
+        return f"{n / 1000:.0f} kB"
+    if n < 1000**3:
+        return f"{n / 1000**2:.1f} MB"
+    return f"{n / 1000**3:.1f} GB"
 
 
 def parse_bool(key: str, value: str) -> bool:
@@ -158,13 +209,16 @@ def split_header_block(text: str) -> tuple[dict[str, str], str]:
     return headers, "\n".join(lines[end + 1:])
 
 
-def parse_draft(text: str) -> DraftSpec:
+def parse_draft(text: str, base_dir: Path | None = None) -> DraftSpec:
     """Read a draft file (see the module docstring).
 
     Parameters
     ----------
     text : str
         The file's content.
+    base_dir : Path, optional
+        The folder relative ``attach`` paths start from: the draft file's
+        (default: the current one).
 
     Returns
     -------
@@ -188,6 +242,8 @@ def parse_draft(text: str) -> DraftSpec:
         spec.reply_all = parse_bool("reply-all", headers["reply-all"])
     if "quote" in headers:
         spec.quote = parse_bool("quote", headers["quote"])
+    spec.attachments = [resolve_attachment_path(line, base_dir)
+                        for line in headers.get("attach", "").splitlines() if line.strip()]
     return spec
 
 
@@ -215,6 +271,11 @@ def check_draft(spec: DraftSpec, send: bool) -> None:
         raise DraftError("a new email needs a subject")
     if send and not spec.in_reply_to and not (spec.to or spec.cc):
         raise DraftError("who to? Give to (or cc) to send it")
+    for path in spec.attachments:
+        if not path.exists():
+            raise DraftError(f"attach: no file {path}")
+        if not path.is_file():
+            raise DraftError(f"attach: {path} is not a file")
 
 
 def build_reply_subject(subject: str) -> str:
@@ -275,7 +336,8 @@ def submit_draft(client, spec: DraftSpec, send: bool = False, me: str = "") -> D
     A reply stays a reply (threaded, Outlook shows it as answering the
     email); without to / cc it goes to the sender (everyone, for
     reply-all, as the compose view prefills them). A forward carries the
-    original and its attachments below the text.
+    original and its attachments below the text. The spec's own
+    attachments go with any of them.
 
     Parameters
     ----------
@@ -299,29 +361,32 @@ def submit_draft(client, spec: DraftSpec, send: bool = False, me: str = "") -> D
     """
     check_draft(spec, send)
     to, cc, subject = list(spec.to), list(spec.cc), spec.subject
+    files = list(spec.attachments)
+    # Only passed when there are files, so clients without the option still work.
+    extra = {"attachments": files} if files else {}
     if spec.in_reply_to:
         folder_id, item_id, original = fetch_original(client, spec.in_reply_to)
         if not to and not cc:
             to, cc = reply_recipients(original, spec.reply_all, me)
         subject = subject or build_reply_subject(original.subject)
         fields = {"subject": subject, "body": spec.body, "to": to, "cc": cc, "reply_all": spec.reply_all,
-                  "full_body": not spec.quote}
+                  "full_body": not spec.quote, **extra}
         (client.reply if send else client.save_reply_draft)(folder_id, item_id, **fields)
         kind = "reply-all" if spec.reply_all else "reply"
-        return DraftResult(kind, subject, to, cc, original, dict(getattr(original, "names", None) or {}))
+        return DraftResult(kind, subject, to, cc, original, dict(getattr(original, "names", None) or {}), files)
     if spec.forward:
         folder_id, item_id, original = fetch_original(client, spec.forward)
         if send and not (to or cc):
             raise DraftError("who to? Give to (or cc) to forward it")
         subject = subject or build_forward_subject(original.subject)
         (client.forward if send else client.save_forward_draft)(folder_id, item_id, subject=subject,
-                                                                body=spec.body, to=to, cc=cc)
-        return DraftResult("forward", subject, to, cc, original)
+                                                                body=spec.body, to=to, cc=cc, **extra)
+        return DraftResult("forward", subject, to, cc, original, attachments=files)
     if send:
-        client.send_mail(to, subject, spec.body, cc=cc)
+        client.send_mail(to, subject, spec.body, cc=cc, **extra)
     else:
-        client.save_draft(to, subject, spec.body, cc=cc)
-    return DraftResult("new", subject, to, cc)
+        client.save_draft(to, subject, spec.body, cc=cc, **extra)
+    return DraftResult("new", subject, to, cc, attachments=files)
 
 
 def format_result_lines(result: DraftResult, send: bool) -> list[str]:
@@ -347,6 +412,9 @@ def format_result_lines(result: DraftResult, send: bool) -> list[str]:
     for label, addresses in (("To", result.to), ("Cc", result.cc)):
         if addresses:
             lines.append(f"  {label}: " + format_recipients(addresses, result.names).replace("\n", ", "))
+    if result.attachments:
+        lines.append("  Attached: " + ", ".join(f"{p.name} ({format_size(p.stat().st_size)})"
+                                                for p in result.attachments))
     if not send:
         lines.append("Review and send it from Drafts (ewstui, Outlook or OWA).")
     return lines
