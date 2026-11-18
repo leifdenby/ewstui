@@ -82,6 +82,10 @@ class Config:
     rooms: list = field(default_factory=list)
     # Folder pane order and hidden folders (config file only, see folder_tree.py)
     folder_prefs: FolderPrefs = field(default_factory=FolderPrefs)
+    # Your address book and the note folders it syncs from (config file
+    # [contacts] only, see contacts.py). None: no address book.
+    contacts_path: Path | None = None
+    contacts_sync_from: list[Path] = field(default_factory=list)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -232,6 +236,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         profile = config_file.account_settings(doc, account) if account else {}
         rooms = config_file.account_rooms(doc, account) if account else []
         folder_prefs = config_file.account_folder_prefs(doc, account) if account else FolderPrefs()
+        contacts_path, contacts_sync_from = config_file.read_contacts_settings(doc, config_path)
     except config_file.ConfigFileError as e:
         raise SystemExit(f"error: {e}") from e
     if account and not config_file.has_account(doc, account):
@@ -265,6 +270,8 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         pending_account_updates=explicit if ns.account else {},
         rooms=rooms,
         folder_prefs=folder_prefs,
+        contacts_path=contacts_path,
+        contacts_sync_from=contacts_sync_from,
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime

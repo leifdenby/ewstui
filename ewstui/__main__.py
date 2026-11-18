@@ -20,8 +20,11 @@ def main(argv: list[str] | None = None) -> int:
         return _calendar(argv[1:])
     if argv[:1] == ["draft"]:
         return _draft(argv[1:])
+    if argv[:1] == ["contacts"]:
+        return _contacts(argv[1:])
     cfg = config_from_args(argv)
     _setup_logging(cfg)
+    _sync_contacts_at_startup(cfg)
 
     if cfg.demo:
         from .demo_backend import DEMO_ROOMS, DemoCalendarClient, DemoMailClient
@@ -477,6 +480,101 @@ def _draft(argv: list[str]) -> int:
             traceback.print_exc()
         return 1
     print("\n".join(cli_draft.format_result_lines(result, ns.send)))
+    return 0
+
+
+def _sync_contacts_at_startup(cfg: Config) -> None:
+    """Bring the address book up to date with its note folders, if any
+    note changed since the last sync (see contacts.py). Never stops ewstui
+    from starting: problems go to the log.
+
+    Parameters
+    ----------
+    cfg : Config
+        Its ``contacts_path`` and ``contacts_sync_from`` are used.
+
+    Returns
+    -------
+    None
+    """
+    from .contacts import sync_contacts_quietly
+
+    if cfg.contacts_path is None or not cfg.contacts_sync_from:
+        return
+    result = sync_contacts_quietly(cfg.contacts_path, cfg.contacts_sync_from)
+    if result is not None and not result.skipped:
+        logging.getLogger(__name__).info(
+            "address book %s: %d contacts from %d notes (+%d, -%d)",
+            cfg.contacts_path, result.contacts, result.notes, len(result.added), len(result.removed),
+        )
+
+
+def _contacts(argv: list[str]) -> int:
+    """`ewstui contacts sync` / `ewstui contacts find QUERY [--json]`: bring
+    your address book up to date with its note folders, or search it as the
+    To / Cc lookup does (see contacts.py). Needs no connection.
+
+    Parameters
+    ----------
+    argv : list[str]
+        The arguments after ``contacts``.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 if the address book can't be read or written.
+    """
+    import argparse
+    import json
+
+    from . import contacts
+
+    p = argparse.ArgumentParser(
+        prog="ewstui contacts",
+        usage="ewstui contacts sync [options]\n       ewstui contacts find QUERY [--json] [options]",
+        description="Your address book (contacts.toml next to config.toml), which To / Cc lookups search as "
+        "well as the directory. `sync` rebuilds its synced entries from the note folders in config.toml "
+        "([contacts] sync_from); `find` searches it (syncing first if a note changed). --config picks "
+        "the config file as for ewstui itself.",
+    )
+    p.add_argument("--json", action="store_true", help="find: print the matches as a JSON list")
+    ns, positionals, rest = _split_positionals(p, argv)
+    if not positionals or positionals[0] not in ("sync", "find"):
+        p.error("give `sync` or `find QUERY`")
+    command, words = positionals[0], positionals[1:]
+    if command == "sync" and words:
+        p.error(f"unrecognized arguments: {' '.join(words)}")
+    query = " ".join(words).strip()
+    if command == "find" and not query:
+        p.error("give a QUERY")
+
+    cfg = config_from_args(["--demo", *rest] if "--demo" not in rest else rest)  # no login needed
+    path, folders = cfg.contacts_path, cfg.contacts_sync_from
+    try:
+        if command == "sync":
+            if not folders:
+                print(f"No [contacts] sync_from folders in {cfg.config_path}: nothing to sync.", file=sys.stderr)
+                return 0
+            result = contacts.sync_contacts_from_notes(path, folders, force=True)
+            print(f"{path}: {result.contacts} contacts from {result.notes} notes in "
+                  f"{', '.join(contacts.shorten_home(f) for f in folders)}")
+            for email in result.added:
+                print(f"  + {email}")
+            for email in result.removed:
+                print(f"  - {email}")
+            return 0
+        if folders:
+            contacts.sync_contacts_from_notes(path, folders)
+        found = contacts.find_contacts(contacts.load_contacts(path), query)
+    except (OSError, contacts.ContactsError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if ns.json:
+        print(json.dumps([{"name": name, "email": email} for name, email in found], indent=2, ensure_ascii=False))
+    else:
+        from .recipients import format_person
+
+        print("\n".join(format_person(name, email) for name, email in found) if found else "No matches.")
     return 0
 
 

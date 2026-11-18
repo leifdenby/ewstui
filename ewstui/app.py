@@ -1263,6 +1263,10 @@ class EwstuiApp(App):
             screen.fetch_events = self.calendar_client.list_events
         if screen.find_people is None:  # To / Cc: Tab / Ctrl+Space lookups and the directory check
             screen.find_people = getattr(self.mail_client, "find_people", None)
+        if screen.find_contacts is None and self.config.contacts_path is not None:  # your address book
+            from .contacts import build_contact_finder
+
+            screen.find_contacts = build_contact_finder(self.config.contacts_path)
 
         def _reopen(result: dict) -> None:
             self._compose_and_send(

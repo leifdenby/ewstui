@@ -14,7 +14,7 @@ from textual.widgets import Button, Input, Label, Static, TextArea
 
 from . import keymap
 from .ews_client import Room, RoomAvailability
-from .recipients import format_person, parse_recipients
+from .recipients import format_person, merge_people, parse_recipients
 from .widgets.vim_text_area import INSERT, NORMAL, VimTextArea
 
 
@@ -73,8 +73,8 @@ class RecipientsArea(VimTextArea):
             True to look the line up, False to move to the next field.
         """
         _, query = self.read_current_line()
-        has_directory = getattr(self.screen, "find_people", None) is not None
-        return bool(query) and "@" not in query and has_directory
+        can_look_up = getattr(self.screen, "has_people_lookup", lambda: False)()
+        return bool(query) and "@" not in query and can_look_up
 
     def action_lookup(self) -> None:
         """Ctrl+Space: look the current line up in the directory (bell if
@@ -270,41 +270,97 @@ class ComposeScreen(ModalScreen[dict | None]):
         # find_people(query) -> [(name, address)], for To / Cc: Tab / Ctrl+Space and
         # the check under the fields; called in a thread. None: neither.
         self.find_people = None
+        # find_contacts(query) -> [(name, address)] from your own address book
+        # (contacts.py), searched first by the same lookups. None: no address book.
+        self.find_contacts = None
         self._known: dict[str, bool] = {}  # address (casefolded) -> in the directory?
+        self._in_contacts: dict[str, bool] = {}  # address (casefolded) -> in your address book?
         self._check_timer = None
 
     # -- To / Cc: lookups and the directory check ----------------------------------
 
+    def has_people_lookup(self) -> bool:
+        """Whether names can be looked up: there is a directory or an
+        address book.
+
+        Returns
+        -------
+        bool
+            True if either lookup is set.
+        """
+        return self.find_people is not None or self.find_contacts is not None
+
     def on_recipients_area_lookup_requested(self, event: RecipientsArea.LookupRequested) -> None:
-        """Tab / Ctrl+Space: the current line looked up in the directory; one
-        match fills the line in, several are offered to pick from."""
-        if self.find_people is None:
+        """Tab / Ctrl+Space: the current line looked up in your address book
+        and the directory (yours first, each address once); one match fills
+        the line in, several are offered to pick from.
+
+        Parameters
+        ----------
+        event : RecipientsArea.LookupRequested
+            The field, its line and the text to look up.
+
+        Returns
+        -------
+        None
+        """
+        if not self.has_people_lookup():
             self.app.bell()
             return
         area, row, query = event.area, event.row, event.query
         lookup = parse_recipients(query)[0] if "<" in query else query
 
         def work() -> None:
-            try:
-                people = self.find_people(lookup)
-            except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify, f"Directory lookup failed: {e}", severity="warning")
-                return
-            self.app.call_from_thread(self._looked_up, area, row, query, people)
+            local = self.find_contacts(lookup) if self.find_contacts is not None else []
+            server: list[tuple[str, str]] = []
+            if self.find_people is not None:
+                try:
+                    server = self.find_people(lookup)
+                except Exception as e:  # noqa: BLE001
+                    self.app.call_from_thread(self.app.notify, f"Directory lookup failed: {e}", severity="warning")
+                    if not local:
+                        return
+            people = merge_people(local, server)
+            in_directory = {email.casefold() for _, email in server}
+            self.app.call_from_thread(self._looked_up, area, row, query, people, in_directory)
 
         self.app.notify(f"Looking up “{query}”…", timeout=2)
         self.run_worker(work, thread=True, group="compose-lookup")
 
-    def _looked_up(self, area: RecipientsArea, row: int, query: str, people: list[tuple[str, str]]) -> None:
+    def _looked_up(self, area: RecipientsArea, row: int, query: str, people: list[tuple[str, str]],
+                   in_directory: set[str] | None = None) -> None:
+        """Fill the line in with the one match, or offer several to pick from.
+
+        Parameters
+        ----------
+        area : RecipientsArea
+            The To or Cc field.
+        row : int
+            The line looked up.
+        query : str
+            What was looked up (for the messages).
+        people : list of tuple of (str, str)
+            (name, address) matches.
+        in_directory : set of str, optional
+            Casefolded addresses the directory returned (marked as known
+            there, saving the check a round trip).
+
+        Returns
+        -------
+        None
+        """
         if not people:
-            self.app.notify(f"Nobody in the directory matches “{query}”", severity="warning")
+            where = "your contacts or the directory" if self.find_contacts is not None else "the directory"
+            self.app.notify(f"Nobody in {where} matches “{query}”", severity="warning")
             return
+        in_directory = in_directory or set()
 
         def fill(person: tuple[str, str] | None) -> None:
             if person is None:
                 return
             name, email = person
-            self._known[email.casefold()] = True
+            if email.casefold() in in_directory:
+                self._known[email.casefold()] = True
             area.replace_line(row, format_person(name, email))
             area.focus()
             self._check(area)
@@ -326,12 +382,29 @@ class ComposeScreen(ModalScreen[dict | None]):
             self._check(event.widget)
 
     def _check(self, area: RecipientsArea) -> None:
-        """Are the addresses in this field in the directory? (Shown under it;
-        ones that aren't may well be fine — people outside the organisation.)"""
-        if self.find_people is None or not area.is_mounted:
+        """Are the addresses in this field in the directory, or in your
+        address book? (Shown under it; ones in neither may well be fine,
+        but it catches typos.)
+
+        Parameters
+        ----------
+        area : RecipientsArea
+            The To or Cc field.
+
+        Returns
+        -------
+        None
+        """
+        if not self.has_people_lookup() or not area.is_mounted:
             return
         addresses = [a for a in parse_recipients(area.text) if "@" in a]
-        todo = [a for a in addresses if a.casefold() not in self._known]
+        if self.find_contacts is not None:  # local and quick: right away
+            for address in addresses:
+                if address.casefold() not in self._in_contacts:
+                    found = self.find_contacts(address)
+                    self._in_contacts[address.casefold()] = any(
+                        e.casefold() == address.casefold() for _, e in found)
+        todo = [a for a in addresses if a.casefold() not in self._known] if self.find_people is not None else []
         self._show_check(area, addresses, checking=bool(todo))
         if not todo:
             return
@@ -355,16 +428,22 @@ class ComposeScreen(ModalScreen[dict | None]):
             line.update("")
             return
         known = [a for a in addresses if self._known.get(a.casefold())]
-        unknown = [a for a in addresses if self._known.get(a.casefold()) is False]
-        text = Text()
+        mine = [a for a in addresses if not self._known.get(a.casefold()) and self._in_contacts.get(a.casefold())]
+        unknown = [a for a in addresses
+                   if self._known.get(a.casefold()) is False and not self._in_contacts.get(a.casefold())]
+        parts: list[tuple[str, str]] = []
         if known:
-            text.append(f"✓ {len(known)} in the directory", style="green")
+            parts.append((f"✓ {len(known)} in the directory", "green"))
+        if mine:
+            parts.append((f"✓ {len(mine)} in your contacts", "green"))
         if unknown:
-            text.append(" · " if known else "")
-            text.append(f"? not in the directory: {', '.join(unknown)}", style="yellow")
+            parts.append((f"? not in the directory: {', '.join(unknown)}", "yellow"))
         if checking:
-            text.append(" · " if known or unknown else "")
-            text.append("checking…", style="dim")
+            parts.append(("checking…", "dim"))
+        text = Text()
+        for i, (part, style) in enumerate(parts):
+            text.append(" · " if i else "")
+            text.append(part, style=style)
         line.update(text)
 
     def _hints(self) -> str:

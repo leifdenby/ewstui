@@ -538,10 +538,38 @@ match fills the line in, and with several you pick one (`j`/`k`, Enter).
 Tab on an empty line or one that already holds an address moves on to the
 next field, so `casey` Tab Tab fills in Casey and moves to Cc. Ctrl+Space
 looks up any line, including part of an address, but macOS often takes
-it for switching input source. A line under each field says which addresses
-are in the directory and flags the ones that aren't ("? not in the
-directory: …"). Those may be fine (people outside the organisation),
-but it catches typos.
+it for switching input source. The lookup also searches your own address
+book (see below), whose matches come first. A line under each field says
+which addresses are in the directory or your contacts and flags the ones
+that are in neither ("? not in the directory: …"). Those may be fine
+(people outside the organisation), but it catches typos.
+
+**Your address book** (`contacts.toml`, next to `config.toml`) holds the
+people the directory doesn't know, e.g. colleagues at other institutes:
+
+```toml
+[[contact]]
+name = "Heleen ter Pelkwijk"
+email = "heleen@knmi.nl"
+org = "KNMI"          # optional; also searched
+```
+
+It can also be kept in sync from a folder of Markdown notes, one person
+per note (e.g. an Obsidian `people/` folder), set in `config.toml`:
+
+```toml
+[contacts]
+sync_from = ["~/Notes/people"]
+# file = "~/elsewhere/contacts.toml"   # if not next to config.toml
+```
+
+A note gives its `# Heading` as the name (else the file name), every
+address on its `- **Email:** …` line (the first one first) and its
+`- **Org:** …`. Subfolders are ignored. ewstui syncs when it starts if a
+note changed since the last sync; synced entries carry a `source` and
+are rewritten each time, your own entries (no `source`) are never
+touched. `ewstui contacts sync` syncs now and lists what changed;
+`ewstui contacts find NAME [--json]` searches the address book as Tab does.
 
 Ctrl+O shows your calendar beside the
 email, to check when you're free: the working days (Mon–Fri) as columns,
@@ -818,6 +846,7 @@ ewstui/
   cli_draft.py       `ewstui draft`: an email from a Markdown file -> Drafts (or sent)
   app.py             Main Textual App: three-pane mail view + calendar + priority views
   clipboard.py       Copy to the system clipboard (pbcopy on macOS, beside OSC 52)
+  contacts.py        Your address book (contacts.toml), synced from person notes; `ewstui contacts`
   widgets/
     folder_list.py    Left pane
     message_table.py  Middle pane
