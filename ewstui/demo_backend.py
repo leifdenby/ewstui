@@ -7,6 +7,7 @@ server to point at.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .ews_client import (
     AttachmentSummary,
@@ -24,6 +25,7 @@ from .ews_client import (
     RoomMatch,
     RoomsDay,
     _unique_path,
+    read_attachment_file,
     safe_filename,
 )
 
@@ -85,6 +87,23 @@ _NAMES = {
 }
 
 _INVITE = "Let's plan the next sprint. Bring your estimates.\n\nJoin: https://meet.corp.example/j/424242\n"
+
+
+def _name_attachments(attachments: list[Path] | None) -> dict[str, list[str]]:
+    """What a sent record notes of the files attached: their names, under
+    "attachments" (nothing when there are none).
+
+    Parameters
+    ----------
+    attachments : list[Path] or None
+        The files.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        ``{"attachments": [names]}``, or ``{}``.
+    """
+    return {"attachments": [p.name for p in attachments]} if attachments else {}
 
 
 def _today(now: datetime, hour: int, days: int = 0) -> datetime:
@@ -337,8 +356,9 @@ class DemoMailClient:
             return False
         return self.calendar.remove_event(m.meeting.calendar_item_id)
 
-    def send_mail(self, to, subject, body, cc=None) -> None:
-        self.sent.append({"to": to, "subject": subject, "body": body, "cc": cc or []})
+    def send_mail(self, to, subject, body, cc=None, attachments=None) -> None:
+        self.sent.append({"to": to, "subject": subject, "body": body, "cc": cc or [],
+                          **_name_attachments(attachments)})
 
     def reply(
         self,
@@ -350,21 +370,27 @@ class DemoMailClient:
         reply_all: bool = False,
         cc: list[str] | None = None,
         full_body: bool = False,
+        attachments: list[Path] | None = None,
     ) -> None:
         self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         self.sent.append(
             {"in_reply_to": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body,
-             "reply_all": reply_all, "full_body": full_body}
+             "reply_all": reply_all, "full_body": full_body, **_name_attachments(attachments)}
         )
 
-    def forward(self, folder_id, message_id, subject, body, to, cc=None) -> None:
+    def forward(self, folder_id, message_id, subject, body, to, cc=None, attachments=None) -> None:
         self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
-        self.sent.append({"forward_of": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body})
+        self.sent.append({"forward_of": message_id, "to": to, "cc": cc or [], "subject": subject, "body": body,
+                          **_name_attachments(attachments)})
 
-    def save_forward_draft(self, folder_id, message_id, subject, body, to=None, cc=None) -> None:
+    def save_forward_draft(self, folder_id, message_id, subject, body, to=None, cc=None, attachments=None) -> None:
         original = self.get_message(folder_id, message_id)
-        # As Exchange saves it: the original below what you wrote.
-        self._add_draft(subject, f"{body}\n\n{original.body_text}", to or [], cc or [])
+        # As Exchange saves it: the original below what you wrote, with its
+        # attachments and yours.
+        draft_id = self._add_draft(subject, f"{body}\n\n{original.body_text}", to or [], cc or [], attachments)
+        if self._attachments.get(message_id):
+            self._attachments[draft_id] = [*self._attachments[message_id], *self._attachments.get(draft_id, [])]
+            self.get_message("drafts", draft_id).has_attachments = True
 
     my_address = "you@corp.example"
 
@@ -397,18 +423,19 @@ class DemoMailClient:
                  for m in msgs if m.conversation_id == conversation_id]
         return sorted(found, key=lambda m: m.received or datetime.min, reverse=True)
 
-    def save_draft(self, to, subject, body, cc=None) -> None:
-        self._add_draft(subject, body, to or [], cc or [])
+    def save_draft(self, to, subject, body, cc=None, attachments=None) -> None:
+        self._add_draft(subject, body, to or [], cc or [], attachments)
 
     def save_reply_draft(self, folder_id, message_id, subject, body, to=None, reply_all=False, cc=None,
-                         full_body=False) -> None:
+                         full_body=False, attachments=None) -> None:
         original = self.get_message(folder_id, message_id)  # KeyError if missing, like the live client
         if not to and not cc:  # as Exchange would pick them
             to = [original.sender, *original.to] if reply_all else [original.sender]
             cc = list(original.cc) if reply_all else []
         # As Exchange saves it: the original below what you wrote (unless
         # the body, with its inline-answered quote, replaced it all).
-        self._add_draft(subject, body if full_body else f"{body}\n\n{original.body_text}", to or [], cc or [])
+        self._add_draft(subject, body if full_body else f"{body}\n\n{original.body_text}", to or [], cc or [],
+                        attachments)
 
     def update_draft(self, folder_id, message_id, to, cc, subject, body) -> None:
         m = self.get_message(folder_id, message_id)
@@ -423,13 +450,26 @@ class DemoMailClient:
         self._messages["sent"].insert(0, m)
         self.sent.append({"draft": message_id, "to": list(to), "cc": list(cc), "subject": subject, "body": body})
 
-    def _add_draft(self, subject, body, to, cc) -> None:
+    def _add_draft(self, subject: str, body: str, to: list[str], cc: list[str],
+                   attachments: list[Path] | None = None) -> str:
+        """Put a new draft at the top of Drafts, with the files given
+        attached (read now, as Exchange would).
+
+        Returns
+        -------
+        str
+            The draft's id.
+        """
         n = len(self._messages["drafts"]) + 1
+        draft_id = f"d{n}-{len(self.sent)}"
+        if attachments:
+            self._attachments[draft_id] = [read_attachment_file(p) for p in attachments]
         self._messages["drafts"].insert(0, MessageDetail(
-            id=f"d{n}-{len(self.sent)}", changekey="c1", subject=subject or "(no subject)", sender="you@corp.example",
-            received=datetime.now(), is_read=True, has_attachments=False, to=list(to), cc=list(cc), body_text=body,
-            internet_message_id=f"<draft{n}@demo.corp.example>",
+            id=draft_id, changekey="c1", subject=subject or "(no subject)", sender="you@corp.example",
+            received=datetime.now(), is_read=True, has_attachments=bool(attachments), to=list(to), cc=list(cc),
+            body_text=body, internet_message_id=f"<draft{n}@demo.corp.example>",
         ))
+        return draft_id
 
     def list_attachments(self, folder_id: str, message_id: str) -> list[AttachmentSummary]:
         out = []

@@ -418,12 +418,13 @@ def _draft(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         prog="ewstui draft",
         usage="ewstui draft FILE [--send] [--to ADDR ...] [--subject TEXT] [--in-reply-to ID [--reply-all]] "
-        "[--forward ID] [options]",
+        "[--forward ID] [--attach PATH ...] [options]",
         description="Save an email written in a file (Markdown, sent as HTML) to Drafts, or send it. FILE ('-' "
         "for stdin) may start with a header block between --- lines: to, cc, subject, in-reply-to (the "
         "Message-ID of the email answered, as `ewstui search` prints it), reply-all (yes/no), forward (a "
-        "Message-ID), quote (yes/no: Exchange adds the original below a reply). The options below override "
-        "the file's headers. Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
+        "Message-ID), quote (yes/no: Exchange adds the original below a reply), attach (files, one per line; "
+        "relative to FILE's folder). The options below override the file's headers (--attach adds to its "
+        "files). Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
     )
     p.add_argument("--send", action="store_true", help="Send it instead of saving it to Drafts")
     p.add_argument("--to", action="append", default=[], metavar="ADDR", help="Recipient (repeat for more)")
@@ -434,6 +435,8 @@ def _draft(argv: list[str]) -> int:
     p.add_argument("--forward", metavar="ID", help="Forward the email with this Message-ID (with its attachments)")
     p.add_argument("--no-quote", action="store_true",
                    help="With --in-reply-to: send only the text, without Exchange adding the original below")
+    p.add_argument("--attach", action="append", default=[], metavar="PATH",
+                   help="Attach this file (repeat for more; added to the file's attach list)")
     ns, positionals, rest = _split_positionals(p, argv)
     if len(positionals) != 1:
         p.error("give one FILE (or - for stdin)")
@@ -445,7 +448,8 @@ def _draft(argv: list[str]) -> int:
         print(f"error: can't read {source}: {e}", file=sys.stderr)
         return 1
     try:
-        spec = cli_draft.parse_draft(text)
+        spec = cli_draft.parse_draft(text, base_dir=None if source == "-" else Path(source).absolute().parent)
+        spec.attachments += [cli_draft.resolve_attachment_path(a) for a in ns.attach]
         if ns.to:
             spec.to = parse_recipients("\n".join(ns.to))
         if ns.cc:

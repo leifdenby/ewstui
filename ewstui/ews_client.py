@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import mimetypes
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -487,6 +488,48 @@ def safe_filename(name: str | None) -> str:
     return cleaned if cleaned.strip(".") else "attachment"
 
 
+def read_attachment_file(path: Path) -> tuple[str, str, bytes]:
+    """A local file to attach: its name, content type and bytes.
+
+    Parameters
+    ----------
+    path : Path
+        The file.
+
+    Returns
+    -------
+    tuple[str, str, bytes]
+        The file name, the content type guessed from it (else
+        ``application/octet-stream``) and the content.
+
+    Raises
+    ------
+    OSError
+        If it can't be read.
+    """
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return path.name, content_type, path.read_bytes()
+
+
+def build_file_attachment(path: Path) -> object:
+    """An exchangelib FileAttachment of a local file.
+
+    Parameters
+    ----------
+    path : Path
+        The file.
+
+    Returns
+    -------
+    FileAttachment
+        Not yet attached to anything.
+    """
+    from exchangelib import FileAttachment
+
+    name, content_type, content = read_attachment_file(path)
+    return FileAttachment(name=name, content_type=content_type, content=content)
+
+
 def _unique_path(path: Path) -> Path:
     """If `path` already exists, append " (1)", " (2)", ... before the
     extension until it doesn't — never silently overwrite a previous
@@ -840,7 +883,10 @@ class MailClient:
         dest_path.write_bytes(match.content)
         return dest_path
 
-    def send_mail(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> None:
+    def send_mail(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
+                  attachments: list[Path] | None = None) -> None:
+        """Send a new email (keeping a copy in Sent Items), with the files
+        in `attachments` attached."""
         msg = Message(
             account=self.account,
             folder=self.account.sent,
@@ -849,18 +895,73 @@ class MailClient:
             to_recipients=to,
             cc_recipients=cc or None,
         )
+        for path in attachments or []:
+            msg.attach(build_file_attachment(path))
         msg.send_and_save()  # sends and keeps a copy in Sent Items
 
-    def save_draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> None:
-        """An unsent new email, saved to Drafts (Esc in the compose view)."""
-        Message(
+    def save_draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
+                   attachments: list[Path] | None = None) -> None:
+        """An unsent new email, saved to Drafts (Esc in the compose view),
+        with the files in `attachments` attached."""
+        msg = Message(
             account=self.account,
             folder=self.account.drafts,
             subject=subject,
             body=build_html_body(body),
             to_recipients=to or None,
             cc_recipients=cc or None,
-        ).save()
+        )
+        for path in attachments or []:
+            msg.attach(build_file_attachment(path))
+        msg.save()
+
+    def _save_as_draft(self, created: object) -> object:
+        """Save a reply or forward Exchange created to Drafts and fetch the
+        saved draft (an item that can then be changed, attached to, sent).
+
+        Parameters
+        ----------
+        created : ReplyToItem, ReplyAllToItem or ForwardItem
+            From create_reply / create_reply_all / create_forward.
+
+        Returns
+        -------
+        Message
+            The draft in Drafts.
+
+        Raises
+        ------
+        RuntimeError
+            If Exchange doesn't say which draft it saved.
+        """
+        saved = created.save(self.account.drafts)
+        draft_id = getattr(saved, "id", None)
+        if not draft_id:
+            raise RuntimeError("Exchange didn't say which draft it saved the reply / forward as")
+        return self.account.drafts.get(id=draft_id)
+
+    def _attach_and_finish(self, draft: object, attachments: list[Path], send: bool) -> None:
+        """Attach files to a saved draft, then send it if `send`.
+
+        Parameters
+        ----------
+        draft : Message
+            A draft already in Drafts (see _save_as_draft).
+        attachments : list[Path]
+            The files to attach.
+        send : bool
+            Send it afterwards (keeping a copy in Sent Items), else leave
+            it in Drafts.
+
+        Returns
+        -------
+        None
+        """
+        for path in attachments:
+            draft.attach(build_file_attachment(path))
+        if send:
+            # Attaching changed the draft's changekey: send the current one.
+            self.account.drafts.get(id=draft.id).send(save_copy=True)
 
     def _updated_draft(self, folder_id: str, message_id: str, to: list[str], cc: list[str], subject: str, body: str):
         item = self._folder_by_id(folder_id).get(id=message_id)
@@ -905,11 +1006,7 @@ class MailClient:
         Message
             The saved draft.
         """
-        saved = self._create_reply(item, subject, build_html_body(""), to, cc, reply_all).save(self.account.drafts)
-        draft_id = getattr(saved, "id", None)
-        if not draft_id:
-            raise RuntimeError("Exchange didn't say which draft it saved the reply as")
-        draft = self.account.drafts.get(id=draft_id)
+        draft = self._save_as_draft(self._create_reply(item, subject, build_html_body(""), to, cc, reply_all))
         draft.body = build_html_body(body)
         draft.save(update_fields=["body"])
         return draft
@@ -917,16 +1014,22 @@ class MailClient:
     def save_reply_draft(
         self, folder_id: str, message_id: str, subject: str, body: str,
         to: list[str] | None = None, reply_all: bool = False, cc: list[str] | None = None,
-        full_body: bool = False,
+        full_body: bool = False, attachments: list[Path] | None = None,
     ) -> None:
         """An unsent reply, saved to Drafts — still a reply to the email
         (Outlook/OWA show it threaded and send it as a reply), to the
-        recipients as written (see reply)."""
+        recipients as written (see reply), with the files in `attachments`
+        attached."""
         item = self._folder_by_id(folder_id).get(id=message_id)
         if full_body:
-            self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
+            draft = self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
+            self._attach_and_finish(draft, attachments or [], send=False)
             return
-        self._create_reply(item, subject, build_html_body(body), to, cc, reply_all).save(self.account.drafts)
+        created = self._create_reply(item, subject, build_html_body(body), to, cc, reply_all)
+        if attachments:
+            self._attach_and_finish(self._save_as_draft(created), attachments, send=False)
+            return
+        created.save(self.account.drafts)
 
     def reply(
         self,
@@ -938,6 +1041,7 @@ class MailClient:
         reply_all: bool = False,
         cc: list[str] | None = None,
         full_body: bool = False,
+        attachments: list[Path] | None = None,
     ) -> None:
         """Sent as a reply to the email (same conversation), to exactly `to`
         and `cc` as written in the compose view — for reply-all too, which
@@ -947,10 +1051,21 @@ class MailClient:
         Exchange adds the original email below `body`, in its own
         formatting; with `full_body` (the quote was answered inline or
         trimmed, so it's in `body`), nothing is added.
+
+        With `attachments`, the reply is saved to Drafts first, the files
+        attached there, then sent (Exchange's reply can't carry files).
         """
         item = self._folder_by_id(folder_id).get(id=message_id)
         if full_body:
-            self._save_reply_with_full_body(item, subject, body, to, cc, reply_all).send(save_copy=True)
+            draft = self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
+            if attachments:
+                self._attach_and_finish(draft, attachments, send=True)
+            else:
+                draft.send(save_copy=True)
+            return
+        if attachments:
+            created = self._create_reply(item, subject, build_html_body(body), to, cc, reply_all)
+            self._attach_and_finish(self._save_as_draft(created), attachments, send=True)
             return
         body = build_html_body(body)
         if not to and not cc:
@@ -959,21 +1074,32 @@ class MailClient:
         item.reply(subject=subject, body=body, to_recipients=to or None, cc_recipients=cc or None)
 
     def forward(self, folder_id: str, message_id: str, subject: str, body: str, to: list[str],
-                cc: list[str] | None = None) -> None:
+                cc: list[str] | None = None, attachments: list[Path] | None = None) -> None:
         """Forwarded to `to` / `cc`: `body` on top, and Exchange puts the
         original below it (its From / Sent / To / Subject header and text)
-        with its attachments."""
+        with its attachments, plus the files in `attachments` (attached to
+        a draft first, then sent)."""
         item = self._folder_by_id(folder_id).get(id=message_id)
+        if attachments:
+            created = item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to,
+                                          cc_recipients=cc or None)
+            self._attach_and_finish(self._save_as_draft(created), attachments, send=True)
+            return
         item.forward(subject=subject, body=build_html_body(body), to_recipients=to, cc_recipients=cc or None)
 
     def save_forward_draft(self, folder_id: str, message_id: str, subject: str, body: str,
-                           to: list[str] | None = None, cc: list[str] | None = None) -> None:
+                           to: list[str] | None = None, cc: list[str] | None = None,
+                           attachments: list[Path] | None = None) -> None:
         """An unsent forward, saved to Drafts — the original and its
-        attachments stay with it (see forward)."""
+        attachments stay with it (see forward), plus the files in
+        `attachments`."""
         item = self._folder_by_id(folder_id).get(id=message_id)
-        item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to or None, cc_recipients=cc or None).save(
-            self.account.drafts
-        )
+        created = item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to or None,
+                                      cc_recipients=cc or None)
+        if attachments:
+            self._attach_and_finish(self._save_as_draft(created), attachments, send=False)
+            return
+        created.save(self.account.drafts)
 
     @property
     def my_address(self) -> str:
