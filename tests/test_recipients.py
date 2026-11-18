@@ -120,6 +120,60 @@ async def test_ctrl_space_with_several_matches_lets_you_pick(tmp_path):
         assert to.text == f"{name} <{email}>"
 
 
+async def test_tab_fills_in_the_one_match_then_moves_on(tmp_path):
+    screen = ComposeScreen()
+    async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        cc = screen.query_one("#compose-cc", RecipientsArea)
+        to.focus()
+        await pilot.press(*"casey", "tab")
+        await settle(app, pilot)
+        assert to.text == "Casey Colleague <colleague@corp.example>"
+        assert app.focused is to
+        await pilot.press("tab")  # the line is an address now: on to Cc
+        await settle(app, pilot)
+        assert app.focused is cc
+
+
+async def test_tab_with_several_matches_lets_you_pick(tmp_path):
+    screen = ComposeScreen()
+    async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        to.focus()
+        await pilot.press(*"team", "tab")
+        await settle(app, pilot)
+        assert isinstance(app.screen, PickPersonScreen)
+
+
+async def test_tab_on_an_empty_or_address_line_moves_on(tmp_path):
+    screen = ComposeScreen(to="a@x.test")
+    async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        cc = screen.query_one("#compose-cc", RecipientsArea)
+        to.focus()
+        to.move_cursor((0, 0))
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.focused is cc
+        await pilot.press("tab")  # Cc is empty
+        await settle(app, pilot)
+        assert app.focused is not cc
+        assert to.text == "a@x.test" and cc.text == ""
+        assert not isinstance(app.screen, PickPersonScreen)
+
+
+async def test_tab_without_a_directory_moves_on(tmp_path):
+    screen = ComposeScreen()
+    async with composing(screen, tmp_path) as (app, pilot):
+        to = screen.query_one("#compose-to", RecipientsArea)
+        cc = screen.query_one("#compose-cc", RecipientsArea)
+        to.focus()
+        await pilot.press(*"casey", "tab")
+        await settle(app, pilot)
+        assert app.focused is cc
+        assert to.text == "casey"
+
+
 async def test_unknown_addresses_are_flagged_under_the_field(tmp_path):
     screen = ComposeScreen(to="colleague@corp.example\nstranger@elsewhere.test")
     async with composing(screen, tmp_path, DemoMailClient().find_people) as (app, pilot):

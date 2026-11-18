@@ -100,13 +100,13 @@ FOLDER_KEYS = [
 ]
 
 COMPOSE_KEYS = [
-    ("Tab", "next field"),
+    ("Tab", "next field (To / Cc: a name is looked up first)"),
     ("Ctrl+s", "send / save"),
     ("Cmd+Enter", "send (if the terminal passes Cmd)"),
     ("Ctrl+Q / :wq", "save to Drafts and close"),
     (":q / :q!", "close if nothing written / throw it away"),
     ("Esc", "vim normal mode (never closes)"),
-    ("Ctrl+Space", "To / Cc: look the line up in the directory"),
+    ("Ctrl+Space", "To / Cc: look the line up (if macOS lets it through)"),
     ("Ctrl+O", "your calendar beside the email"),
     ("Ctrl+B / F", "calendar: earlier / later weeks"),
 ]

@@ -22,10 +22,15 @@ class RecipientsArea(VimTextArea):
     """The To / Cc field: one recipient per line ("Name <address>" or just
     the address; commas and semicolons also separate). Nothing is selected
     on entering it, so typing adds to what's there. vim's modes, as in the
-    email's text box (V then d drops whole lines: addresses). Ctrl+Space
-    looks the current line up in the directory."""
+    email's text box (V then d drops whole lines: addresses). Tab on a
+    line that is a name (no "@" yet) looks it up in the directory, and
+    otherwise moves on to the next field; Ctrl+Space always looks the
+    line up (macOS often takes Ctrl+Space for switching input source)."""
 
-    BINDINGS = [Binding("ctrl+space,ctrl+@", "lookup", "Look up in the directory", show=False)]
+    BINDINGS = [
+        Binding("tab", "lookup_or_next", "Look up a name / next field", show=False),
+        Binding("ctrl+space,ctrl+@", "lookup", "Look up in the directory", show=False),
+    ]
 
     DEFAULT_CSS = """
     RecipientsArea {
@@ -46,13 +51,57 @@ class RecipientsArea(VimTextArea):
         super().__init__(text, soft_wrap=False, show_line_numbers=False, tab_behavior="focus",
                          placeholder=placeholder, **kwargs)
 
-    def action_lookup(self) -> None:
+    def read_current_line(self) -> tuple[int, str]:
+        """The cursor's line, stripped.
+
+        Returns
+        -------
+        tuple of (int, str)
+            The row and its text without surrounding whitespace.
+        """
         row = self.cursor_location[0]
-        query = self.document.get_line(row).strip()
+        return row, self.document.get_line(row).strip()
+
+    def should_look_up_line(self) -> bool:
+        """Whether Tab should look the current line up rather than move on:
+        it holds a name (not empty, no "@" yet, so not an address) and the
+        screen has a directory to ask.
+
+        Returns
+        -------
+        bool
+            True to look the line up, False to move to the next field.
+        """
+        _, query = self.read_current_line()
+        has_directory = getattr(self.screen, "find_people", None) is not None
+        return bool(query) and "@" not in query and has_directory
+
+    def action_lookup(self) -> None:
+        """Ctrl+Space: look the current line up in the directory (bell if
+        it's empty).
+
+        Returns
+        -------
+        None
+        """
+        row, query = self.read_current_line()
         if query:
             self.post_message(self.LookupRequested(self, row, query))
         else:
             self.app.bell()
+
+    def action_lookup_or_next(self) -> None:
+        """Tab: look a name up in the directory; on an empty line or an
+        address, move on to the next field as Tab normally does.
+
+        Returns
+        -------
+        None
+        """
+        if self.should_look_up_line():
+            self.action_lookup()
+        else:
+            self.screen.focus_next()
 
     def replace_line(self, row: int, text: str) -> None:
         line = self.document.get_line(row)
@@ -218,7 +267,7 @@ class ComposeScreen(ModalScreen[dict | None]):
         # fetch_events(start, end) -> [EventSummary], for the calendar (Ctrl+O);
         # called in a thread. None: no calendar.
         self.fetch_events = fetch_events
-        # find_people(query) -> [(name, address)], for To / Cc: Ctrl+Space and
+        # find_people(query) -> [(name, address)], for To / Cc: Tab / Ctrl+Space and
         # the check under the fields; called in a thread. None: neither.
         self.find_people = None
         self._known: dict[str, bool] = {}  # address (casefolded) -> in the directory?
@@ -227,7 +276,7 @@ class ComposeScreen(ModalScreen[dict | None]):
     # -- To / Cc: lookups and the directory check ----------------------------------
 
     def on_recipients_area_lookup_requested(self, event: RecipientsArea.LookupRequested) -> None:
-        """Ctrl+Space: the current line looked up in the directory; one
+        """Tab / Ctrl+Space: the current line looked up in the directory; one
         match fills the line in, several are offered to pick from."""
         if self.find_people is None:
             self.app.bell()
@@ -328,7 +377,7 @@ class ComposeScreen(ModalScreen[dict | None]):
         if isinstance(self.focused, VimTextArea):
             recipients = isinstance(self.focused, RecipientsArea)
             if self.focused.mode == INSERT:
-                hints = (["Ctrl+Space look up a name"] if recipients else []) + [
+                hints = (["Tab look up a name / next field"] if recipients else []) + [
                     "Ctrl+S send", "Esc normal mode (vim)", close] + ([] if recipients else ["Tab next field"])
             elif self.focused.mode == NORMAL:
                 hints = ["Ctrl+S send", ":wq save to Drafts & close · :q! discard", "i/a/o insert · v/V visual · dd yy p u"]
@@ -362,7 +411,7 @@ class ComposeScreen(ModalScreen[dict | None]):
                 yield Label(self.title_text, id="compose-title")
                 if self.context:
                     yield Label(self.context, id="compose-context", markup=False)
-                yield RecipientsArea(self._to, placeholder="To — one per line (Ctrl+Space looks a name up)",
+                yield RecipientsArea(self._to, placeholder="To — one per line (Tab looks a name up)",
                                      id="compose-to")
                 yield Static(id="compose-to-check", classes="recipients-check")
                 yield RecipientsArea(self._cc, placeholder="Cc", id="compose-cc")

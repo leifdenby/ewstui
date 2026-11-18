@@ -25,7 +25,10 @@ def long_inbox(n: int = 60) -> DemoMailClient:
 
 
 def make_app(tmp_path, mail) -> EwstuiApp:
-    cfg = config_from_args(["--demo", "--priority-file", str(tmp_path / "todo.txt"), "--layout", "stacked"])
+    # No date groups: the emails are an hour apart counting back from now, so
+    # where the separator rows fall (and the row numbers) depends on the clock.
+    cfg = config_from_args(["--demo", "--no-date-groups", "--priority-file", str(tmp_path / "todo.txt"),
+                            "--layout", "stacked"])
     return EwstuiApp(mail, DemoCalendarClient(), cfg)
 
 

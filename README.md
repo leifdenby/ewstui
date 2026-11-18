@@ -532,10 +532,13 @@ stay as they are (they don't become a heading or code).
 **To / Cc**: one recipient per line, either `Name <address>` or just the
 address (commas and semicolons also separate). Nothing is selected when
 you move into a field, so typing adds to what's there (a reply-all opens
-with everyone filled in, one per line). Ctrl+Space looks the current
-line up in your organisation's directory. Type part of a name or address
-and press Ctrl+Space: one match fills the line in, and with several you
-pick one (`j`/`k`, Enter). A line under each field says which addresses
+with everyone filled in, one per line). Tab looks the current line up in
+your organisation's directory. Type part of a name and press Tab: one
+match fills the line in, and with several you pick one (`j`/`k`, Enter).
+Tab on an empty line or one that already holds an address moves on to the
+next field, so `casey` Tab Tab fills in Casey and moves to Cc. Ctrl+Space
+looks up any line, including part of an address, but macOS often takes
+it for switching input source. A line under each field says which addresses
 are in the directory and flags the ones that aren't ("? not in the
 directory: …"). Those may be fine (people outside the organisation),
 but it catches typos.

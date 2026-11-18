@@ -1261,7 +1261,7 @@ class EwstuiApp(App):
 
         if screen.fetch_events is None:  # Ctrl+O: your calendar beside the email
             screen.fetch_events = self.calendar_client.list_events
-        if screen.find_people is None:  # To / Cc: Ctrl+Space lookups and the directory check
+        if screen.find_people is None:  # To / Cc: Tab / Ctrl+Space lookups and the directory check
             screen.find_people = getattr(self.mail_client, "find_people", None)
 
         def _reopen(result: dict) -> None:
