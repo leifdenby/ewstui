@@ -3,6 +3,8 @@ view; Ctrl+S sends that draft, Esc saves the changes into it."""
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+from conftest import fake_folder
 from unittest.mock import create_autospec
 
 from exchangelib import Message
@@ -115,7 +117,7 @@ async def test_emails_elsewhere_still_open_for_reading(tmp_path):
 
 def test_live_send_draft_updates_then_sends_the_same_item():
     item = create_autospec(Message, instance=True)
-    folder = SimpleNamespace(id="drafts", get=lambda id: item, children=[])
+    folder = fake_folder(lambda id: item, id="drafts", children=[])
     client = MailClient(SimpleNamespace(msg_folder_root=folder))
     client.send_draft("drafts", "d1", ["a@x.test"], [], "Hi", "Hello")
     assert item.subject == "Hi" and item.body == build_html_body("Hello") and item.cc_recipients is None

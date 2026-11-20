@@ -338,6 +338,20 @@ class MessageTable(DataTable):
             self._priorities = dict(priorities)
         self._render(keep_cursor_on)
 
+    def remove_messages(self, message_ids: set[str]) -> None:
+        """Drop these rows right away (they're being deleted / archived /
+        moved in the background), the cursor going to the next email below
+        (above, at the end) and the preview following; the list stays
+        scrolled where it was."""
+        if not any(mid in self._by_id for mid in message_ids):
+            return
+        scroll_y = self.scroll_y
+        self._messages = [m for m in self._messages if m.id not in message_ids]
+        self._extra = [m for m in self._extra if m.id not in message_ids]
+        self._by_id = {m.id: m for m in [*self._messages, *self._extra]}
+        self._refill_keeping_place()
+        self.keep_scroll(scroll_y)
+
     def set_search(self, query: str, extra: list[MessageSummary] | None = None) -> None:
         """Show only the rows matching `query`, best first ("" shows all
         again). `extra`: more matches (from Exchange's search) to include

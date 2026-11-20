@@ -118,6 +118,7 @@ class StatusBar(Widget):
     # "error"; ("", "") hides it (demo mode).
     conn: reactive[tuple] = reactive(("", ""))
     prefetching: reactive[int] = reactive(0)  # background downloads in progress
+    activity: reactive[str] = reactive("")  # e.g. "deleting 2 · ⇣ report.pdf 1.2/5.0 MB"
 
     def render(self) -> Text:
         v = _vars(self)
@@ -126,6 +127,9 @@ class StatusBar(Widget):
             (f"  {self.hints}", v["tux-status-fg"]),
         )
         right = Text()
+        if self.activity:
+            right.append(f"⟳ {self.activity}", style=v["accent"])
+            right.append(" · ", style=v["tux-dim"])
         if self.prefetching:
             right.append(f"⇣ prefetching {self.prefetching}", style=v["tux-dim"])
             right.append(" · ", style=v["tux-dim"])

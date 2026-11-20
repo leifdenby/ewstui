@@ -477,7 +477,8 @@ class DemoMailClient:
             out.append(AttachmentSummary(id=f"{message_id}:{name}", name=name, content_type=content_type, size=len(content), is_file=True))
         return out
 
-    def save_attachment(self, folder_id: str, message_id: str, attachment_id: str, dest_dir) -> "Path":
+    def save_attachment(self, folder_id: str, message_id: str, attachment_id: str, dest_dir,
+                        progress=None) -> "Path":
         from pathlib import Path
 
         for name, _content_type, content in self._attachments.get(message_id, []):
@@ -486,6 +487,8 @@ class DemoMailClient:
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = _unique_path(dest_dir / safe_filename(name))
                 dest_path.write_bytes(content)
+                if progress is not None:
+                    progress(len(content), len(content))
                 return dest_path
         raise LookupError(f"No attachment with id {attachment_id!r} on this message")
 

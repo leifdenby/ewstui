@@ -124,6 +124,9 @@ class FakeQuerySet:
     def only(self, *a):
         return self
 
+    def get(self, id):
+        return next(i for i in self.items if i.id == id)
+
     def __getitem__(self, s):
         return self.items[s]
 

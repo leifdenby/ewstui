@@ -38,6 +38,42 @@ class FakePresence:
         return self.allow
 
 
+class FakeQuery:
+    """`folder.all()` for a fake folder: `.only(...)` is ignored and
+    `.get(id=...)` answers from `get`."""
+
+    def __init__(self, get):
+        self._get = get
+
+    def only(self, *fields):
+        return self
+
+    def get(self, id):
+        return self._get(id)
+
+
+def fake_folder(get, **attrs):
+    """A stand-in exchangelib folder whose items come from `get(id)`."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(get=lambda id: get(id), all=lambda: FakeQuery(get), **attrs)
+
+
+@pytest.fixture(autouse=True)
+def detail_fields_for_fake_folders(monkeypatch):
+    """MailClient._detail_fields needs a real exchangelib folder; the fake
+    folders in tests just get a placeholder field list."""
+    from exchangelib.folders import BaseFolder
+
+    from ewstui.ews_client import MailClient
+
+    real = MailClient._detail_fields
+    monkeypatch.setattr(
+        MailClient, "_detail_fields",
+        lambda self, folder: real(self, folder) if isinstance(folder, BaseFolder) else ("subject",),
+    )
+
+
 def fake_protocol(**attrs):
     """Stand-in for exchangelib's Protocol, with the session-pool methods
     connection.harden() wraps."""
