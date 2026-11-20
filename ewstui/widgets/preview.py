@@ -37,6 +37,7 @@ class PreviewPane(VerticalScroll):
         Binding("P", "email('priority')", "Add to priority", show=False),
         Binding("p", "email('priority_note')", "Add to priority + note", show=False),
         Binding("v", "email('attachments')", "Attachments", show=False),
+        Binding("C", "email('agent')", "Ask agent", show=False),
         Binding("H", "toggle_html", "Formatted / plain text", show=False),
         # Copying: drag over the text with the mouse (double-click: all of
         # it), then y (or Ctrl+C, as in other apps); Y copies the whole body.
@@ -61,6 +62,7 @@ class PreviewPane(VerticalScroll):
             "priority": lambda: MessageTable.AddToPriorityRequested(message_id),
             "priority_note": lambda: MessageTable.AddToPriorityWithNoteRequested(message_id),
             "attachments": lambda: MessageTable.ViewAttachmentsRequested(message_id),
+            "agent": lambda: MessageTable.AskAgentRequested(message_id),
         }[action]
         self.post_message(request())
 

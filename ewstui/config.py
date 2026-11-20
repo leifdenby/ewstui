@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from . import config_file
+from .ask_agent import AgentSettings
 from .folder_tree import FolderPrefs
 from .log_file import LOG_FILE_ENV, build_default_log_path, resolve_log_path
 from .theme import ALIASES, DEFAULT_THEME, THEMES
@@ -87,6 +88,8 @@ class Config:
     # [contacts] only, see contacts.py). None: no address book.
     contacts_path: Path | None = None
     contacts_sync_from: list[Path] = field(default_factory=list)
+    # Handing an email to an LLM agent (config file [llm-agent], see ask_agent.py)
+    agent: AgentSettings = field(default_factory=AgentSettings)
 
 
 # The command-line subcommands __main__.main() dispatches before this parser
@@ -271,6 +274,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         rooms = config_file.account_rooms(doc, account) if account else []
         folder_prefs = config_file.account_folder_prefs(doc, account) if account else FolderPrefs()
         contacts_path, contacts_sync_from = config_file.read_contacts_settings(doc, config_path)
+        agent = config_file.read_agent_settings(doc, config_path)
     except config_file.ConfigFileError as e:
         raise SystemExit(f"error: {e}") from e
     if account and not config_file.has_account(doc, account):
@@ -306,6 +310,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         folder_prefs=folder_prefs,
         contacts_path=contacts_path,
         contacts_sync_from=contacts_sync_from,
+        agent=agent,
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime

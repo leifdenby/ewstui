@@ -34,6 +34,7 @@ from .widgets.date_picker import DatePicker
 from .widgets.search_bar import SearchBar
 from .screens import (
     AddNoteScreen,
+    AskAgentScreen,
     AttachmentListScreen,
     ComposeScreen,
     ConfirmScreen,
@@ -1736,6 +1737,13 @@ class EwstuiApp(App):
                               show_folder: bool) -> None:
         """Download in the background, progress in the status bar; then
         open the files (`then="open"`) or report where they were saved."""
+        saved = self._save_attachments_with_progress(folder_id, message_id, chosen, dest_dir)
+        self.call_from_thread(self._attachments_downloaded, saved, Path(dest_dir), then, show_folder)
+
+    def _save_attachments_with_progress(self, folder_id: str, message_id: str, chosen: list, dest_dir) -> list[Path]:
+        """In a worker thread: download `chosen` into `dest_dir`, showing
+        progress in the status bar. The paths saved; a failed one is
+        reported and skipped."""
         saved = []
         for n, att in enumerate(chosen, 1):
             name = att.name if len(chosen) == 1 else f"{att.name} ({n}/{len(chosen)})"
@@ -1755,7 +1763,7 @@ class EwstuiApp(App):
                 log.warning("saving attachment %r to %s failed", att.id, dest_dir, exc_info=True)
                 self.call_from_thread(self.notify, f"Failed to save attachment: {e}", severity="error", timeout=10)
         self.call_from_thread(self._set_download_progress, "")
-        self.call_from_thread(self._attachments_downloaded, saved, Path(dest_dir), then, show_folder)
+        return saved
 
     def _set_download_progress(self, text: str) -> None:
         self._download_progress = text
@@ -1792,6 +1800,64 @@ class EwstuiApp(App):
                 return
             message += " — opening the folder"
         self.notify(message)
+
+    # -- handing an email to an LLM agent (C) ---------------------------------------
+
+    def on_message_table_ask_agent_requested(self, event: MessageTable.AskAgentRequested) -> None:
+        item = self._single_item(event.message_id)
+        if item is None:
+            return
+        message_id, folder_id, subject = item
+        workdir = display_path(self.config.agent.workdir, Path.home())
+
+        def _go(instruction: str | None) -> None:
+            if instruction:
+                self._in_flight["preparing agent"] += 1
+                self._update_activity()
+                self._ask_agent(message_id, folder_id, instruction, self._previewed(message_id))
+
+        self.push_screen(AskAgentScreen(subject, str(workdir)), _go)
+
+    @work(thread=True, group="agent")
+    def _ask_agent(self, message_id: str, folder_id: str, instruction: str, detail=None) -> None:
+        """Put the email (and its attachments) in a folder under the agent's
+        workdir, then start the agent in a new terminal tab. `detail`: the
+        email if it's already loaded."""
+        from . import ask_agent
+
+        settings = self.config.agent
+        try:
+            detail = detail or self.mail_client.get_message(folder_id, message_id)
+            attachments = [a for a in self.mail_client.list_attachments(folder_id, message_id) if a.is_file]
+            folder = ask_agent.task_folder(settings, detail.subject, datetime.now(), self.config.account)
+            folder.mkdir(parents=True, exist_ok=True)
+            saved = self._save_attachments_with_progress(folder_id, message_id, attachments, folder)
+            email_path = ask_agent.write_email(folder, detail, [p.name for p in saved])
+            prompt = ask_agent.build_prompt(instruction, email_path, detail, saved,
+                                            ask_agent.ewstui_command(self.config.account))
+            (folder / "prompt.md").write_text(prompt)
+            ask_agent.launch(settings.workdir, prompt, settings)
+        except ask_agent.NoTerminal as e:
+            self.call_from_thread(self._agent_done, None, e.command, None)
+            return
+        except Exception as e:  # noqa: BLE001 - say why, never crash
+            log.warning("handing the email to the agent failed", exc_info=True)
+            self.call_from_thread(self._agent_done, None, None, e)
+            return
+        self.call_from_thread(self._agent_done, folder, None, None)
+
+    def _agent_done(self, folder: Path | None, manual_command: str | None, error: Exception | None) -> None:
+        self._in_flight["preparing agent"] -= 1
+        self._update_activity()
+        if error is not None:
+            self.notify(f"Couldn't start the agent: {error}", severity="error", timeout=10)
+        elif manual_command is not None:
+            self.copy_to_clipboard(manual_command)
+            self.notify("Couldn't tell which terminal this is to open a tab in: the command to start the agent "
+                        "is on the clipboard — paste it in a new tab (or set terminal in [llm-agent])",
+                        severity="warning", timeout=15)
+        else:
+            self.notify(f"Agent started in a new tab — email in {display_path(folder, Path.home())}")
 
     def _open_with_system_default(self, path) -> None:
         try:

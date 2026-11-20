@@ -329,6 +329,42 @@ itself an embedded email or calendar item (e.g. a forwarded message)
 shows up greyed out in the list since EWS represents those
 differently and this doesn't handle that case yet.
 
+## Asking an LLM agent to handle an email (`C`)
+
+Press `C` on an email (in the list or the reading pane), type what you
+want done ("draft a short reply saying I'll look at it Monday",
+"summarise the attachment and list the deadlines") and press Enter.
+ewstui puts the email and its attachments in a folder, then starts an
+agent (Claude Code by default) in a new tab of your terminal, with your
+instruction as its first prompt. You follow along and approve what it
+does there.
+
+The agent works on your mailbox through ewstui's own command line:
+`ewstui draft` saves its reply to Drafts (it's told not to `--send`
+unless you asked it to), and `ewstui calendar`, `search` and `contacts`
+let it look things up.
+
+```toml
+[llm-agent]
+workdir = "~/Nextcloud/Work/DigitalBrain"  # where the agent starts (default ~/.local/state/ewstui/agent)
+email_subdir = "emails/{date}-{slug}"      # where the email + attachments go, inside workdir
+command = "claude"                          # the agent; the prompt is passed as its last argument
+# terminal = "foot --working-directory {cwd} {command}"  # only if yours isn't detected
+```
+
+- `email_subdir` can use `{date}` (2026-11-20), `{time}` (1532),
+  `{slug}` (from the subject) and `{account}`. It's always inside
+  `workdir`; a folder that already exists gets `-2`, `-3`, ... The
+  folder holds `email.md` (headers, Message-ID, text), the attachments
+  and `prompt.md` (what the agent was asked).
+- The new tab opens in tmux, GNOME Terminal, kitty (with remote
+  control on), WezTerm, iTerm2, or Terminal.app (a new window there).
+  For any other terminal, set `terminal`: `{cwd}` is the folder,
+  `{command}` the agent's command as separate words, and
+  `{shell_command}` one shell line with the `cd` (for `bash -c
+  {shell_command}`-style launchers). If no terminal is found, the
+  command is copied to the clipboard instead.
+
 ## Exporting a folder (`ewstui export`)
 
 Copies one mail folder to plain files, for reading and searching outside
@@ -872,6 +908,7 @@ ewstui/
   app.py             Main Textual App: three-pane mail view + calendar + priority views
   clipboard.py       Copy to the system clipboard (pbcopy on macOS, beside OSC 52)
   contacts.py        Your address book (contacts.toml), synced from person notes; `ewstui contacts`
+  ask_agent.py       `C`: an email + its attachments into a folder, an LLM agent started on it in a new tab
   widgets/
     folder_list.py    Left pane
     message_table.py  Middle pane

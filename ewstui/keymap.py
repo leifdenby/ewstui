@@ -35,6 +35,7 @@ MAIL_KEYS = [
     ("e", "all To / Cc recipients (e again folds)"),
     ("i", "answer an invite / remove a cancelled meeting"),
     ("c", "calendar event from the email (save-the-dates)"),
+    ("C", "ask an LLM agent (Claude) to do something with the email, in a new tab"),
     ("/", "search this folder (fuzzy, as you type)"),
     ("p / P", "add to priority list (+ note, ↑/↓ priority / none); p on a listed one edits both"),
     ("F", "only emails without a priority on / off"),
@@ -59,6 +60,7 @@ PREVIEW_KEYS = [
     ("P / p v", "priority (+ note), attachments"),
     ("i", "answer the invite"),
     ("c", "calendar event from the email"),
+    ("C", "ask an LLM agent to do something with it"),
 ]
 
 CALENDAR_KEYS = [

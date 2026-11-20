@@ -937,6 +937,54 @@ def step_priority(levels: list[str | None], current: str | None, step: int) -> s
     return levels[(at + step) % len(levels)]
 
 
+class AskAgentScreen(ModalScreen[str | None]):
+    """C: what should the LLM agent do with this email? One line; Enter
+    hands it over, Esc cancels. Dismisses with the text (None if empty or
+    cancelled)."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    DEFAULT_CSS = """
+    AskAgentScreen {
+        align: center middle;
+    }
+    #agent-box {
+        width: 70%;
+        height: auto;
+        border: round $accent;
+        padding: 1 2;
+        background: $surface;
+    }
+    #agent-help {
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, subject: str, workdir: str) -> None:
+        super().__init__()
+        self._subject = subject
+        self._workdir = workdir
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="agent-box"):
+            yield Label(f"What should the agent do with “{self._subject}”?", markup=False)
+            yield Input(placeholder="e.g. draft a short reply saying I'll look at it on Monday", id="agent-instruction")
+            yield Label(f"Enter: start it in a new tab (in {self._workdir}) · Esc: cancel", id="agent-help",
+                        markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#agent-instruction", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        text = event.value.strip()
+        self.dismiss(text or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class AddNoteScreen(ModalScreen[NoteResult | None]):
     """A short text prompt, for an email's note on the priority list.
     Dismisses with a NoteResult (the note, empty if left blank but saved,
