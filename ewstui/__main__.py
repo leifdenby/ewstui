@@ -99,7 +99,7 @@ def _connect(cfg):
         else:
             print(f"Re-run with --debug for a traceback and full EWS traffic in the log ({cfg.log_file}).",
                   file=sys.stderr)
-        _drop_rejected_keychain_password(cfg, e, offered)
+        _handle_rejected_stored_password(cfg, e, offered)
         return None
     return account
 
@@ -615,6 +615,8 @@ def _offer_to_save_password(cfg, account) -> None:
 
     if cfg.password_source != "prompt" or not cfg.use_keychain or not keychain.available():
         return
+    if cfg.password_op_ref:  # the user chose 1Password for this account
+        return
     if not sys.stdin.isatty():
         return
     creds = account.protocol.credentials
@@ -629,7 +631,7 @@ def _offer_to_save_password(cfg, account) -> None:
     print("Saved. Use --forget-password to remove it.", file=sys.stderr)
 
 
-def _drop_rejected_keychain_password(cfg, error: Exception, offered: list[str] | None = None) -> None:
+def _handle_rejected_stored_password(cfg, error: Exception, offered: list[str] | None = None) -> None:
     """A stored password the server rejects (e.g. after a password
     change) would fail on every start — remove it so the next run
     prompts again. Kept if the server doesn't offer the auth method at
@@ -639,9 +641,15 @@ def _drop_rejected_keychain_password(cfg, error: Exception, offered: list[str] |
 
     from . import auth, keychain
 
-    if cfg.password_source != "keychain" or not isinstance(error.__cause__, UnauthorizedError):
+    if cfg.password_source not in ("keychain", "1password") or not isinstance(error.__cause__, UnauthorizedError):
         return
     if auth.not_offered(auth.password_auth_type(cfg), offered):
+        return
+    if cfg.password_source == "1password":  # read-only: never touch the 1Password item
+        print(
+            f"The password from 1Password ({cfg.password_op_ref}) was rejected. Update the item in 1Password.",
+            file=sys.stderr,
+        )
         return
     username = auth.login_username(cfg)
     keychain.delete_password(username, cfg.ews_url)

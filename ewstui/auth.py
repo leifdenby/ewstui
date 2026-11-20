@@ -43,7 +43,7 @@ from exchangelib import (
 )
 from exchangelib.errors import UnauthorizedError
 
-from . import connection, keychain
+from . import connection, keychain, onepassword
 from .config import AuthMethod, Config
 
 log = logging.getLogger(__name__)
@@ -197,12 +197,20 @@ def login_username(cfg: Config, auth_type: str | None = None) -> str:
 
 
 def _resolve_password(cfg: Config, username: str) -> str:
-    """EWSTUI_PASSWORD env var, else Keychain (after Touch ID), else a
-    getpass prompt. Records where it came from in cfg.password_source.
+    """EWSTUI_PASSWORD env var, else 1Password (if password_op_ref is
+    set), else Keychain (after Touch ID), else a getpass prompt. Records
+    where it came from in cfg.password_source.
     """
     if cfg.password:
         cfg.password_source = "env"
         return cfg.password
+    if cfg.password_op_ref:
+        _status(f"Reading password from 1Password ({cfg.password_op_ref}) ...")
+        password = onepassword.read(cfg.password_op_ref)
+        if password is not None:
+            cfg.password_source = "1password"
+            return password
+        _status("Couldn't read it from 1Password (is `op` installed and signed in?); see the log for details")
     if cfg.use_keychain and keychain.available():
         _status("Looking up password in the macOS Keychain (Touch ID) ...")
         password = keychain.get_password(username, cfg.ews_url)
@@ -211,7 +219,9 @@ def _resolve_password(cfg: Config, username: str) -> str:
             return password
     if not sys.stdin.isatty():  # e.g. `ewstui export` run from a script: nobody to type it
         raise AuthError(
-            f"No password for {username}: the Keychain unlock was cancelled or unavailable, and there's "
+            f"No password for {username}: "
+            + ("reading it from 1Password failed, " if cfg.password_op_ref else "")
+            + "the Keychain unlock was cancelled or unavailable, and there's "
             "no terminal to type one in. Run it in a terminal, or set EWSTUI_PASSWORD."
         )
     cfg.password_source = "prompt"

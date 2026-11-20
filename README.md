@@ -96,6 +96,23 @@ server rejects a stored password (e.g. after a password change) the
 item is removed and the next run prompts again. `--forget-password`
 deletes it; `--no-keychain` skips the Keychain entirely.
 
+**1Password**: if the password lives in 1Password and the
+[`op` CLI](https://developer.1password.com/docs/cli/) is installed and
+signed in (or connected to the desktop app), point ewstui at the item
+with a secret reference:
+
+```toml
+[accounts.work]
+password_op_ref = "op://Work/Exchange/password"
+```
+
+or `--password-op-ref op://Work/Exchange/password` (saved into the
+account like other flags when used with `--account`). It's read with
+`op read` at startup, before the Keychain; if that fails you're asked
+to type the password instead. ewstui only reads the item. If the
+server rejects the password, it tells you to update the item and
+leaves it as it is.
+
 Note the Touch ID check is enforced by ewstui, not by the Keychain:
 OS-level biometric protection needs a signed app with Keychain
 entitlements. The item itself is protected like any login Keychain
