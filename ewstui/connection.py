@@ -99,6 +99,26 @@ class ConnectionMonitor:
             if started is None or not started[1]:  # a failed prefetch isn't worth an alarm
                 self.last_error = self._mono()
 
+    def forget(self, session) -> None:
+        """A session closed outside a request (e.g. exchangelib shrinking
+        its pool takes one out and closes it): neither a success nor a
+        failure, but it mustn't stay "running" forever."""
+        with self._lock:
+            self._running.pop(id(session), None)
+
+    def running(self, session) -> tuple[float, bool] | None:
+        """The request on `session`, if one is running: (start, background?)."""
+        with self._lock:
+            return self._running.get(id(session))
+
+    def resume(self, session, request: tuple[float, bool] | None) -> None:
+        """Go on timing `request` (from running()) on `session`: exchangelib
+        swapped the session under it (renewed after a back-off, or for
+        fresh credentials)."""
+        if request is not None:
+            with self._lock:
+                self._running[id(session)] = request
+
     def background_count(self) -> int:
         with self._lock:
             return sum(1 for _, bg in self._running.values() if bg)
@@ -176,7 +196,8 @@ def harden(protocol, clock=time.time, mono=time.monotonic, monitor: ConnectionMo
     # No public setter; Configuration(max_connections=...) sets the same.
     protocol._session_pool_maxsize = max(getattr(protocol, "_session_pool_maxsize", 1) or 1, POOL_SIZE)
     get_session, release_session = protocol.get_session, protocol.release_session
-    retire_session = protocol.retire_session
+    retire_session, close_session = protocol.retire_session, protocol.close_session
+    renew_session = getattr(protocol, "renew_session", None)
 
     def fresh_get_session():
         session = get_session()
@@ -200,8 +221,25 @@ def harden(protocol, clock=time.time, mono=time.monotonic, monitor: ConnectionMo
         monitor.failed(session)
         retire_session(session)
 
+    def monitored_close_session(session):
+        monitor.forget(session)
+        close_session(session)
+
+    def monitored_renew_session(session):
+        # Remember the request first: renew closes `session`, and the
+        # close hook drops it.
+        request = monitor.running(session)
+        new = renew_session(session)
+        monitor.resume(new, request)
+        return new
+
     protocol.get_session = fresh_get_session
     protocol.release_session = stamped_release_session
     protocol.retire_session = monitored_retire_session
+    # Sessions closed or swapped outside release/retire (pool shrinking,
+    # renewals) would otherwise show as a request waiting forever.
+    protocol.close_session = monitored_close_session
+    if renew_session is not None:
+        protocol.renew_session = monitored_renew_session
     protocol._ewstui_hardened = True
     monitor.active = True

@@ -139,3 +139,35 @@ async def test_slow_request_shows_seconds_waiting(tmp_path):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause(1.2)
         assert "◐ waiting for server 17s" in app.query_one(StatusBar).render().plain
+
+
+def test_a_session_closed_by_shrinking_the_pool_is_not_waiting_forever():
+    """exchangelib's decrease_poolsize takes a session from the pool (our
+    get_session hook: "started") and closes it, never releasing it."""
+    now = [100.0]
+    m = ConnectionMonitor(mono=lambda: now[0])
+    protocol = fake_protocol(get_session=lambda: SimpleNamespace(usage_count=0))
+    connection.harden(protocol, monitor=m)
+    session = protocol.get_session()
+    protocol.close_session(session)
+    now[0] += 300
+    assert m.state() == ("● connected", "ok")
+
+
+def test_a_renewed_session_keeps_timing_its_request():
+    now = [100.0]
+    m = ConnectionMonitor(mono=lambda: now[0])
+    protocol = fake_protocol(get_session=lambda: SimpleNamespace(usage_count=0))
+
+    def renew(session):  # like exchangelib: close it, hand back a new one
+        protocol.close_session(session)
+        return SimpleNamespace(usage_count=0)
+
+    protocol.renew_session = renew
+    connection.harden(protocol, monitor=m)
+    old = protocol.get_session()
+    now[0] += 5
+    new = protocol.renew_session(old)
+    assert m.state() == ("◐ waiting for server 5s", "slow")  # still the same request
+    protocol.release_session(new)
+    assert m.state() == ("● connected", "ok")

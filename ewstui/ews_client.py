@@ -19,7 +19,7 @@ import mimetypes
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 from exchangelib import Account, EWSDateTime, EWSTimeZone, Message
 
@@ -154,6 +154,11 @@ class MessageDetail(MessageSummary):
     # for the reading pane; sender/to/cc stay plain addresses for replying.
     names: dict[str, str] = field(default_factory=dict)
     meeting: MeetingInfo | None = None  # set for invites and cancellations
+
+
+# Called as (bytes done, bytes total) while an attachment downloads.
+ProgressCallback = Callable[[int, int], None]
+DOWNLOAD_CHUNK = 256 * 1024
 
 
 @dataclass
@@ -555,6 +560,7 @@ class MailClient:
         self.account = account
         self.page_size = page_size
         self.tz = EWSTimeZone.localzone()
+        self._archive_folder = None  # found once, by name (see _find_archive_folder)
 
     @retry_on_dead_connection
     def list_folders(self) -> list[FolderSummary]:
@@ -606,6 +612,24 @@ class MailClient:
                 return f
             stack.extend(f.children)
         raise KeyError(f"no such folder: {folder_id}")
+
+    def _get_item(self, folder, message_id: str, *fields: str):
+        """One item by id. With `fields`, only those (plus id/changekey);
+        without, every field except `mime_content`.
+
+        A bare `folder.get(id=...)` asks Exchange for every field, and
+        `mime_content` is the whole raw message with its attachments
+        base64-encoded: megabytes for an email with a big attachment,
+        though nothing here reads it.
+        """
+        return folder.all().only(*(fields or self._detail_fields(folder))).get(id=message_id)
+
+    def _detail_fields(self, folder) -> tuple[str, ...]:
+        """Every item field this folder's items can have, but `mime_content`."""
+        from exchangelib.folders import FolderCollection
+
+        allowed = FolderCollection(account=self.account, folders=[folder]).allowed_item_fields()
+        return tuple(sorted({f.name for f in allowed} - {"mime_content"}))
 
     @retry_on_dead_connection
     def list_messages(self, folder_id: str, offset: int = 0, limit: int | None = None) -> list[MessageSummary]:
@@ -671,7 +695,7 @@ class MailClient:
     @retry_on_dead_connection
     def get_message(self, folder_id: str, message_id: str) -> MessageDetail:
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
+        item = self._get_item(folder, message_id)
         return MessageDetail(
             id=item.id,
             changekey=item.changekey,
@@ -703,7 +727,7 @@ class MailClient:
         """
         from exchangelib.items import SAVE_ONLY, SEND_AND_SAVE_COPY
 
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         respond = getattr(item, INVITE_RESPONSES[response])
         extra = {}
         if proposed and send and response != "accept":
@@ -718,7 +742,7 @@ class MailClient:
         meeting. False if there was none left to remove."""
         from exchangelib.errors import ErrorItemNotFound
 
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id, "associated_calendar_item_id")
         calendar_item = getattr(item, "associated_calendar_item_id", None)
         if calendar_item is None:
             return False
@@ -791,12 +815,12 @@ class MailClient:
 
     def mark_read(self, folder_id: str, message_id: str, read: bool = True) -> None:
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
+        item = self._get_item(folder, message_id, "is_read")
         item.is_read = read
         item.save(update_fields=["is_read"])
 
     def move_message(self, folder_id: str, message_id: str, dest_folder_id: str) -> MovedMessage:
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id, "subject")
         dest = self._folder_by_id(dest_folder_id)
         item.move(dest)
         return MovedMessage(folder_id=dest.id, message_id=item.id)
@@ -808,7 +832,7 @@ class MailClient:
         "Recover deleted items") and returns None: not undoable here.
         """
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
+        item = self._get_item(folder, message_id, "subject")
         trash = self.account.trash
         if folder.id == trash.id:
             item.soft_delete()
@@ -837,8 +861,10 @@ class MailClient:
 
     def archive_message(self, folder_id: str, message_id: str) -> MovedMessage:
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
-        archive_folder = self._find_archive_folder()
+        item = self._get_item(folder, message_id, "subject")
+        if self._archive_folder is None:
+            self._archive_folder = self._find_archive_folder()
+        archive_folder = self._archive_folder
         item.move(archive_folder)
         return MovedMessage(folder_id=archive_folder.id, message_id=item.id)
 
@@ -847,7 +873,7 @@ class MailClient:
         from exchangelib import FileAttachment
 
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
+        item = self._get_item(folder, message_id, "attachments")  # names/sizes; no file content
         out = []
         for att in item.attachments or []:
             is_file = isinstance(att, FileAttachment)
@@ -863,11 +889,17 @@ class MailClient:
         return out
 
     @retry_on_dead_connection
-    def save_attachment(self, folder_id: str, message_id: str, attachment_id: str, dest_dir: Path) -> Path:
+    def save_attachment(self, folder_id: str, message_id: str, attachment_id: str, dest_dir: Path,
+                        progress: ProgressCallback | None = None) -> Path:
+        """Download one file attachment into `dest_dir` (a unique name, so
+        nothing is overwritten). Streamed to disk in chunks, calling
+        `progress(bytes_done, bytes_total)` as it goes; a failed download
+        leaves no partial file behind.
+        """
         from exchangelib import FileAttachment
 
         folder = self._folder_by_id(folder_id)
-        item = folder.get(id=message_id)
+        item = self._get_item(folder, message_id, "attachments")
         match = next(
             (a for a in (item.attachments or []) if (a.attachment_id and a.attachment_id.id == attachment_id) or a.name == attachment_id),
             None,
@@ -880,7 +912,18 @@ class MailClient:
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = _unique_path(dest_dir / safe_filename(match.name))
-        dest_path.write_bytes(match.content)
+        total = getattr(match, "size", 0) or 0
+        done = 0
+        try:
+            with match.fp as src, dest_path.open("wb") as out:
+                while chunk := src.read(DOWNLOAD_CHUNK):
+                    out.write(chunk)
+                    done += len(chunk)
+                    if progress is not None:
+                        progress(done, max(total, done))
+        except BaseException:
+            dest_path.unlink(missing_ok=True)
+            raise
         return dest_path
 
     def send_mail(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
@@ -964,7 +1007,7 @@ class MailClient:
             self.account.drafts.get(id=draft.id).send(save_copy=True)
 
     def _updated_draft(self, folder_id: str, message_id: str, to: list[str], cc: list[str], subject: str, body: str):
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         item.to_recipients = to or None
         item.cc_recipients = cc or None
         item.subject = subject
@@ -1020,7 +1063,7 @@ class MailClient:
         (Outlook/OWA show it threaded and send it as a reply), to the
         recipients as written (see reply), with the files in `attachments`
         attached."""
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         if full_body:
             draft = self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
             self._attach_and_finish(draft, attachments or [], send=False)
@@ -1055,7 +1098,7 @@ class MailClient:
         With `attachments`, the reply is saved to Drafts first, the files
         attached there, then sent (Exchange's reply can't carry files).
         """
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         if full_body:
             draft = self._save_reply_with_full_body(item, subject, body, to, cc, reply_all)
             if attachments:
@@ -1079,7 +1122,7 @@ class MailClient:
         original below it (its From / Sent / To / Subject header and text)
         with its attachments, plus the files in `attachments` (attached to
         a draft first, then sent)."""
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         if attachments:
             created = item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to,
                                           cc_recipients=cc or None)
@@ -1093,7 +1136,7 @@ class MailClient:
         """An unsent forward, saved to Drafts — the original and its
         attachments stay with it (see forward), plus the files in
         `attachments`."""
-        item = self._folder_by_id(folder_id).get(id=message_id)
+        item = self._get_item(self._folder_by_id(folder_id), message_id)
         created = item.create_forward(subject=subject, body=build_html_body(body), to_recipients=to or None,
                                       cc_recipients=cc or None)
         if attachments:

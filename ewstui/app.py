@@ -3,6 +3,9 @@ from __future__ import annotations
 import functools
 import logging
 import re
+import threading
+import time as time_module
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import dataclass
@@ -85,6 +88,11 @@ def ews_guard(what: str):
         return wrapper
 
     return decorate
+
+
+def _mb(n: int) -> str:
+    """A byte count for the status bar: "0.4 MB", "12.3 MB"."""
+    return f"{n / 1_000_000:.1f} MB"
 
 
 def _local(dt: datetime) -> datetime:
@@ -305,6 +313,13 @@ class EwstuiApp(App):
         self._recent_move_targets: list[str] = []
         # Folders attachments were saved to with s this session, most recent first.
         self._recent_save_dirs: list[Path] = []
+        # Emails being deleted/archived/moved in the background: already gone
+        # from the list, and kept out of refreshes until the action is done.
+        self._pending_removal: set[str] = set()
+        self._in_flight: Counter[str] = Counter()  # "deleting" -> how many, for the status bar
+        self._download_progress = ""  # e.g. "⇣ report.pdf 2.1/5.2 MB"
+        self._bulk_lock = threading.Lock()
+        self._quit_confirmed = False  # Ctrl+Q pressed once while an email was still sending
         # (entry key, folder id, message id, Message-ID) to show once the Mail
         # tab is active; see on_priority_view_entry_opened.
         self._pending_jump: tuple | None = None
@@ -424,11 +439,19 @@ class EwstuiApp(App):
         except Exception as e:  # noqa: BLE001
             self.notify(f"Failed to load messages: {e}", severity="error", timeout=10)
             return
+        messages = self._without_pending(messages)
         self.query_one("#messages", MessageTable).set_messages(messages, home_folder_id=folder_id, priorities=self.priority_store.priorities_by_message())
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
         self._update_status()
         self.query_one("#preview", PreviewPane).clear()
         self.current_message_id = None
+
+    def _without_pending(self, messages: list) -> list:
+        """Leave out emails still being deleted/archived/moved, so a refresh
+        that raced the action doesn't bring them back for a moment."""
+        if not self._pending_removal:
+            return messages
+        return [m for m in messages if m.id not in self._pending_removal]
 
     def _fetch_messages(self, folder_id: str) -> list:
         """The folder's messages; in thread view also your replies from
@@ -559,12 +582,15 @@ class EwstuiApp(App):
 
         if messages is None or folder_id != self.current_folder_id:
             return  # user switched folders while we were fetching
+        messages = self._without_pending(messages)
         snapshot = [(m.id, m.is_read) for m in messages]
         if snapshot == self._message_snapshot:
             return
         table = self.query_one("#messages", MessageTable)
+        scroll_y = table.scroll_y  # the list stays where it is on screen
         # Nothing selected yet (e.g. folder was empty): a normal fill is fine.
         table.set_messages(messages, keep_cursor_on=table._current_message_id(), home_folder_id=folder_id, priorities=self.priority_store.priorities_by_message())
+        table.keep_scroll(scroll_y)
         self._message_snapshot = snapshot
         self._update_status()
 
@@ -1091,6 +1117,7 @@ class EwstuiApp(App):
         if folder_id != self.current_folder_id:  # moved on meanwhile
             return
         table = self.query_one("#messages", MessageTable)
+        messages = self._without_pending(messages)
         table.set_messages(messages, keep_cursor_on=self.current_message_id, home_folder_id=folder_id,
                            priorities=self.priority_store.priorities_by_message())
         self._message_snapshot = [(m.id, m.is_read) for m in messages]
@@ -1128,11 +1155,11 @@ class EwstuiApp(App):
 
         def _send(result: dict) -> None:
             self.mail_client.send_draft(folder_id, message_id, **_fields(result))
-            self._message_cache.forget(message_id)
-            self._refresh_keeping_row()
 
         def _save(result: dict) -> None:  # (the Drafts list is refreshed after it)
             self.mail_client.update_draft(folder_id, message_id, **_fields(result))
+
+        def _after(result: dict) -> None:  # sent or saved: the old copy is stale
             self._message_cache.forget(message_id)
 
         subject = "" if detail.subject == "(no subject)" else detail.subject
@@ -1140,7 +1167,7 @@ class EwstuiApp(App):
             ComposeScreen(to=format_recipients(detail.to, detail.names), cc=format_recipients(detail.cc, detail.names),
                           subject=subject,
                           body=detail.body_text or "", context="Ctrl+S sends it, Ctrl+Q keeps it in Drafts", title="Draft"),
-            _send, sent_message="Draft sent", save_draft=_save,
+            _send, sent_message="Draft sent", save_draft=_save, after=_after,
         )
 
     def on_message_table_focus_folders_requested(self, event: MessageTable.FocusFoldersRequested) -> None:
@@ -1252,11 +1279,17 @@ class EwstuiApp(App):
             save_draft=_save_draft,
         )
 
-    def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str, save_draft) -> None:
+    def _compose_and_send(self, screen: ComposeScreen, send, sent_message: str, save_draft, after=None) -> None:
         """Show `screen`; on Ctrl+S call `send(result)`, on Ctrl+Q / :wq (with
-        something written) `save_draft(result)`. If either fails, say why
-        and reopen the compose screen with the text intact, so a server
-        error never throws away what the user wrote.
+        something written) `save_draft(result)`, in the background: the
+        compose view closes at once and the status bar says "sending", so
+        a slow server never freezes the app. If either fails, say why and
+        reopen the compose screen with the text intact, so a server error
+        never throws away what the user wrote. `after(result)` runs on the
+        UI thread once either succeeded.
+
+        `send` and `save_draft` run in a worker thread: Exchange calls only,
+        no UI.
         """
 
         if screen.fetch_events is None:  # Ctrl+O: your calendar beside the email
@@ -1272,33 +1305,53 @@ class EwstuiApp(App):
             self._compose_and_send(
                 ComposeScreen(to=result["to"], cc=result.get("cc", ""), subject=result["subject"], body=result["body"],
                               context=screen.context, unsaved=True, title=screen.title_text, quoted=screen.quoted),
-                send, sent_message, save_draft,
+                send, sent_message, save_draft, after,
             )
 
         def _on_result(result: dict | None) -> None:
             if result is None:
                 return
             if result.get("draft"):
-                try:
-                    save_draft(result)
-                except Exception as e:  # noqa: BLE001 - keep the text
-                    log.exception("saving a draft failed")
-                    self.notify(f"Saving to Drafts failed: {e} — still here", severity="error", timeout=10)
-                    _reopen(result)
-                    return
-                self.notify("Saved to Drafts")
-                self._drafts_changed()
-                return
-            try:
-                send(result)
-            except Exception as e:  # noqa: BLE001 - surface any EWS error, keep the draft
-                log.exception("send failed")
-                self.notify(f"Send failed: {e} — draft kept", severity="error", timeout=10)
-                _reopen(result)
-                return
-            self.notify(sent_message)
+                self._start_compose_job("saving draft", save_draft, result, "Saved to Drafts", _reopen, after)
+            else:
+                self._start_compose_job("sending", send, result, sent_message, _reopen, after)
 
         self.push_screen(screen, _on_result)
+
+    def _start_compose_job(self, what: str, job, result: dict, done_message: str, reopen, after) -> None:
+        self._in_flight[what] += 1
+        self._update_activity()
+        self._compose_worker(what, job, result, done_message, reopen, after)
+
+    @work(thread=True, group="compose")
+    def _compose_worker(self, what: str, job, result: dict, done_message: str, reopen, after) -> None:
+        try:
+            job(result)
+        except Exception as e:  # noqa: BLE001 - surface any EWS error, keep the text
+            log.exception("%s failed", what)
+            self.call_from_thread(self._compose_failed, what, e, result, reopen)
+            return
+        self.call_from_thread(self._compose_done, what, result, done_message, after)
+
+    def _compose_done(self, what: str, result: dict, done_message: str, after) -> None:
+        self._in_flight[what] -= 1
+        self._update_activity()
+        if after is not None:
+            after(result)
+        self.notify(done_message)
+        if what == "saving draft":
+            self._drafts_changed()
+        elif self.current_folder_id and self.current_folder_id == getattr(self, "_drafts_id", None):
+            self._refresh_mail(manual=False)  # a sent draft leaves Drafts
+
+    def _compose_failed(self, what: str, error: Exception, result: dict, reopen) -> None:
+        self._in_flight[what] -= 1
+        self._update_activity()
+        if what == "saving draft":
+            self.notify(f"Saving to Drafts failed: {error} — still here", severity="error", timeout=10)
+        else:
+            self.notify(f"Send failed: {error} — draft kept", severity="error", timeout=10)
+        reopen(result)
 
     def _drafts_changed(self) -> None:
         """A draft was saved: show it if Drafts is the folder on screen."""
@@ -1307,25 +1360,10 @@ class EwstuiApp(App):
         except Exception:  # noqa: BLE001 - only a refresh
             return
         if self.current_folder_id == drafts_id:
-            self._refresh_keeping_row()
+            self._refresh_mail(manual=False)
 
     def on_message_table_delete_requested(self, event: MessageTable.DeleteRequested) -> None:
-        if not self.current_folder_id:
-            return
-        folder_id = self._folder_of(event.message_id)
-        try:
-            subject = self.mail_client.get_message(folder_id, event.message_id).subject
-            moved = self.mail_client.delete_message(folder_id, event.message_id)
-        except Exception as e:  # noqa: BLE001
-            self.notify(f"Delete failed: {e}", severity="error", timeout=10)
-            return
-        if moved is None:
-            self.notify("Message permanently deleted (can't be undone)", severity="warning")
-        else:
-            self.undo_stack.append(UndoEntry("deleted", subject, folder_id, moved))
-            self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
-            self.notify("Moved to Deleted Items — press u to undo")
-        self._refresh_keeping_row()
+        self._start_single("delete", event.message_id)
 
     @ews_guard("Marking read/unread")
     def on_message_table_toggle_read_requested(self, event: MessageTable.ToggleReadRequested) -> None:
@@ -1427,47 +1465,35 @@ class EwstuiApp(App):
         self.push_screen(AddNoteScreen(label=f"Note for: {subject}", show_priority=True), _on_result)
 
     def on_message_table_archive_requested(self, event: MessageTable.ArchiveRequested) -> None:
-        if not self.current_folder_id:
-            return
-        folder_id = self._folder_of(event.message_id)
-        try:
-            subject = self.mail_client.get_message(folder_id, event.message_id).subject
-            moved = self.mail_client.archive_message(folder_id, event.message_id)
-        except Exception as e:  # noqa: BLE001 - e.g. no Archive folder found
-            self.notify(f"Archive failed: {e}", severity="error", timeout=10)
-            return
-        self.undo_stack.append(UndoEntry("archived", subject, folder_id, moved))
-        self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
-        self.notify("Message archived — press u to undo")
-        self._refresh_keeping_row()
+        self._start_single("archive", event.message_id)
 
     def on_message_table_move_requested(self, event: MessageTable.MoveRequested) -> None:
-        if not self.current_folder_id:
-            return
-        folder_id = self._folder_of(event.message_id)
-        try:
-            subject = self.mail_client.get_message(folder_id, event.message_id).subject
-        except Exception as e:  # noqa: BLE001
-            self.notify(f"Couldn't load the message: {e}", severity="error", timeout=10)
+        item = self._single_item(event.message_id)
+        if item is None:
             return
         folders = self.query_one("#folders", FolderList).folders
 
         def _move(dest_id: str | None) -> None:
-            if dest_id is None:
-                return
-            dest_name = next((f.name for f in folders if f.id == dest_id), "folder")
-            try:
-                moved = self.mail_client.move_message(folder_id, event.message_id, dest_id)
-            except Exception as e:  # noqa: BLE001 - surface any EWS error
-                self.notify(f"Move failed: {e}", severity="error", timeout=10)
-                return
-            self.undo_stack.append(UndoEntry("moved", subject, folder_id, moved))
-            self.priority_store.relocate(event.message_id, moved.folder_id, moved.message_id)
-            self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
-            self.notify(f"Moved to {dest_name} — press u to undo")
-            self._refresh_keeping_row()
+            if dest_id is not None:
+                self._start_single("move", event.message_id, dest_id=dest_id)
 
-        self.push_screen(MoveToFolderScreen(subject, folders, self._recent_move_targets, folder_id), _move)
+        self.push_screen(MoveToFolderScreen(item[2], folders, self._recent_move_targets, item[1]), _move)
+
+    def _single_item(self, message_id: str) -> tuple[str, str, str] | None:
+        """(message id, its folder, subject) for one listed message; the
+        subject from the list, so nothing is fetched from Exchange."""
+        if not self.current_folder_id:
+            return None
+        summary = self.query_one("#messages", MessageTable)._by_id.get(message_id)
+        subject = summary.subject if summary else "(no subject)"
+        return message_id, self._folder_of(message_id), subject
+
+    def _start_single(self, action: str, message_id: str, dest_id: str | None = None) -> None:
+        item = self._single_item(message_id)
+        if item is None:
+            return
+        table = self.query_one("#messages", MessageTable)
+        self._start_bulk(action, [item], table.cursor_row, dest_id=dest_id, single=True)
 
     def _refresh_keeping_row(self, row: int | None = None) -> None:
         """Reload the current folder after a message left it (delete/
@@ -1521,53 +1547,87 @@ class EwstuiApp(App):
             extra = any(not table._by_id[mid].is_read for mid, _, _ in items)
         self._start_bulk(event.action, items, top_row, extra=extra)
 
-    def _start_bulk(self, action: str, items: list, top_row: int, dest_id: str | None = None, extra=None) -> None:
-        self.notify(f"{self.BULK_VERBS[action][0]} {len(items)} messages…", timeout=3)
+    # Actions that take the email out of the list: done optimistically.
+    REMOVING_ACTIONS = ("delete", "archive", "move")
+
+    def _start_bulk(self, action: str, items: list, top_row: int, dest_id: str | None = None, extra=None,
+                    single: bool = False) -> None:
+        """Run `action` on `items` in a background worker. Deleted /
+        archived / moved emails leave the list at once, so you can go on
+        with the next one while Exchange catches up; they come back if
+        the action fails."""
+        if not single:
+            self.notify(f"{self.BULK_VERBS[action][0]} {len(items)} messages…", timeout=3)
         if action == "move":
             self._recent_move_targets = [dest_id] + [f for f in self._recent_move_targets if f != dest_id][:4]
-        self._bulk_worker(action, items, top_row, dest_id, extra)
+        if action in self.REMOVING_ACTIONS:
+            ids = {mid for mid, _, _ in items}
+            self._pending_removal |= ids
+            self.query_one("#messages", MessageTable).remove_messages(ids)
+            self._message_snapshot = None  # the list changed: the next refresh applies whatever it finds
+        self._in_flight[self.BULK_VERBS[action][0].lower()] += len(items)
+        self._update_activity()
+        self._bulk_worker(action, items, top_row, dest_id, extra, single)
 
     @work(thread=True, group="bulk")
-    def _bulk_worker(self, action: str, items: list, top_row: int, dest_id: str | None, extra) -> None:
+    def _bulk_worker(self, action: str, items: list, top_row: int, dest_id: str | None, extra, single: bool) -> None:
         """One EWS call per message, off the UI thread; results applied by
-        _bulk_done. A failure on one message doesn't stop the rest."""
+        _bulk_done. A failure on one message doesn't stop the rest. One
+        batch at a time, so actions reach Exchange in the order you made
+        them (and the undo stack matches)."""
         done, errors = [], []
-        for message_id, folder_id, subject in items:
-            try:
-                if action == "delete":
-                    result = self.mail_client.delete_message(folder_id, message_id)
-                elif action == "archive":
-                    result = self.mail_client.archive_message(folder_id, message_id)
-                elif action == "move":
-                    result = self.mail_client.move_message(folder_id, message_id, dest_id)
-                elif action == "toggle_read":
-                    result = self.mail_client.mark_read(folder_id, message_id, read=extra)
-                else:  # add_to_priority: needs sender and Message-ID
-                    result = self.mail_client.get_message(folder_id, message_id)
-            except Exception as e:  # noqa: BLE001 - report, carry on with the rest
-                log.warning("bulk %s failed for one message", action, exc_info=True)
-                errors.append(e)
-                continue
-            done.append((message_id, folder_id, subject, result))
-        self.call_from_thread(self._bulk_done, action, done, errors, top_row, dest_id, extra)
+        with self._bulk_lock:
+            for message_id, folder_id, subject in items:
+                try:
+                    if action == "delete":
+                        result = self.mail_client.delete_message(folder_id, message_id)
+                    elif action == "archive":
+                        result = self.mail_client.archive_message(folder_id, message_id)
+                    elif action == "move":
+                        result = self.mail_client.move_message(folder_id, message_id, dest_id)
+                    elif action == "toggle_read":
+                        result = self.mail_client.mark_read(folder_id, message_id, read=extra)
+                    else:  # add_to_priority: needs sender and Message-ID
+                        result = self.mail_client.get_message(folder_id, message_id)
+                except Exception as e:  # noqa: BLE001 - report, carry on with the rest
+                    log.warning("%s failed for one message", action, exc_info=True)
+                    errors.append((message_id, e))
+                    continue
+                done.append((message_id, folder_id, subject, result))
+        self.call_from_thread(self._bulk_done, action, items, done, errors, top_row, dest_id, extra, single)
 
-    def _bulk_done(self, action: str, done: list, errors: list, top_row: int, dest_id, extra) -> None:
+    def _bulk_done(self, action: str, items: list, done: list, errors: list, top_row: int, dest_id, extra,
+                   single: bool) -> None:
+        self._in_flight[self.BULK_VERBS[action][0].lower()] -= len(items)
+        self._update_activity()
         verb = self.BULK_VERBS[action][1]
-        if action in ("delete", "archive", "move"):
+        if action in self.REMOVING_ACTIONS:
+            self._pending_removal -= {mid for mid, _, _ in items}
             undo = []
             for message_id, folder_id, subject, moved in done:
                 if moved is None:  # permanently deleted (was in Deleted Items)
                     continue
                 undo.append(UndoEntry(verb, subject, folder_id, moved))
                 self.priority_store.relocate(message_id, moved.folder_id, moved.message_id)
-            if undo:
-                self.undo_stack.append(undo)  # one u undoes the whole batch
-            where = ""
-            if action == "move":
-                where = " to " + next((f.name for f in self.query_one("#folders", FolderList).folders if f.id == dest_id), "folder")
-            message = f"{verb.capitalize()} {len(done)} messages{where}"
-            self.notify(message + (" — press u to undo" if undo else ""))
-            self._refresh_keeping_row(top_row)
+            if single:
+                if undo:
+                    self.undo_stack.append(undo[0])
+                    done_text = f"Moved to {self._folder_name(dest_id)}" if action == "move" else self.SINGLE_DONE[action]
+                    self.notify(done_text + " — press u to undo")
+                elif done:
+                    self.notify("Message permanently deleted (can't be undone)", severity="warning")
+            else:
+                if undo:
+                    self.undo_stack.append(undo)  # one u undoes the whole batch
+                where = ""
+                if action == "move":
+                    where = " to " + self._folder_name(dest_id)
+                message = f"{verb.capitalize()} {len(done)} messages{where}"
+                self.notify(message + (" — press u to undo" if undo else ""))
+            # In the background: the rows already left the list, and the
+            # cursor stays wherever you've moved on to meanwhile. Failed
+            # ones are no longer pending, so they come back.
+            self._refresh_mail(manual=False)
         elif action == "toggle_read":
             self.notify(f"Marked {len(done)} messages as {'read' if extra else 'unread'}")
             self._refresh_keeping_row(top_row)
@@ -1583,8 +1643,26 @@ class EwstuiApp(App):
                 )
             self.notify(f"Added {len(done)} messages to the priority list ({self._priority_path()})")
             self._priorities_changed()
-        if errors:
-            self.notify(f"{len(errors)} message(s) failed: {errors[0]}", severity="error", timeout=10)
+        if errors and single:
+            self.notify(f"{action.capitalize()} failed: {errors[0][1]}", severity="error", timeout=10)
+        elif errors:
+            self.notify(f"{len(errors)} message(s) failed: {errors[0][1]}", severity="error", timeout=10)
+
+    SINGLE_DONE = {"delete": "Moved to Deleted Items", "archive": "Message archived"}
+
+    def _folder_name(self, folder_id: str | None) -> str:
+        return next((f.name for f in self.query_one("#folders", FolderList).folders if f.id == folder_id), "folder")
+
+    def _update_activity(self) -> None:
+        """What's running in the background, for the status bar: actions
+        in flight ("deleting 2") and an attachment download's progress."""
+        parts = [f"{verb} {n}" for verb, n in self._in_flight.items() if n > 0]
+        if self._download_progress:
+            parts.append(self._download_progress)
+        try:
+            self.query_one(StatusBar).activity = " · ".join(parts)
+        except NoMatches:  # shutting down
+            pass
 
     @work(thread=True, group="bulk")
     def _undo_batch(self, entries: list) -> None:
@@ -1607,28 +1685,28 @@ class EwstuiApp(App):
             self.notify(f"{len(errors)} message(s) couldn't be restored: {errors[0]}", severity="error", timeout=10)
         self.select_folder(self.current_folder_id)
 
-    @ews_guard("Opening attachments")
     def on_message_table_view_attachments_requested(self, event: MessageTable.ViewAttachmentsRequested) -> None:
-        if not self.current_folder_id:
+        item = self._single_item(event.message_id)
+        if item is None:
             return
-        folder_id = self._folder_of(event.message_id)
+        self.notify("Loading attachments…", timeout=2)
+        self._load_attachments(*item)
+
+    @work(thread=True, exclusive=True, group="attachments")
+    def _load_attachments(self, message_id: str, folder_id: str, subject: str) -> None:
+        """Only the attachments' names and sizes: quick even for big files."""
         try:
-            attachments = self.mail_client.list_attachments(folder_id, event.message_id)
+            attachments = self.mail_client.list_attachments(folder_id, message_id)
         except Exception as e:  # noqa: BLE001
-            self.notify(f"Failed to load attachments: {e}", severity="error", timeout=10)
+            log.warning("listing attachments failed", exc_info=True)
+            self.call_from_thread(self.notify, f"Failed to load attachments: {e}", severity="error", timeout=10)
             return
+        self.call_from_thread(self._show_attachments, message_id, folder_id, subject, attachments)
+
+    def _show_attachments(self, message_id: str, folder_id: str, subject: str, attachments: list) -> None:
         if not attachments:
             self.notify("No attachments on this message")
             return
-        detail = self.mail_client.get_message(folder_id, event.message_id)
-
-        def _save(attachment_id: str, dest_dir) -> Path | None:
-            try:
-                return self.mail_client.save_attachment(folder_id, event.message_id, attachment_id, dest_dir)
-            except Exception as e:  # noqa: BLE001
-                log.warning("saving attachment %r to %s failed", attachment_id, dest_dir, exc_info=True)
-                self.notify(f"Failed to save attachment: {e}", severity="error", timeout=10)
-                return None
 
         def _on_result(choice: dict | None) -> None:
             if choice is None:
@@ -1636,52 +1714,84 @@ class EwstuiApp(App):
             ids = choice["ids"]
             if choice.get("skipped"):
                 self.notify(f"Skipped {choice['skipped']} embedded item(s): not downloadable", severity="warning")
+            chosen = [a for a in attachments if a.id in ids]
             if choice["action"] == "open":
-                saved = [p for p in (_save(i, self.config.attachment_dir) for i in ids) if p is not None]
-                if len(saved) == 1:
-                    self._open_with_system_default(saved[0])
-                    return
-                failed = []
-                for path in saved:
-                    try:
-                        open_with_default_app(path)
-                    except OpenError as e:
-                        log.warning("opening %s failed: %s", path, e)
-                        failed.append(f"{path.name}: {e}")
-                where = display_path(self.config.attachment_dir, Path.home())
-                self.notify(f"Saved {len(saved)} files to {where} and opening them"
-                            + (f" (couldn't open {len(failed)}: {failed[0]})" if failed else ""))
+                self._download_attachments(folder_id, message_id, chosen, self.config.attachment_dir, "open", False)
                 return
-            names = [a.name for a in attachments if a.id in ids]
-            title = f"Save “{names[0]}” to…" if len(names) == 1 else f"Save {len(names)} attachments to…"
+            title = f"Save “{chosen[0].name}” to…" if len(chosen) == 1 else f"Save {len(chosen)} attachments to…"
 
             def _to_folder(picked) -> None:
-                if picked is None:
-                    return
-                folder = picked.path
-                saved = [p for p in (_save(i, folder) for i in ids) if p is not None]
-                if not saved:
-                    return
-                self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
-                shown = display_path(saved[0], Path.home()) if len(saved) == 1 else \
-                    f"{len(saved)} files to {display_path(folder, Path.home())}"
-                message = f"Saved {shown}" if len(saved) > 1 else f"Saved to {shown}"
-                if picked.open:  # Cmd+Enter / Ctrl+O: and show the folder (Finder)
-                    try:
-                        open_with_default_app(folder)
-                    except OpenError as e:
-                        log.warning("opening folder %s failed: %s", folder, e)
-                        self.notify(f"{message}, but couldn't open the folder: {e}", severity="warning", timeout=10)
-                        return
-                    message += " — opening the folder"
-                self.notify(message)
+                if picked is not None:
+                    self._download_attachments(folder_id, message_id, chosen, picked.path, "save", picked.open)
 
             self.push_screen(
                 PathPickerScreen(title, first=[*self._recent_save_dirs, self.config.attachment_dir]),
                 _to_folder,
             )
 
-        self.push_screen(AttachmentListScreen(detail.subject, attachments), _on_result)
+        self.push_screen(AttachmentListScreen(subject, attachments), _on_result)
+
+    @work(thread=True, group="attachments-download")
+    def _download_attachments(self, folder_id: str, message_id: str, chosen: list, dest_dir, then: str,
+                              show_folder: bool) -> None:
+        """Download in the background, progress in the status bar; then
+        open the files (`then="open"`) or report where they were saved."""
+        saved = []
+        for n, att in enumerate(chosen, 1):
+            name = att.name if len(chosen) == 1 else f"{att.name} ({n}/{len(chosen)})"
+            last = [0.0]
+
+            def progress(done: int, total: int, name=name, last=last) -> None:
+                now = time_module.monotonic()
+                if now - last[0] < 0.2 and done < total:  # a few status-bar updates a second is plenty
+                    return
+                last[0] = now
+                self.call_from_thread(self._set_download_progress, f"⇣ {name} {_mb(done)}/{_mb(total)}")
+
+            self.call_from_thread(self._set_download_progress, f"⇣ {name} 0/{_mb(att.size)}")
+            try:
+                saved.append(self.mail_client.save_attachment(folder_id, message_id, att.id, dest_dir, progress=progress))
+            except Exception as e:  # noqa: BLE001
+                log.warning("saving attachment %r to %s failed", att.id, dest_dir, exc_info=True)
+                self.call_from_thread(self.notify, f"Failed to save attachment: {e}", severity="error", timeout=10)
+        self.call_from_thread(self._set_download_progress, "")
+        self.call_from_thread(self._attachments_downloaded, saved, Path(dest_dir), then, show_folder)
+
+    def _set_download_progress(self, text: str) -> None:
+        self._download_progress = text
+        self._update_activity()
+
+    def _attachments_downloaded(self, saved: list[Path], folder: Path, then: str, show_folder: bool) -> None:
+        if not saved:
+            return
+        if then == "open":
+            if len(saved) == 1:
+                self._open_with_system_default(saved[0])
+                return
+            failed = []
+            for path in saved:
+                try:
+                    open_with_default_app(path)
+                except OpenError as e:
+                    log.warning("opening %s failed: %s", path, e)
+                    failed.append(f"{path.name}: {e}")
+            where = display_path(folder, Path.home())
+            self.notify(f"Saved {len(saved)} files to {where} and opening them"
+                        + (f" (couldn't open {len(failed)}: {failed[0]})" if failed else ""))
+            return
+        self._recent_save_dirs = [folder] + [d for d in self._recent_save_dirs if d != folder][:4]
+        shown = display_path(saved[0], Path.home()) if len(saved) == 1 else \
+            f"{len(saved)} files to {display_path(folder, Path.home())}"
+        message = f"Saved {shown}" if len(saved) > 1 else f"Saved to {shown}"
+        if show_folder:  # Cmd+Enter / Ctrl+O: and show the folder (Finder)
+            try:
+                open_with_default_app(folder)
+            except OpenError as e:
+                log.warning("opening folder %s failed: %s", folder, e)
+                self.notify(f"{message}, but couldn't open the folder: {e}", severity="warning", timeout=10)
+                return
+            message += " — opening the folder"
+        self.notify(message)
 
     def _open_with_system_default(self, path) -> None:
         try:
@@ -2110,6 +2220,10 @@ class EwstuiApp(App):
             self.query_one("#calendar", CalendarView).focus()
 
     def action_undo(self) -> None:
+        if self._pending_removal:
+            n = sum(self._in_flight.values())
+            self.notify(f"Still working on {n} message(s) — undo once that's done", severity="warning")
+            return
         if not self.undo_stack:
             self.notify("Nothing to undo")
             return
@@ -2147,6 +2261,21 @@ class EwstuiApp(App):
             self.bell()
         else:
             await self.action_quit()
+
+    async def action_quit(self) -> None:
+        """q / Ctrl+Q. While an email is still being sent (or saved to
+        Drafts) in the background, quitting would lose it: warn first, and
+        quit on the second press."""
+        if self._unsent() and not self._quit_confirmed:
+            self._quit_confirmed = True
+            self.notify(f"Still sending {self._unsent()} email(s) — wait for it, or quit again to quit anyway "
+                        "(the email is lost)", severity="warning", timeout=10)
+            return
+        await super().action_quit()
+
+    def _unsent(self) -> int:
+        """Emails being sent or saved to Drafts in the background."""
+        return self._in_flight["sending"] + self._in_flight["saving draft"]
 
     def action_compose_new(self) -> None:
         def _send(result: dict) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+from conftest import fake_folder
 from unittest.mock import create_autospec
 
 import pytest
@@ -19,7 +21,7 @@ from ewstui.screens import ComposeScreen, RecipientsArea
 @pytest.fixture
 def live():
     item = create_autospec(Message, instance=True)
-    folder = SimpleNamespace(id="inbox", get=lambda id: item, children=[])
+    folder = fake_folder(lambda id: item, id="inbox", children=[])
     client = MailClient(SimpleNamespace(msg_folder_root=folder, drafts="drafts-folder"))
     return client, item
 

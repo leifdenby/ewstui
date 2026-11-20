@@ -10,6 +10,7 @@ from ewstui import cli_draft
 from ewstui.__main__ import main
 from ewstui.demo_backend import DemoMailClient
 from ewstui.ews_client import MailClient
+from conftest import fake_folder
 
 
 @pytest.fixture
@@ -165,7 +166,7 @@ def make_live_client(log: list) -> MailClient:
     client = object.__new__(MailClient)
     drafts = type("Drafts", (), {"get": lambda self, id: FakeDraft(log, id)})()
     client.account = type("Account", (), {"drafts": drafts})()
-    client._folder_by_id = lambda folder_id: type("Folder", (), {"get": lambda self, id: FakeItem(log)})()
+    client._folder_by_id = lambda folder_id: fake_folder(lambda id: FakeItem(log))
     return client
 
 
