@@ -8,7 +8,7 @@ Built with [Textual](https://textual.textualize.io/) for the UI and
 [`exchangelib`](https://github.com/ecederstrand/exchangelib) for the
 Exchange side.
 
-![ewstui --demo: mail, threads, links, moving, bulk selection, priority list, room finder, help and themes](docs/demo.gif)
+![ewstui --demo: mail, threads, links, moving, bulk selection, priority list, room finder, help and themes](https://raw.githubusercontent.com/leifdenby/ewstui/main/docs/demo.gif)
 
 Every screen is fetched live from Exchange when you open it. Nothing
 is cached to disk except, optionally, an OAuth2 refresh token — that's
@@ -27,11 +27,17 @@ to get wrong.
 
 ## Install
 
+From PyPI, as a command-line tool:
+
 ```bash
-uv sync
+uv tool install ewstui        # or: pipx install ewstui
+ewstui --demo
 ```
 
-For `--auth kerberos`, include the optional extra: `uv sync --extra kerberos`.
+For `--auth kerberos`, include the optional extra: `uv tool install 'ewstui[kerberos]'`.
+
+From a checkout (to hack on it), `uv sync` and run it with `uv run ewstui`;
+the Kerberos extra there is `uv sync --extra kerberos`.
 
 ## Try it without a server first
 

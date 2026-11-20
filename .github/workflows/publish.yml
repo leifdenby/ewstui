@@ -1,0 +1,47 @@
+name: publish
+
+# Publishing a GitHub release (tag vX.Y.Z) builds ewstui and uploads it to
+# PyPI with trusted publishing (OIDC): no API token is stored anywhere.
+# One-time setup on pypi.org: a (pending) trusted publisher for project
+# "ewstui", owner leifdenby, repository ewstui, workflow publish.yml,
+# environment pypi.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Tag matches the version in pyproject.toml
+        run: |
+          version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::release tag ${GITHUB_REF_NAME} doesn't match pyproject.toml version ${version} (expected v${version})"
+            exit 1
+          fi
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ewstui/
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
