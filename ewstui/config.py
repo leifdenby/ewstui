@@ -42,7 +42,8 @@ class Config:
     password: str | None = None           # only used for ntlm/basic; prefer prompting
     use_keychain: bool = True             # read/offer to save the password in the macOS Keychain
     forget_password: bool = False         # delete the stored Keychain password and exit
-    password_source: str | None = None    # set at login: "env" | "keychain" | "prompt"
+    password_op_ref: str | None = None    # 1Password secret reference, e.g. op://Work/Exchange/password
+    password_source: str | None = None    # set at login: "env" | "1password" | "keychain" | "prompt"
     ews_url: str | None = None            # e.g. https://mail.example.com/EWS/Exchange.asmx
     autodiscover: bool = False
     domain: str | None = None             # NTLM domain, e.g. "CORP"
@@ -151,6 +152,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     auth.add_argument("--username", help="Login username for ntlm/basic (defaults to --email)")
     auth.add_argument("--domain", help="NTLM domain, e.g. CORP (only for --auth ntlm/auto fallback)")
+    auth.add_argument(
+        "--password-op-ref",
+        metavar="REF",
+        help="Read the ntlm/basic password from 1Password with the `op` CLI, "
+        "e.g. op://Work/Exchange/password",
+    )
     auth.add_argument(
         "--no-keychain",
         action="store_true",
@@ -302,6 +309,7 @@ def config_from_args(argv: list[str] | None = None) -> Config:
         email=ns.email,
         username=ns.username or ns.email,
         password=os.environ.get("EWSTUI_PASSWORD"),  # never taken from argv; env var or prompted at runtime
+        password_op_ref=ns.password_op_ref,
         use_keychain=not ns.no_keychain,
         forget_password=ns.forget_password,
         ews_url=ns.ews_url,

@@ -27,7 +27,8 @@ from .ews_client import Room
 from .folder_tree import FolderPrefs
 
 # CLI options that can be stored in a profile (argparse dest names).
-# Never: password (Keychain/env/prompt only), debug, demo,
+# Never: password (1Password/Keychain/env/prompt only; the 1Password
+# reference `password_op_ref` is stored, the secret never is), debug, demo,
 # forget_password, account, config.
 STORED_KEYS = (
     "email",
@@ -38,6 +39,7 @@ STORED_KEYS = (
     "username",
     "domain",
     "ntlm_no_cbt",
+    "password_op_ref",
     "no_keychain",
     "tenant_id",
     "client_id",
