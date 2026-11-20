@@ -230,6 +230,24 @@ def read_contacts_settings(doc: TOMLDocument, config_path: Path) -> tuple[Path, 
     return path, [Path(f).expanduser() for f in folders]
 
 
+def read_agent_settings(doc: TOMLDocument, config_path: Path):
+    """The [llm-agent] table (handing an email to an LLM agent, see
+    ask_agent.py) as AgentSettings; the defaults if it's not there.
+
+    Raises
+    ------
+    ConfigFileError
+        On unknown keys or bad values.
+    """
+    from .ask_agent import AgentConfigError, parse_settings
+
+    table = doc.get("llm-agent", {})
+    try:
+        return parse_settings(table.unwrap() if hasattr(table, "unwrap") else dict(table))
+    except AgentConfigError as e:
+        raise ConfigFileError(f"{e} (in {config_path})") from e
+
+
 def has_account(doc: TOMLDocument, name: str) -> bool:
     return name in doc.get("accounts", {})
 

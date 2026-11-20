@@ -58,6 +58,7 @@ class MessageTable(DataTable):
         Binding("t", "toggle_threads", "Threads"),
         Binding("F", "toggle_unprioritized", "Only emails without a priority", show=False),
         Binding("v", "view_attachments", "Attachments"),
+        Binding("C", "ask_agent", "Ask agent", show=False),
         Binding("V", "toggle_visual", "Select", show=False),
         Binding("escape", "cancel_visual", "Cancel selection", show=False),
     ]
@@ -131,6 +132,13 @@ class MessageTable(DataTable):
             super().__init__()
 
     class ViewAttachmentsRequested(Message):
+        def __init__(self, message_id: str) -> None:
+            self.message_id = message_id
+            super().__init__()
+
+    class AskAgentRequested(Message):
+        """C: hand this email to an LLM agent with a typed instruction."""
+
         def __init__(self, message_id: str) -> None:
             self.message_id = message_id
             super().__init__()
@@ -774,6 +782,11 @@ class MessageTable(DataTable):
         mid = self._current_message_id()
         if mid:
             self.post_message(self.MoveRequested(mid))
+
+    def action_ask_agent(self) -> None:
+        mid = self._current_message_id()
+        if mid:
+            self.post_message(self.AskAgentRequested(mid))
 
     def action_view_attachments(self) -> None:
         mid = self._current_message_id()
