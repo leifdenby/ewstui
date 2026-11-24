@@ -385,7 +385,8 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
   If there's no such folder, the closest paths are listed. `ewstui
   folders` lists every path (see below). A folder that holds no
   emails itself, while its subfolders do, is refused with a count of
-  them, rather than exported empty.
+  them, rather than exported empty: export it with `--recursive`
+  (below).
 - `--with-sent` also exports your replies from Sent Items to the
   folder's conversations (matched on Exchange's conversation id, going
   back 30 days before the folder's oldest email). They're found with
@@ -434,6 +435,32 @@ Each email also carries the ids to find it on the server again:
 
 File names end in a hash of the Message-ID, so they stay the same across
 runs.
+
+### Exporting a folder tree (`export --recursive`)
+
+```bash
+ewstui export Collaborations --recursive --with-sent --out ~/collab/emails
+ewstui export Collaborations --recursive --subfolder Past --out ~/collab/emails   # only part of it
+ewstui export --update ~/collab/emails                 # the whole tree, new subfolders included
+ewstui export --update ~/collab/emails/Past/Bob        # one folder of it
+```
+
+- Every folder under FOLDER that holds emails is exported into its own
+  subdirectory, `DIR/<path relative to FOLDER>/`, exactly as a
+  single-folder export would write it, so each can be refreshed on its
+  own. FOLDER's own emails, if any, go to `DIR/_root/`. Empty folders
+  get no directory.
+- One line per folder is printed as it finishes, e.g.
+  `   29 (+20 sent)   Collaborations/Mariana`.
+- `DIR/index.json` has `source.kind: "tree"` and lists the folders
+  (`folders`: path, subdirectory, folder id, `present`, counts).
+  `--update DIR` refreshes them all and adds folders created since. A
+  folder that's been renamed keeps its subdirectory; one that's gone
+  from the tree is kept with `present: false`.
+- `--subfolder NAME` (repeatable; a path relative to FOLDER) restricts
+  the run to those subfolders and the folders under them. Runs into the
+  same `DIR` add up, and `--update DIR` then covers the subfolders named
+  in any run (or the whole tree, once a run had no `--subfolder`).
 
 ### Listing folders (`ewstui folders`)
 

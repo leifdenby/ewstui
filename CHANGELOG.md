@@ -11,12 +11,20 @@ numbers [Semantic Versioning](https://semver.org/).
 - `ewstui folders [--filter TEXT] [--hidden] [--json]` lists every mail
   folder's path, as `ewstui export` takes it, with its total and unread
   counts.
+- `ewstui export FOLDER --recursive --out DIR` exports every non-empty
+  folder under FOLDER into its own subdirectory `DIR/<relative path>/`
+  (each a normal, separately refreshable export) and lists them in
+  `DIR/index.json` (`source.kind: "tree"`), so `--update DIR` refreshes
+  the whole tree, including subfolders created since. Prints one line
+  per folder; `--subfolder NAME` (repeatable) restricts a run to part of
+  the tree.
 
 ### Changed
 
 - `ewstui export FOLDER` refuses a folder that holds no emails itself
   while its subfolders do, and says how many subfolders and emails there
-  are, instead of quietly writing an empty export.
+  are (pointing to `--recursive`), instead of quietly writing an empty
+  export.
 - `ewstui export --with-sent` finds your replies with one Sent Items
   search per 50 of the folder's conversations, instead of paging through
   Sent Items back to the folder's oldest email. The same replies are
