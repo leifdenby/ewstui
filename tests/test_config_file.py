@@ -171,6 +171,19 @@ def test_paths_stored_as_strings_and_expanded_on_load(cfg_path, connect):
     assert stored(cfg_path)["accounts"]["work"]["attachment_dir"] == "/tmp/att"
 
 
+def test_env_vars_expanded_in_paths(cfg_path, connect, monkeypatch, tmp_path):
+    monkeypatch.setenv("EWSTUI_TEST_DIR", str(tmp_path / "notes"))
+    cfg_path.write_text('[accounts.work]\nemail = "a@b.test"\n'
+                        'priority_file = "$HOME/todo.txt"\n'
+                        'attachment_dir = "${EWSTUI_TEST_DIR}/att"\n')
+    cfg = config_from_args(["--config", str(cfg_path), "--account", "work"])
+    assert cfg.priority_file == Path.home() / "todo.txt"
+    assert cfg.attachment_dir == tmp_path / "notes" / "att"
+    # Saving back keeps the variable as written.
+    run(cfg_path, "--account", "work", "--page-size", "7")
+    assert stored(cfg_path)["accounts"]["work"]["priority_file"] == "$HOME/todo.txt"
+
+
 def test_default_path_respects_xdg(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert config_file.default_path() == tmp_path / "ewstui" / "config.toml"
