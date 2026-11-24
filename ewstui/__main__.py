@@ -16,6 +16,8 @@ def main(argv: list[str] | None = None) -> int:
         return _export(argv[1:])
     if argv[:1] == ["search"]:
         return _search(argv[1:])
+    if argv[:1] == ["folders"]:
+        return _folders(argv[1:])
     if argv[:1] == ["calendar"]:
         return _calendar(argv[1:])
     if argv[:1] == ["draft"]:
@@ -251,7 +253,15 @@ def _export(argv: list[str]) -> int:
                                            thread=thread, attachments=attachments, progress=progress)
             what = f"{stats.folder_total} emails" + (" (with their threads)" if thread else "")
         else:
-            path, folder = export.find_folder(client.list_folders(), folder_path)
+            folders = client.list_folders()
+            path, folder = export.find_folder(folders, folder_path)
+            if not ns.update and not folder.total_count:
+                n_sub, n_emails = export.describe_subfolders(folders, path)
+                if n_sub:
+                    print(f"error: {path!r} holds no emails itself, but {n_sub} of its subfolders hold {n_emails}. "
+                          f"Export one of them instead (list them with: ewstui folders --filter {path!r})",
+                          file=sys.stderr)
+                    return 1
             source = {
                 "mailbox": mailbox,
                 "account": cfg.account,
@@ -275,6 +285,57 @@ def _export(argv: list[str]) -> int:
         f"{stats.attachments} attachments"
         + (f", {stats.skipped_embedded} embedded items skipped" if stats.skipped_embedded else "")
     )
+    return 0
+
+
+def _folders(argv: list[str]) -> int:
+    """`ewstui folders [--filter TEXT] [--json]`: every mail folder's path
+    with its total and unread counts, spelled as `ewstui export FOLDER`
+    takes it. Any other options are the usual connection/account ones.
+
+    Parameters
+    ----------
+    argv : list[str]
+        The arguments after ``folders``.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 if the connection failed.
+    """
+    import argparse
+    import json
+
+    from . import export
+
+    p = argparse.ArgumentParser(
+        prog="ewstui folders",
+        usage="ewstui folders [--filter TEXT] [--hidden] [--json] [options]",
+        description="List the mail folders: total and unread emails, then the folder's path as `ewstui export "
+        "FOLDER` and `ewstui search --folder` take it. Counts are of the folder itself, not its subfolders. "
+        "Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
+    )
+    p.add_argument("--filter", metavar="TEXT", help="Only folders whose path contains TEXT (any case)")
+    p.add_argument("--hidden", action="store_true",
+                   help="Also list the folders hidden by default (Sync Issues, Conversation History, ...)")
+    p.add_argument("--json", action="store_true", help="Print the folders as a JSON list")
+    ns, positionals, rest = _split_positionals(p, argv)
+    if positionals:
+        p.error(f"unrecognized arguments: {' '.join(positionals)}")
+
+    opened = _open_mail_client(config_from_args(rest))
+    if opened is None:
+        return 1
+    client, _ = opened
+    records = export.folder_records(client.list_folders(), include_hidden=ns.hidden, text=ns.filter)
+    if ns.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    elif records:
+        print(f"{'total':>6} {'unread':>6}  path")
+        for r in records:
+            print(f"{r['total']:6d} {r['unread']:6d}  {r['path']}")
+    else:
+        print("No folders." if not ns.filter else f"No folder path contains {ns.filter!r}.")
     return 0
 
 

@@ -382,7 +382,10 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
 ```
 
 - The folder is its path in the folder pane, `/`-separated, any case.
-  If there's no such folder, the closest paths are listed.
+  If there's no such folder, the closest paths are listed. `ewstui
+  folders` lists every path (see below). A folder that holds no
+  emails itself, while its subfolders do, is refused with a count of
+  them, rather than exported empty.
 - `--with-sent` also exports your replies from Sent Items to the
   folder's conversations (matched on Exchange's conversation id, going
   back 30 days before the folder's oldest email).
@@ -426,6 +429,19 @@ Each email also carries the ids to find it on the server again:
 
 File names end in a hash of the Message-ID, so they stay the same across
 runs.
+
+### Listing folders (`ewstui folders`)
+
+```bash
+ewstui folders                          # every mail folder: total, unread, path
+ewstui folders --filter collaborations  # only paths containing this (any case)
+ewstui folders --json                   # path, name, depth, total, unread, hidden
+```
+
+Paths are spelled as `ewstui export FOLDER` and `ewstui search --folder`
+take them. Counts are of the folder itself, not its subfolders. Folders
+hidden by default in the folder pane (Sync Issues, Conversation History,
+...) and their subfolders are left out unless you add `--hidden`.
 
 ### Searching and exporting single emails (`ewstui search`, `export --message`)
 

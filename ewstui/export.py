@@ -52,15 +52,117 @@ class Stats:
     skipped_embedded: int = 0  # forwarded emails etc. attached as items, not files
 
 
-def folder_paths(folders: list[FolderSummary]) -> dict[str, FolderSummary]:
-    """"Projects/0 - Proposals/SBEP" -> folder, from list_folders()'s
-    depth-first order (each folder follows its parent, one level deeper)."""
-    out, stack = {}, []
+def folder_paths(folders: list[FolderSummary], include_hidden: bool = True) -> dict[str, FolderSummary]:
+    """Map each folder's path to the folder.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them: depth-first, each folder
+        following its parent one level deeper.
+    include_hidden : bool
+        Also include folders hidden by default (Sync Issues etc.) and
+        everything under them.
+
+    Returns
+    -------
+    dict[str, FolderSummary]
+        E.g. ``"Projects/0 - Proposals/SBEP"`` -> folder, in the order given.
+    """
+    out, stack, hidden = {}, [], []
     for f in folders:
         del stack[f.depth:]
+        del hidden[f.depth:]
+        parent_hidden = hidden[-1] if hidden else False
         stack.append(f.name)
-        out["/".join(stack)] = f
+        hidden.append(f.hidden_by_default or parent_hidden)
+        if include_hidden or not hidden[-1]:
+            out["/".join(stack)] = f
     return out
+
+
+def folder_records(folders: list[FolderSummary], include_hidden: bool = False, text: str | None = None) -> list[dict]:
+    """List folders for ``ewstui folders``.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    include_hidden : bool
+        Also list folders hidden by default and everything under them.
+    text : str or None
+        Only list folders whose path contains this (any case).
+
+    Returns
+    -------
+    list[dict]
+        One record per folder, in the mailbox's order: path (as
+        ``ewstui export FOLDER`` takes it), name, depth, total, unread, hidden.
+    """
+    wanted = (text or "").casefold()
+    return [
+        {"path": path, "name": f.name, "depth": f.depth, "total": f.total_count, "unread": f.unread_count,
+         "hidden": f.hidden_by_default}
+        for path, f in folder_paths(folders, include_hidden=include_hidden).items()
+        if wanted in path.casefold()
+    ]
+
+
+def subtree(folders: list[FolderSummary], path: str) -> list[tuple[str, str, FolderSummary]]:
+    """Find a folder and every folder under it (not those hidden by default).
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    path : str
+        The top folder's path (any case).
+
+    Returns
+    -------
+    list[tuple[str, str, FolderSummary]]
+        (path as the mailbox spells it, path relative to the top folder,
+        folder), the top folder first with relative path ``""``.
+
+    Raises
+    ------
+    ExportError
+        If there's no folder at `path`.
+    """
+    top, _ = find_folder(folders, path)
+    out = []
+    for p, f in folder_paths(folders, include_hidden=_is_hidden_path(folders, top)).items():
+        if p == top:
+            out.append((p, "", f))
+        elif p.startswith(top + "/"):
+            out.append((p, p[len(top) + 1:], f))
+    return out
+
+
+def _is_hidden_path(folders: list[FolderSummary], path: str) -> bool:
+    """Whether the folder at `path` (as the mailbox spells it) is hidden by
+    default, itself or through a parent: then its subtree is listed as well."""
+    return path not in folder_paths(folders, include_hidden=False)
+
+
+def describe_subfolders(folders: list[FolderSummary], path: str) -> tuple[int, int]:
+    """Count the non-empty folders under a folder, and the emails in them.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    path : str
+        The folder's path.
+
+    Returns
+    -------
+    tuple[int, int]
+        (subfolders holding emails, emails in them), from the folders'
+        item counts.
+    """
+    below = [f for _, rel, f in subtree(folders, path) if rel and f.total_count]
+    return len(below), sum(f.total_count for f in below)
 
 
 def find_folder(folders: list[FolderSummary], path: str) -> tuple[str, FolderSummary]:

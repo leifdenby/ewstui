@@ -6,6 +6,18 @@ numbers [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `ewstui folders [--filter TEXT] [--hidden] [--json]` lists every mail
+  folder's path, as `ewstui export` takes it, with its total and unread
+  counts.
+
+### Changed
+
+- `ewstui export FOLDER` refuses a folder that holds no emails itself
+  while its subfolders do, and says how many subfolders and emails there
+  are, instead of quietly writing an empty export.
+
 ## [0.1.0] — 2026-11-20
 
 First release. A terminal email + calendar client for Microsoft Exchange

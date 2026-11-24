@@ -97,6 +97,7 @@ class Config:
 SUBCOMMANDS = {
     "export": "copy a mail folder, or selected emails, to text files + index.json",
     "search": "search the mailbox; prints Message-IDs for `export --message`",
+    "folders": "list the mail folders' paths with total and unread counts",
     "calendar": "list your calendar events for a date range",
     "draft": "save a Markdown email to Drafts, or --send it (new, reply or forward)",
     "contacts": "sync or search your address book (contacts.toml)",
