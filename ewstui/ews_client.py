@@ -17,7 +17,7 @@ import functools
 import logging
 import mimetypes
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -462,6 +462,9 @@ SUMMARY_FIELDS = (
     "subject", "sender", "datetime_received", "is_read", "has_attachments", "conversation_id", "conversation_index",
     "message_id",
 )
+# find_in_conversations: conversations OR-ed together in one FindItem
+# restriction (keeps each request well within EWS's restriction size).
+CONVERSATION_BATCH = 50
 
 
 def _summary(item, folder_id: str | None) -> MessageSummary:
@@ -804,6 +807,49 @@ class MailClient:
         )
         found = [_summary(item, item.parent_folder_id.id) for item in qs]
         return sorted(found, key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
+
+    @retry_on_dead_connection
+    def find_in_conversations(self, folder_id: str, conversation_ids: list[str],
+                              since: datetime | None = None) -> list[MessageSummary]:
+        """Find the emails of some conversations in one folder.
+
+        For ``export --with-sent``: your replies in Sent Items, found with
+        a server-side restriction (ConversationId OR ConversationId ...,
+        and DateTimeReceived >= `since`) rather than by paging through the
+        folder. CONVERSATION_BATCH conversations per FindItem request.
+
+        Parameters
+        ----------
+        folder_id : str
+            The folder to look in.
+        conversation_ids : list[str]
+            The conversations' EWS ids.
+        since : datetime or None
+            Only emails received at or after this time (naive = local).
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first, with `folder_id` as ``folder_id``.
+        """
+        from exchangelib import Q
+        from exchangelib.properties import ConversationId
+
+        folder = self._folder_by_id(folder_id)
+        ids = list(dict.fromkeys(c for c in conversation_ids if c))
+        if since is not None and not isinstance(since, EWSDateTime):
+            since = EWSDateTime.from_datetime(since.astimezone(timezone.utc))
+        found = {}
+        for start in range(0, len(ids), CONVERSATION_BATCH):
+            # One flat OR (a | b | c would nest each OR inside the next).
+            restriction = Q(*(Q(conversation_id=ConversationId(id=c)) for c in ids[start:start + CONVERSATION_BATCH]),
+                            conn_type=Q.OR)
+            qs = folder.filter(restriction)
+            if since is not None:
+                qs = qs.filter(datetime_received__gte=since)
+            for item in qs.only(*SUMMARY_FIELDS):
+                found.setdefault(item.id, _summary(item, folder.id))
+        return sorted(found.values(), key=lambda m: m.received.timestamp() if m.received else 0, reverse=True)
 
     def _all_folders(self) -> list:
         out, stack = [], list(self.account.msg_folder_root.children)

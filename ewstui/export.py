@@ -10,7 +10,7 @@ AI assistant).
 
 Works on the MailClient interface only (list_folders, list_messages,
 get_message, list_attachments, save_attachment, sent_folder_id,
-find_message, find_conversation), so the
+find_message, find_conversation, find_in_conversations), so the
 demo backend stands in for tests. Re-running adds what's new and rewrites
 what changed (by change key); emails already exported stay as they are.
 """
@@ -375,22 +375,31 @@ def _save_attachments(client, folder_id: str, summary: MessageSummary, out_dir: 
 
 
 def _sent_replies(client, folder_messages: list[MessageSummary]) -> tuple[str, list[MessageSummary]]:
-    """Your replies in Sent Items to the folder's conversations, as the
-    thread view finds them: matched on conversation id, going back to
-    SENT_LOOKBACK before the folder's oldest email."""
+    """Find your replies in Sent Items to a folder's conversations.
+
+    Matched on conversation id, going back to SENT_LOOKBACK before the
+    folder's oldest email, with a server-side restriction on Sent Items
+    (``find_in_conversations``) rather than paging through it.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    folder_messages : list[MessageSummary]
+        The emails in the folder being exported.
+
+    Returns
+    -------
+    tuple[str, list[MessageSummary]]
+        The Sent Items folder id, and the replies, newest first.
+    """
     sent_id = client.sent_folder_id()
-    conversations = {m.conversation_id for m in folder_messages if m.conversation_id}
+    conversations = sorted({m.conversation_id for m in folder_messages if m.conversation_id})
     dates = [m.received for m in folder_messages if m.received]
     if not conversations or not dates:
         return sent_id, []
     cutoff = min(dates) - SENT_LOOKBACK
-    replies = []
-    for m in iter_all(client, sent_id):
-        if m.received and m.received < cutoff:
-            break
-        if m.conversation_id in conversations:
-            replies.append(m)
-    return sent_id, replies
+    return sent_id, client.find_in_conversations(sent_id, conversations, since=cutoff)
 
 
 def _prepare_export(out_dir: Path, source: dict) -> tuple[dict | None, dict[str, dict]]:

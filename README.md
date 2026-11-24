@@ -388,7 +388,9 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
   them, rather than exported empty.
 - `--with-sent` also exports your replies from Sent Items to the
   folder's conversations (matched on Exchange's conversation id, going
-  back 30 days before the folder's oldest email).
+  back 30 days before the folder's oldest email). They're found with
+  one search of Sent Items per 50 conversations, so old folders cost no
+  more than new ones.
   `--no-attachments` skips downloading attachments.
 - Connection options are the usual ones (`--account`, `--email`,
   `--auth`, ...); with none, the default account is used. Logging in

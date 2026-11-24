@@ -17,6 +17,11 @@ numbers [Semantic Versioning](https://semver.org/).
 - `ewstui export FOLDER` refuses a folder that holds no emails itself
   while its subfolders do, and says how many subfolders and emails there
   are, instead of quietly writing an empty export.
+- `ewstui export --with-sent` finds your replies with one Sent Items
+  search per 50 of the folder's conversations, instead of paging through
+  Sent Items back to the folder's oldest email. The same replies are
+  found, but a folder with mail from years ago no longer takes minutes.
+  `scripts/time_with_sent.py` times both ways against a real mailbox.
 
 ## [0.1.0] — 2026-11-20
 
