@@ -78,6 +78,38 @@ def search_folders(client, query: str, folders: list[FolderSummary], limit: int 
     return hits[:limit]
 
 
+def search_queries(client, queries: list[str], folders: list[FolderSummary], limit: int = 25,
+                   exclude_subject: list[str] | None = None) -> list[MessageSummary]:
+    """Run several searches and merge their hits.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    queries : list[str]
+        Each is searched for on its own (e.g. a person's name, then their
+        address); an email matching any of them is a hit.
+    folders : list[FolderSummary]
+        Where to search.
+    limit : int
+        The most hits per query (newest first).
+    exclude_subject : list[str] or None
+        Drop hits whose subject contains any of these (any case).
+
+    Returns
+    -------
+    list[MessageSummary]
+        The hits without duplicates, newest first.
+    """
+    drop = [w.casefold() for w in exclude_subject or [] if w.strip()]
+    hits: dict[str, MessageSummary] = {}
+    for query in queries:
+        for m in search_folders(client, query, folders, limit=limit):
+            if not any(w in m.subject.casefold() for w in drop):
+                hits.setdefault(m.id, m)
+    return sorted(hits.values(), key=_sort_key, reverse=True)
+
+
 def _sort_key(message: MessageSummary) -> float:
     """Return the email's received time as a timestamp (0 if it has none), for sorting.
 

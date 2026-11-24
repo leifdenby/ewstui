@@ -358,6 +358,8 @@ def describe_source(source: dict) -> str:
         what = f"{len(source.get('message_ids', []))} selected emails" + (" (+ threads)" if source.get("thread") else "")
     elif source.get("kind") == "tree":
         what = f"the folder tree {source.get('folder_path')!r}"
+    elif source.get("kind") == "search":
+        what = f"a search for {', '.join(map(repr, source.get('queries', [])))}"
     else:
         what = repr(source.get("folder_path"))
     return f"{what} in {source.get('mailbox')}"
@@ -804,6 +806,120 @@ def _write_tree_index(out_dir: Path, entries: list[dict], on_server: set[str], *
         },
         "folders": sorted(folders.values(), key=lambda f: f["path"].casefold()),
     })
+
+
+def search_todo(client, hits: list[MessageSummary], thread: bool = False) -> list[tuple[MessageSummary, str, str]]:
+    """Turn search hits into the emails to export, optionally with their threads.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    hits : list[MessageSummary]
+        The hits, each with its folder as ``folder_id``.
+    thread : bool
+        Also include every email in each hit's conversation, in any
+        folder. Each conversation is looked up once, however many hits
+        are in it.
+
+    Returns
+    -------
+    list[tuple[MessageSummary, str, str]]
+        (summary, folder id, folder name) of each email, without duplicates.
+    """
+    names = {f.id: f.name for f in client.list_folders()}
+    found: dict[str, MessageSummary] = {}
+    looked_up = set()
+    for m in hits:
+        found.setdefault(m.id, m)
+        if thread and m.conversation_id and m.conversation_id not in looked_up:
+            looked_up.add(m.conversation_id)
+            for t in client.find_conversation(m.conversation_id):
+                found.setdefault(t.id, t)
+    return [(m, m.folder_id, names.get(m.folder_id, "?")) for m in found.values()]
+
+
+def export_search(client, out_dir: Path, *, source: dict, exported_by: dict, queries: list[str],
+                  folders: list[str], limit: int, thread: bool = False, exclude_subject: list[str] | None = None,
+                  attachments: bool = True, now=None, progress=None) -> tuple[int, Stats]:
+    """Export the emails a search finds (optionally with their threads).
+
+    The search is recorded in index.json (``source.kind: "search"``), so
+    refreshing runs it again and adds new hits. Emails found by an
+    earlier run but not this one stay as they were: a search export
+    only grows (a search's newest-first ``limit`` alone would otherwise
+    drop older hits as new mail arrives).
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    out_dir : Path
+        The export directory (created if needed).
+    source : dict
+        Mailbox, account, EWS URL; the search is added here.
+    exported_by : dict
+        Written into index.json as it is.
+    queries : list[str]
+        Searched for one by one; added to those of earlier runs into `out_dir`.
+    folders : list[str]
+        Folder paths as ``ewstui search --folder`` takes them (``["all"]``
+        for every folder, empty for the Inbox and Sent Items).
+    limit : int
+        The most hits per query.
+    thread : bool
+        Also export every email in each hit's conversation.
+    exclude_subject : list[str] or None
+        Drop hits whose subject contains any of these (any case).
+    attachments : bool
+        Whether to download file attachments.
+    now : datetime or None
+        The sync time (now if None).
+    progress : callable or None
+        Called as ``progress(done, total)`` after each email.
+
+    Returns
+    -------
+    tuple[int, Stats]
+        The number of hits, and what happened (``folder_total`` is the
+        number of emails selected, threads included).
+
+    Raises
+    ------
+    ExportError
+        If `out_dir` holds another kind of export, or a folder isn't found.
+    """
+    from . import cli_search
+
+    out_dir = Path(out_dir)
+    source = {**source, "kind": "search"}
+    before = load_index(out_dir)
+    was_present = {r["message_id"] or f"ews:{r['ews_item_id']}": r["present"] for r in (before or {}).get("emails", [])}
+    existing, records = _prepare_export(out_dir, source)
+    old = (existing or {}).get("source", {})
+    queries = list(dict.fromkeys([*old.get("queries", []), *queries]))
+    exclude_subject = list(exclude_subject or [])
+    source = {**source, "queries": queries, "folders": list(folders), "limit": limit, "thread": thread,
+              "exclude_subject": exclude_subject, "attachments": attachments}
+
+    hits = cli_search.search_queries(client, queries, cli_search.resolve_search_folders(client, folders),
+                                     limit=limit, exclude_subject=exclude_subject)
+    todo = search_todo(client, hits, thread=thread)
+    stats = Stats(folder_total=len(todo))
+    _export_items(client, todo, out_dir, records, stats, attachments, progress)
+    for key, r in records.items():
+        if not r["present"] and was_present.get(key):
+            r["present"] = True  # found by an earlier run: kept as it was
+    _write_export_index(
+        out_dir, existing, records, stats, source=source, exported_by=exported_by, now=now,
+        description=(
+            f"Copy of the emails found by searching {source.get('mailbox')} for {queries!r}"
+            f"{' and their threads' if thread else ''} (source), made with `ewstui search --export`. A read-only "
+            "snapshot: changes here don't reach Exchange. Emails found once are kept. Refresh (re-runs the "
+            "search, adds new hits) with: ewstui export --update <this directory>"
+        ),
+    )
+    return len(hits), stats
 
 
 def find_messages(client, message_ids: list[str], thread: bool = False) -> list[tuple[MessageSummary, str, str]]:

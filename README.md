@@ -502,6 +502,31 @@ ewstui export --message "<def456@mail.example>" --out ~/letters/joel/emails   # 
   (and their threads, if exported with `--thread`). A directory holds
   either a folder export or selected emails, never both.
 
+### Exporting what a search finds (`search --export`)
+
+To collect everything about one person or topic, wherever it was filed:
+
+```bash
+ewstui search Herzog --query herzog@uni.example --folder all --limit 200 \
+    --exclude-subject newsletter --export ~/collab/herzog/emails --thread
+ewstui export --update ~/collab/herzog/emails   # later: search again, add new hits
+```
+
+- Positional words are one query; each `--query` is another, searched
+  on its own. An email matching any of them is a hit. `--limit`
+  applies to each query. `--exclude-subject WORD` (repeatable) drops
+  hits whose subject contains WORD, any case. It also works without
+  `--export`, to preview the hits.
+- `--export DIR` writes the hits as `ewstui export` does. `--thread`
+  adds the rest of each hit's conversation from any folder, looking up
+  each conversation once. `--no-attachments` skips attachments.
+- `index.json` has `source.kind: "search"` with the queries, folders,
+  limit and options. `ewstui export --update DIR` runs the search again
+  and adds new hits. Searching again into the same `DIR` adds the new
+  queries to those recorded. Emails found by an earlier run stay as they
+  are, even if the search no longer finds them (with a newest-first
+  `--limit`, older hits would otherwise drop out as new mail arrives).
+
 ### Listing calendar events (`ewstui calendar`)
 
 To list your calendar over a date range without opening the UI (e.g. to

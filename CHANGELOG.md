@@ -18,6 +18,13 @@ numbers [Semantic Versioning](https://semver.org/).
   the whole tree, including subfolders created since. Prints one line
   per folder; `--subfolder NAME` (repeatable) restricts a run to part of
   the tree.
+- `ewstui search QUERY --export DIR [--thread] [--no-attachments]`
+  exports the hits; with `--thread` each conversation is looked up once.
+  The search is recorded in `index.json` (`source.kind: "search"`), so
+  `ewstui export --update DIR` runs it again and adds new hits.
+- `ewstui search --query QUERY` (repeatable) searches for several
+  things in one run (e.g. a name and an address), and
+  `--exclude-subject WORD` (repeatable) drops hits by subject.
 
 ### Changed
 

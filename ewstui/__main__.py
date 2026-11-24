@@ -220,9 +220,11 @@ def _export(argv: list[str]) -> int:
             index = export.load_index(ns.update)
             if index is None:
                 p.error(f"no {export.INDEX} in {ns.update}: nothing to update")
-            source = index["source"]
+            source = saved = index["source"]
             out_dir = ns.update
             kind = source.get("kind", "folder")
+            if ns.message and kind != "messages":
+                p.error("--message adds to an export of selected emails, not this one")
             folder_path = source.get("folder_path")
             message_ids = [*source.get("message_ids", []), *ns.message]
             thread = ns.thread or source.get("thread", False)
@@ -234,6 +236,7 @@ def _export(argv: list[str]) -> int:
             if source.get("account") and "--account" not in rest:
                 rest = ["--account", source["account"], *rest]
         else:
+            saved = {}
             if not (ns.folder or ns.message) or not ns.out:
                 p.error("give a FOLDER or --message ID, and --out DIR (or --update DIR)")
             out_dir, folder_path, message_ids = ns.out, ns.folder, ns.message
@@ -257,6 +260,13 @@ def _export(argv: list[str]) -> int:
         "git_commit": export.git_commit(),
         "command": ["ewstui", "export", *argv],
     }
+    if kind == "search":  # made by `ewstui search --export`: run the search again
+        source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url}
+        return _run_search_export(
+            client, out_dir, source, exported_by, queries=saved["queries"], folders=saved.get("folders", []),
+            limit=saved.get("limit", 25), thread=thread, exclude_subject=saved.get("exclude_subject", []),
+            attachments=attachments,
+        )
     try:
         if kind == "messages":
             source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url, "kind": "messages",
@@ -308,12 +318,7 @@ def _export(argv: list[str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    print(
-        f"{what} -> {out_dir}\n"
-        f"  {stats.new} new, {stats.updated} updated, {stats.unchanged} unchanged; "
-        f"{stats.attachments} attachments"
-        + (f", {stats.skipped_embedded} embedded items skipped" if stats.skipped_embedded else "")
-    )
+    _print_export_summary(what, out_dir, stats)
     return 0
 
 
@@ -388,34 +393,62 @@ def _search(argv: list[str]) -> int:
 
     from . import cli_search, export
 
+    from . import __version__
+
     p = argparse.ArgumentParser(
         prog="ewstui search",
-        usage="ewstui search QUERY [--folder PATH ...] [--limit N] [--json] [options]",
+        usage="ewstui search QUERY [--query QUERY ...] [--folder PATH ...] [--limit N] [--exclude-subject WORD ...] "
+        "[--json] [options]\n"
+        "       ewstui search QUERY [...] --export DIR [--thread] [--no-attachments] [options]",
         description="Search the mailbox with Exchange's own search (words in the subject, body and people; a "
         "word also matches the start of a longer one), in the Inbox and Sent Items unless --folder says "
-        "otherwise. Prints each hit's Message-ID, for `ewstui export --message`. Connection options "
-        "(--account, --email, --auth, ...) are as for ewstui itself.",
+        "otherwise. Prints each hit's Message-ID, for `ewstui export --message`, or exports the hits with "
+        "--export. Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
     )
+    p.add_argument("--query", action="append", default=[], metavar="QUERY",
+                   help="Also search for this, on its own (e.g. a person's address besides their name); repeat for "
+                   "more. An email matching any query is a hit")
     p.add_argument("--folder", action="append", default=[], metavar="PATH",
                    help='Search this folder (path, any case; repeat for more) instead of Inbox + Sent Items; '
                    f'"{cli_search.ALL_FOLDERS}" searches every mail folder')
-    p.add_argument("--limit", type=int, default=25, help="Show at most this many hits, newest first (default 25)")
+    p.add_argument("--limit", type=int, default=25,
+                   help="At most this many hits per query, newest first (default 25)")
+    p.add_argument("--exclude-subject", action="append", default=[], metavar="WORD",
+                   help="Drop hits whose subject contains WORD (any case); repeat for more")
     p.add_argument("--json", action="store_true", help="Print the hits as a JSON list")
+    p.add_argument("--export", type=Path, metavar="DIR",
+                   help="Export the hits into DIR (as `ewstui export` does; re-runs add new hits, and "
+                   "`ewstui export --update DIR` repeats the search)")
+    p.add_argument("--thread", action="store_true",
+                   help="With --export: also export the rest of each hit's conversation, from any folder")
+    p.add_argument("--no-attachments", action="store_true", help="With --export: don't download attachments")
     ns, positionals, rest = _split_positionals(p, argv)
-    query = " ".join(positionals).strip()
-    if not query:
+    queries = [q for q in [" ".join(positionals).strip(), *(q.strip() for q in ns.query)] if q]
+    if not queries:
         p.error("give a QUERY")
+    if (ns.thread or ns.no_attachments) and not ns.export:
+        p.error("--thread and --no-attachments go with --export")
+    if ns.json and ns.export:
+        p.error("give either --json or --export, not both")
 
-    opened = _open_mail_client(config_from_args(rest))
+    cfg = config_from_args(rest)
+    opened = _open_mail_client(cfg)
     if opened is None:
         return 1
-    client, _ = opened
+    client, mailbox = opened
+    if ns.export:
+        exported_by = {"tool": "ewstui", "version": __version__, "git_commit": export.git_commit(),
+                       "command": ["ewstui", "search", *argv]}
+        source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url}
+        return _run_search_export(client, ns.export, source, exported_by, queries=queries, folders=ns.folder,
+                                  limit=ns.limit, thread=ns.thread, exclude_subject=ns.exclude_subject,
+                                  attachments=not ns.no_attachments)
     try:
         folders = cli_search.resolve_search_folders(client, ns.folder)
     except export.ExportError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    hits = cli_search.search_folders(client, query, folders, limit=ns.limit)
+    hits = cli_search.search_queries(client, queries, folders, limit=ns.limit, exclude_subject=ns.exclude_subject)
     names = {f.id: f.name for f in folders}
     if ns.json:
         print(json.dumps([cli_search.build_hit_record(m, names) for m in hits], indent=2, ensure_ascii=False))
@@ -423,6 +456,62 @@ def _search(argv: list[str]) -> int:
         print("\n".join(cli_search.format_hit_lines(hits, names)) if hits else "No matches.")
         print(f"\n{len(hits)} hits in {', '.join(f.name for f in folders)}", file=sys.stderr)
     return 0
+
+
+def _run_search_export(client, out_dir: Path, source: dict, exported_by: dict, **search) -> int:
+    """Export what a search finds and print the outcome (`search --export`,
+    and `export --update` of such an export).
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    out_dir : Path
+        The export directory.
+    source : dict
+        Mailbox, account and EWS URL.
+    exported_by : dict
+        Written into index.json as it is.
+    **search
+        queries, folders, limit, thread, exclude_subject, attachments, as
+        ``export.export_search`` takes them.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 on folder errors or another export in `out_dir`.
+    """
+    from . import export
+
+    try:
+        n_hits, stats = export.export_search(client, out_dir, source=source, exported_by=exported_by,
+                                             progress=export.ProgressPrinter(), **search)
+    except export.ExportError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    _print_export_summary(f"{n_hits} hits, {stats.folder_total} emails"
+                          + (" with their threads" if search.get("thread") else ""), out_dir, stats)
+    return 0
+
+
+def _print_export_summary(what: str, out_dir: Path, stats) -> None:
+    """Print what an export did (`what -> DIR`, then the counts).
+
+    Parameters
+    ----------
+    what : str
+        What was exported, e.g. ``Inbox: 4 emails in the folder``.
+    out_dir : Path
+        The export directory.
+    stats : export.Stats
+        The run's counts.
+    """
+    print(
+        f"{what} -> {out_dir}\n"
+        f"  {stats.new} new, {stats.updated} updated, {stats.unchanged} unchanged; "
+        f"{stats.attachments} attachments"
+        + (f", {stats.skipped_embedded} embedded items skipped" if stats.skipped_embedded else "")
+    )
 
 
 def _calendar(argv: list[str]) -> int:
