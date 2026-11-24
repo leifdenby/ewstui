@@ -22,6 +22,9 @@ numbers [Semantic Versioning](https://semver.org/).
   Sent Items back to the folder's oldest email. The same replies are
   found, but a folder with mail from years ago no longer takes minutes.
   `scripts/time_with_sent.py` times both ways against a real mailbox.
+- `ewstui export` shows progress when stderr isn't a terminal too: a
+  plain line when each folder starts and every 50 emails in bigger ones,
+  flushed at once, instead of nothing until the end.
 
 ## [0.1.0] — 2026-11-20
 

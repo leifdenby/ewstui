@@ -40,6 +40,54 @@ class ExportError(RuntimeError):
     pass
 
 
+class ProgressPrinter:
+    """Show an export's progress, as the ``progress(done, total)`` callback.
+
+    On a terminal, a counter rewritten in place. Otherwise (run in the
+    background, piped, by an agent) plain lines, each flushed at once: one
+    when a folder starts, then one every `every` emails and at the end for
+    folders that big.
+
+    Parameters
+    ----------
+    stream : file or None
+        Where to write (``sys.stderr`` if None).
+    every : int
+        Without a terminal: a line every this many emails.
+    tty : bool or None
+        Whether `stream` is a terminal (asked if None).
+
+    Attributes
+    ----------
+    label : str
+        What is being exported (e.g. a folder path), shown on each line;
+        set it before each folder.
+    """
+
+    def __init__(self, stream=None, every: int = 50, tty: bool | None = None):
+        import sys
+
+        self.stream = stream or sys.stderr
+        self.every = every
+        self.tty = self.stream.isatty() if tty is None else tty
+        self.label = ""
+
+    def __call__(self, done: int, total: int) -> None:
+        if not total:
+            return
+        prefix = f"{self.label}: " if self.label else ""
+        if self.tty:
+            print(f"\r{prefix}{done}/{total} emails", end="" if done < total else "\n", file=self.stream, flush=True)
+            return
+        if done == 0:
+            line = f"{prefix}{total} emails"
+        elif total >= self.every and (done % self.every == 0 or done == total):
+            line = f"{prefix}{done}/{total} emails"
+        else:
+            return
+        print(line, file=self.stream, flush=True)
+
+
 @dataclass
 class Stats:
     folder_total: int = 0   # emails in the folder now
@@ -446,9 +494,12 @@ def _export_items(client, todo: list[tuple[MessageSummary, str, str]], out_dir: 
     attachments : bool
         Whether to download file attachments.
     progress : callable or None
-        Called as ``progress(done, total)`` after each email.
+        Called as ``progress(0, total)`` first, then ``progress(done, total)``
+        after each email.
     """
     by_item = {r["ews_item_id"]: r for r in records.values()}
+    if progress:
+        progress(0, len(todo))
     for done, (summary, folder_id, folder_name) in enumerate(todo, 1):
         known = by_item.get(summary.id)
         if known and known["changekey"] == summary.changekey and (out_dir / known["file"]).exists():

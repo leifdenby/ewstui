@@ -235,10 +235,7 @@ def _export(argv: list[str]) -> int:
         return 1
     client, mailbox = opened
 
-    def progress(done: int, total: int) -> None:
-        if sys.stderr.isatty():
-            print(f"\r{done}/{total} emails", end="" if done < total else "\n", file=sys.stderr)
-
+    progress = export.ProgressPrinter()
     exported_by = {
         "tool": "ewstui",
         "version": __version__,
@@ -271,6 +268,7 @@ def _export(argv: list[str]) -> int:
                 "with_sent": with_sent,
                 "attachments": attachments,
             }
+            progress.label = path
             stats = export.export_folder(client, folder, out_dir, source=source, exported_by=exported_by,
                                          with_sent=with_sent, attachments=attachments, progress=progress)
             what = (f"{path}: {stats.folder_total} emails in the folder"

@@ -400,6 +400,9 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
   folder, account and options from the earlier export. One directory
   holds one folder of one mailbox: exporting another one into it is
   refused.
+- Progress goes to stderr: a counter on a terminal; otherwise (in the
+  background, piped, run by an agent) a plain line when each folder
+  starts and every 50 emails in bigger ones, written straight away.
 
 What it writes:
 
