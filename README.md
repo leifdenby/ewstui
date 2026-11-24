@@ -240,7 +240,8 @@ see the `@email` context and the `id:`, `folder:`, `from:` fields as
 ordinary text).
 
 You can point it at the todo.txt you already use (`priority_file =
-"..."` in your account): ewstui only shows and changes the entries it
+"$HOME/todo.txt"` in your account; `~` and environment variables are
+expanded in all paths in the config file): ewstui only shows and changes the entries it
 created — those in the `@email` context (entries with the older
 `+email` project tag still count, and switch to `@email` when ewstui
 next changes them) — and leaves every other line exactly as it was. It re-reads the file whenever it changed on disk, so edits

@@ -66,7 +66,7 @@ def parse_settings(table: dict) -> AgentSettings:
             raise AgentConfigError(f"[llm-agent] {key} must be a string")
     settings = AgentSettings()
     if table.get("workdir"):
-        settings.workdir = Path(table["workdir"]).expanduser()
+        settings.workdir = Path(os.path.expandvars(table["workdir"])).expanduser()
     if table.get("email_subdir"):
         settings.email_subdir = table["email_subdir"]
     sub = PurePosixPath(settings.email_subdir.replace("\\", "/"))

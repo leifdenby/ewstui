@@ -65,6 +65,14 @@ class ConfigFileError(ValueError):
     """Unknown account, bad value, unparsable file — shown to the user as-is."""
 
 
+def expand_path(value: str | Path) -> Path:
+    """A path from the config file with `~` and environment variables
+    (`$HOME`, `${XDG_DATA_HOME}`, ...) expanded. Unset variables are left
+    as written, as os.path.expandvars does.
+    """
+    return Path(os.path.expandvars(str(value))).expanduser()
+
+
 def default_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
     return Path(base) / "ewstui" / "config.toml"
@@ -101,7 +109,7 @@ def account_settings(doc: TOMLDocument, name: str) -> dict:
     for key, value in table.unwrap().items():
         if key in FILE_ONLY_KEYS:
             continue
-        out[key] = Path(value).expanduser() if key in PATH_KEYS else value
+        out[key] = expand_path(value) if key in PATH_KEYS else value
     return out
 
 
@@ -226,8 +234,8 @@ def read_contacts_settings(doc: TOMLDocument, config_path: Path) -> tuple[Path, 
         folders = [folders]
     if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
         raise ConfigFileError("[contacts] sync_from must be a list of folder paths")
-    path = Path(str(file)).expanduser() if file else build_default_contacts_path(config_path)
-    return path, [Path(f).expanduser() for f in folders]
+    path = expand_path(file) if file else build_default_contacts_path(config_path)
+    return path, [expand_path(f) for f in folders]
 
 
 def read_agent_settings(doc: TOMLDocument, config_path: Path):

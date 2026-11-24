@@ -8,6 +8,11 @@ numbers [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Paths in `config.toml` (account paths such as `priority_file` and
+  `attachment_dir`, `[contacts]` paths, `[llm-agent] workdir`) expand
+  environment variables (`$HOME`, `${XDG_DATA_HOME}`, ...) as well as
+  `~`, so one config file works on machines with different home
+  directories. Saving an account keeps the variable as written.
 - `ewstui folders [--filter TEXT] [--hidden] [--json]` lists every mail
   folder's path, as `ewstui export` takes it, with its total and unread
   counts.
