@@ -1,16 +1,19 @@
 """
-`ewstui export`: copy one mail folder (export_folder), or selected emails
-and their threads from any folder (export_messages, `--message`), to
-plain files, for reading and searching outside ewstui (grep, scripts, an
-AI assistant).
+`ewstui export`: copy one mail folder (export_folder), a folder and every
+folder under it (export_tree, `--recursive`), or selected emails and their
+threads from any folder (export_messages, `--message`), to plain files,
+for reading and searching outside ewstui (grep, scripts, an AI assistant).
 
     <out>/index.json                       where it came from + one record per email
     <out>/<date>_<subject>_<hash>.md       the email as text
     <out>/attachments/<same stem>/<file>   its file attachments
 
+A tree export is one such directory per folder, at the folder's path
+relative to the top folder, plus <out>/index.json listing them.
+
 Works on the MailClient interface only (list_folders, list_messages,
 get_message, list_attachments, save_attachment, sent_folder_id,
-find_message, find_conversation), so the
+find_message, find_conversation, find_in_conversations), so the
 demo backend stands in for tests. Re-running adds what's new and rewrites
 what changed (by change key); emails already exported stay as they are.
 """
@@ -34,10 +37,61 @@ PAGE = 100
 # --with-sent: how far before the folder's oldest email to look for your
 # replies in Sent Items (a conversation can start before what was filed).
 SENT_LOOKBACK = timedelta(days=30)
+# --recursive: the subdirectory for the top folder's own emails (the other
+# folders' subdirectories are their paths relative to it).
+TREE_TOP = "_root"
 
 
 class ExportError(RuntimeError):
     pass
+
+
+class ProgressPrinter:
+    """Show an export's progress, as the ``progress(done, total)`` callback.
+
+    On a terminal, a counter rewritten in place. Otherwise (run in the
+    background, piped, by an agent) plain lines, each flushed at once: one
+    when a folder starts, then one every `every` emails and at the end for
+    folders that big.
+
+    Parameters
+    ----------
+    stream : file or None
+        Where to write (``sys.stderr`` if None).
+    every : int
+        Without a terminal: a line every this many emails.
+    tty : bool or None
+        Whether `stream` is a terminal (asked if None).
+
+    Attributes
+    ----------
+    label : str
+        What is being exported (e.g. a folder path), shown on each line;
+        set it before each folder.
+    """
+
+    def __init__(self, stream=None, every: int = 50, tty: bool | None = None):
+        import sys
+
+        self.stream = stream or sys.stderr
+        self.every = every
+        self.tty = self.stream.isatty() if tty is None else tty
+        self.label = ""
+
+    def __call__(self, done: int, total: int) -> None:
+        if not total:
+            return
+        prefix = f"{self.label}: " if self.label else ""
+        if self.tty:
+            print(f"\r{prefix}{done}/{total} emails", end="" if done < total else "\n", file=self.stream, flush=True)
+            return
+        if done == 0:
+            line = f"{prefix}{total} emails"
+        elif total >= self.every and (done % self.every == 0 or done == total):
+            line = f"{prefix}{done}/{total} emails"
+        else:
+            return
+        print(line, file=self.stream, flush=True)
 
 
 @dataclass
@@ -52,15 +106,117 @@ class Stats:
     skipped_embedded: int = 0  # forwarded emails etc. attached as items, not files
 
 
-def folder_paths(folders: list[FolderSummary]) -> dict[str, FolderSummary]:
-    """"Projects/0 - Proposals/SBEP" -> folder, from list_folders()'s
-    depth-first order (each folder follows its parent, one level deeper)."""
-    out, stack = {}, []
+def folder_paths(folders: list[FolderSummary], include_hidden: bool = True) -> dict[str, FolderSummary]:
+    """Map each folder's path to the folder.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them: depth-first, each folder
+        following its parent one level deeper.
+    include_hidden : bool
+        Also include folders hidden by default (Sync Issues etc.) and
+        everything under them.
+
+    Returns
+    -------
+    dict[str, FolderSummary]
+        E.g. ``"Projects/0 - Proposals/SBEP"`` -> folder, in the order given.
+    """
+    out, stack, hidden = {}, [], []
     for f in folders:
         del stack[f.depth:]
+        del hidden[f.depth:]
+        parent_hidden = hidden[-1] if hidden else False
         stack.append(f.name)
-        out["/".join(stack)] = f
+        hidden.append(f.hidden_by_default or parent_hidden)
+        if include_hidden or not hidden[-1]:
+            out["/".join(stack)] = f
     return out
+
+
+def folder_records(folders: list[FolderSummary], include_hidden: bool = False, text: str | None = None) -> list[dict]:
+    """List folders for ``ewstui folders``.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    include_hidden : bool
+        Also list folders hidden by default and everything under them.
+    text : str or None
+        Only list folders whose path contains this (any case).
+
+    Returns
+    -------
+    list[dict]
+        One record per folder, in the mailbox's order: path (as
+        ``ewstui export FOLDER`` takes it), name, depth, total, unread, hidden.
+    """
+    wanted = (text or "").casefold()
+    return [
+        {"path": path, "name": f.name, "depth": f.depth, "total": f.total_count, "unread": f.unread_count,
+         "hidden": f.hidden_by_default}
+        for path, f in folder_paths(folders, include_hidden=include_hidden).items()
+        if wanted in path.casefold()
+    ]
+
+
+def subtree(folders: list[FolderSummary], path: str) -> list[tuple[str, str, FolderSummary]]:
+    """Find a folder and every folder under it (not those hidden by default).
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    path : str
+        The top folder's path (any case).
+
+    Returns
+    -------
+    list[tuple[str, str, FolderSummary]]
+        (path as the mailbox spells it, path relative to the top folder,
+        folder), the top folder first with relative path ``""``.
+
+    Raises
+    ------
+    ExportError
+        If there's no folder at `path`.
+    """
+    top, _ = find_folder(folders, path)
+    out = []
+    for p, f in folder_paths(folders, include_hidden=_is_hidden_path(folders, top)).items():
+        if p == top:
+            out.append((p, "", f))
+        elif p.startswith(top + "/"):
+            out.append((p, p[len(top) + 1:], f))
+    return out
+
+
+def _is_hidden_path(folders: list[FolderSummary], path: str) -> bool:
+    """Whether the folder at `path` (as the mailbox spells it) is hidden by
+    default, itself or through a parent: then its subtree is listed as well."""
+    return path not in folder_paths(folders, include_hidden=False)
+
+
+def describe_subfolders(folders: list[FolderSummary], path: str) -> tuple[int, int]:
+    """Count the non-empty folders under a folder, and the emails in them.
+
+    Parameters
+    ----------
+    folders : list[FolderSummary]
+        As ``list_folders()`` returns them.
+    path : str
+        The folder's path.
+
+    Returns
+    -------
+    tuple[int, int]
+        (subfolders holding emails, emails in them), from the folders'
+        item counts.
+    """
+    below = [f for _, rel, f in subtree(folders, path) if rel and f.total_count]
+    return len(below), sum(f.total_count for f in below)
 
 
 def find_folder(folders: list[FolderSummary], path: str) -> tuple[str, FolderSummary]:
@@ -200,6 +356,10 @@ def describe_source(source: dict) -> str:
     """
     if source.get("kind") == "messages":
         what = f"{len(source.get('message_ids', []))} selected emails" + (" (+ threads)" if source.get("thread") else "")
+    elif source.get("kind") == "tree":
+        what = f"the folder tree {source.get('folder_path')!r}"
+    elif source.get("kind") == "search":
+        what = f"a search for {', '.join(map(repr, source.get('queries', [])))}"
     else:
         what = repr(source.get("folder_path"))
     return f"{what} in {source.get('mailbox')}"
@@ -231,7 +391,7 @@ def check_source(existing: dict | None, source: dict, out_dir: Path) -> None:
     # Exports made before `--message` existed have no "kind": folders.
     old_kind, new_kind = old.get("kind", "folder"), source.get("kind", "folder")
     same = old.get("mailbox") == source.get("mailbox") and old_kind == new_kind
-    if same and new_kind == "folder":
+    if same and new_kind in ("folder", "tree"):
         same = old.get("folder_id") == source.get("folder_id")
     if not same:
         raise ExportError(
@@ -273,22 +433,31 @@ def _save_attachments(client, folder_id: str, summary: MessageSummary, out_dir: 
 
 
 def _sent_replies(client, folder_messages: list[MessageSummary]) -> tuple[str, list[MessageSummary]]:
-    """Your replies in Sent Items to the folder's conversations, as the
-    thread view finds them: matched on conversation id, going back to
-    SENT_LOOKBACK before the folder's oldest email."""
+    """Find your replies in Sent Items to a folder's conversations.
+
+    Matched on conversation id, going back to SENT_LOOKBACK before the
+    folder's oldest email, with a server-side restriction on Sent Items
+    (``find_in_conversations``) rather than paging through it.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    folder_messages : list[MessageSummary]
+        The emails in the folder being exported.
+
+    Returns
+    -------
+    tuple[str, list[MessageSummary]]
+        The Sent Items folder id, and the replies, newest first.
+    """
     sent_id = client.sent_folder_id()
-    conversations = {m.conversation_id for m in folder_messages if m.conversation_id}
+    conversations = sorted({m.conversation_id for m in folder_messages if m.conversation_id})
     dates = [m.received for m in folder_messages if m.received]
     if not conversations or not dates:
         return sent_id, []
     cutoff = min(dates) - SENT_LOOKBACK
-    replies = []
-    for m in iter_all(client, sent_id):
-        if m.received and m.received < cutoff:
-            break
-        if m.conversation_id in conversations:
-            replies.append(m)
-    return sent_id, replies
+    return sent_id, client.find_in_conversations(sent_id, conversations, since=cutoff)
 
 
 def _prepare_export(out_dir: Path, source: dict) -> tuple[dict | None, dict[str, dict]]:
@@ -335,9 +504,12 @@ def _export_items(client, todo: list[tuple[MessageSummary, str, str]], out_dir: 
     attachments : bool
         Whether to download file attachments.
     progress : callable or None
-        Called as ``progress(done, total)`` after each email.
+        Called as ``progress(0, total)`` first, then ``progress(done, total)``
+        after each email.
     """
     by_item = {r["ews_item_id"]: r for r in records.values()}
+    if progress:
+        progress(0, len(todo))
     for done, (summary, folder_id, folder_name) in enumerate(todo, 1):
         known = by_item.get(summary.id)
         if known and known["changekey"] == summary.changekey and (out_dir / known["file"]).exists():
@@ -423,6 +595,331 @@ def export_folder(client, folder: FolderSummary, out_dir: Path, *, source: dict,
         ),
     )
     return stats
+
+
+def _tree_dir(rel: str) -> str:
+    """The subdirectory of a tree export for a folder.
+
+    Parameters
+    ----------
+    rel : str
+        The folder's path relative to the top folder (``""`` for the top folder).
+
+    Returns
+    -------
+    str
+        E.g. ``"Past/Bob"``, each part made safe as a file name;
+        TREE_TOP for the top folder's own emails.
+    """
+    return "/".join(safe_filename(part) for part in rel.split("/")) if rel else TREE_TOP
+
+
+def _in_subfolders(rel: str, subfolders: list[str]) -> bool:
+    """Whether a folder (path relative to the top folder) is one of
+    `subfolders` (relative paths, any case) or under one."""
+    rel = rel.casefold()
+    return any(rel == s or rel.startswith(s + "/") for s in (_norm_rel(s) for s in subfolders))
+
+
+def _norm_rel(path: str) -> str:
+    return "/".join(p.strip() for p in path.strip("/").split("/")).casefold()
+
+
+def _add_stats(total: Stats, stats: Stats) -> None:
+    for k, v in asdict(stats).items():
+        setattr(total, k, getattr(total, k) + v)
+
+
+def _stored_subfolders(old_source: dict | None, run: list[str] | None) -> list[str] | None:
+    """The part of the tree an export directory covers after this run.
+
+    Parameters
+    ----------
+    old_source : dict or None
+        The tree index's ``source`` before this run (None on the first run).
+    run : list[str] or None
+        This run's ``--subfolder`` restriction (None: the whole tree).
+
+    Returns
+    -------
+    list[str] or None
+        None for the whole tree, else the subfolders named in any run.
+    """
+    if old_source is None:
+        return list(run) if run else None
+    old = old_source.get("subfolders")
+    if old is None or not run:
+        return None
+    return list(dict.fromkeys([*old, *run]))
+
+
+def export_tree(client, path: str, out_dir: Path, *, source: dict, exported_by: dict, with_sent: bool = False,
+                attachments: bool = True, subfolders: list[str] | None = None, now=None, progress=None,
+                on_folder=None) -> tuple[list[dict], Stats]:
+    """Export a folder and every folder under it, each into its own subdirectory.
+
+    Each folder holding emails (or exported before) goes to
+    ``out_dir/<path relative to the top folder>/`` (the top folder's own
+    emails to ``out_dir/TREE_TOP/``) as ``export_folder`` writes it, so
+    each stays refreshable on its own. ``out_dir/index.json``
+    (``source.kind: "tree"``) lists the folders, so that refreshing the
+    tree also picks up folders created since.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    path : str
+        The top folder's path (any case).
+    out_dir : Path
+        The export directory (created if needed).
+    source : dict
+        Mailbox, account, EWS URL (written into each index.json).
+    exported_by : dict
+        Written into each index.json as it is.
+    with_sent, attachments : bool
+        As for ``export_folder``.
+    subfolders : list[str] or None
+        Only export these folders (paths relative to the top folder, any
+        case) and the folders under them. None: the whole tree.
+    now : datetime or None
+        The sync time (now if None).
+    progress : callable or None
+        ``progress(done, total)`` after each email; its ``label``
+        attribute, if it has one, is set to each folder's path.
+    on_folder : callable or None
+        Called as ``on_folder(entry, stats)`` after each folder, with its
+        entry in the tree index and its Stats.
+
+    Returns
+    -------
+    tuple[list[dict], Stats]
+        The tree index entries of the folders exported in this run, and
+        their Stats added up.
+
+    Raises
+    ------
+    ExportError
+        If the folder or a subfolder isn't found, or `out_dir` holds
+        another export.
+    """
+    out_dir = Path(out_dir)
+    folders = client.list_folders()
+    tree = subtree(folders, path)
+    top_path, _, top = tree[0]
+    source = {**source, "kind": "tree", "folder_path": top_path, "folder_id": top.id, "with_sent": with_sent,
+              "attachments": attachments}
+    existing = load_index(out_dir)
+    check_source(existing, source, out_dir)
+    if subfolders:
+        relative = {rel.casefold() for _, rel, _ in tree if rel}
+        unknown = [s for s in subfolders if _norm_rel(s) not in relative]
+        if unknown:
+            raise ExportError(f"no subfolder {unknown[0]!r} under {top_path!r}. "
+                              f"List them with: ewstui folders --filter {top_path!r}")
+        tree = [t for t in tree if t[1] and _in_subfolders(t[1], subfolders)]
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    known = {f["folder_id"]: f for f in (existing or {}).get("folders", [])}
+    used = {f["dir"]: fid for fid, f in known.items()}
+    entries, total = [], Stats()
+    for full, rel, folder in tree:
+        before = known.get(folder.id)
+        if not folder.total_count and not before:
+            continue
+        if before:
+            sub = before["dir"]
+        else:
+            sub, n = _tree_dir(rel), 1
+            while used.get(sub, folder.id) != folder.id:  # two names made the same by safe_filename
+                n += 1
+                sub = f"{_tree_dir(rel)}_{n}"
+        used[sub] = folder.id
+        if hasattr(progress, "label"):
+            progress.label = full
+        sub_source = {k: v for k, v in source.items() if k != "kind"} | {"folder_path": full, "folder_id": folder.id}
+        stats = export_folder(client, folder, out_dir / sub, source=sub_source, exported_by=exported_by,
+                              with_sent=with_sent, attachments=attachments, now=now, progress=progress)
+        _add_stats(total, stats)
+        entry = {"path": full, "dir": sub, "folder_id": folder.id, "present": True,
+                 "counts": {k: getattr(stats, k) for k in ("folder_total", "from_sent", "exported", "attachments")}}
+        entries.append(entry)
+        if on_folder:
+            on_folder(entry, stats)
+
+    on_server = {f.id for _, _, f in subtree(folders, top_path)}
+    _write_tree_index(out_dir, entries, on_server, source=source, subfolders=subfolders,
+                      exported_by=exported_by, now=now)
+    return entries, total
+
+
+def _write_tree_index(out_dir: Path, entries: list[dict], on_server: set[str], *, source: dict,
+                      subfolders: list[str] | None, exported_by: dict, now: datetime | None) -> None:
+    """Write a tree export's index.json, merged with the one on disk.
+
+    The index is read again just before writing, so runs restricted to
+    different ``--subfolder``s into the same directory keep each other's
+    folders.
+
+    Parameters
+    ----------
+    out_dir : Path
+        The export directory.
+    entries : list[dict]
+        The folders exported in this run.
+    on_server : set[str]
+        Ids of every folder in the tree now; earlier folders not among
+        them get ``present: false``.
+    source : dict
+        The tree's ``source``, without ``subfolders`` (set here).
+    subfolders : list[str] or None
+        This run's ``--subfolder`` restriction.
+    exported_by : dict
+        Written as it is.
+    now : datetime or None
+        The sync time (now if None).
+    """
+    existing = load_index(out_dir)
+    folders = {f["folder_id"]: f for f in (existing or {}).get("folders", [])}
+    for f in folders.values():
+        if f["folder_id"] not in on_server:
+            f["present"] = False
+    folders.update({e["folder_id"]: e for e in entries})
+    source = {**source, "subfolders": _stored_subfolders((existing or {}).get("source"), subfolders)}
+    present = [f for f in folders.values() if f["present"]]
+    synced = _iso(now or datetime.now().astimezone())
+    write_index(out_dir, {
+        "format": FORMAT,
+        "description": (
+            f"Copy of the Exchange folder {source['folder_path']!r} and the folders under it in "
+            f"{source.get('mailbox')}, made with `ewstui export --recursive`. Each folder is a separate export "
+            "in the subdirectory named in `folders` (with its own index.json); the top folder's own emails are "
+            f"in {TREE_TOP}/. A read-only snapshot. Refresh all with: ewstui export --update <this directory>"
+        ),
+        "source": source,
+        "exported_by": exported_by,
+        "first_synced": (existing or {}).get("first_synced") or synced,
+        "last_synced": synced,
+        "counts": {
+            "folders": len(present),
+            **{k: sum(f["counts"][k] for f in present) for k in ("folder_total", "from_sent", "exported", "attachments")},
+        },
+        "folders": sorted(folders.values(), key=lambda f: f["path"].casefold()),
+    })
+
+
+def search_todo(client, hits: list[MessageSummary], thread: bool = False) -> list[tuple[MessageSummary, str, str]]:
+    """Turn search hits into the emails to export, optionally with their threads.
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    hits : list[MessageSummary]
+        The hits, each with its folder as ``folder_id``.
+    thread : bool
+        Also include every email in each hit's conversation, in any
+        folder. Each conversation is looked up once, however many hits
+        are in it.
+
+    Returns
+    -------
+    list[tuple[MessageSummary, str, str]]
+        (summary, folder id, folder name) of each email, without duplicates.
+    """
+    names = {f.id: f.name for f in client.list_folders()}
+    found: dict[str, MessageSummary] = {}
+    looked_up = set()
+    for m in hits:
+        found.setdefault(m.id, m)
+        if thread and m.conversation_id and m.conversation_id not in looked_up:
+            looked_up.add(m.conversation_id)
+            for t in client.find_conversation(m.conversation_id):
+                found.setdefault(t.id, t)
+    return [(m, m.folder_id, names.get(m.folder_id, "?")) for m in found.values()]
+
+
+def export_search(client, out_dir: Path, *, source: dict, exported_by: dict, queries: list[str],
+                  folders: list[str], limit: int, thread: bool = False, exclude_subject: list[str] | None = None,
+                  attachments: bool = True, now=None, progress=None) -> tuple[int, Stats]:
+    """Export the emails a search finds (optionally with their threads).
+
+    The search is recorded in index.json (``source.kind: "search"``), so
+    refreshing runs it again and adds new hits. Emails found by an
+    earlier run but not this one stay as they were: a search export
+    only grows (a search's newest-first ``limit`` alone would otherwise
+    drop older hits as new mail arrives).
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    out_dir : Path
+        The export directory (created if needed).
+    source : dict
+        Mailbox, account, EWS URL; the search is added here.
+    exported_by : dict
+        Written into index.json as it is.
+    queries : list[str]
+        Searched for one by one; added to those of earlier runs into `out_dir`.
+    folders : list[str]
+        Folder paths as ``ewstui search --folder`` takes them (``["all"]``
+        for every folder, empty for the Inbox and Sent Items).
+    limit : int
+        The most hits per query.
+    thread : bool
+        Also export every email in each hit's conversation.
+    exclude_subject : list[str] or None
+        Drop hits whose subject contains any of these (any case).
+    attachments : bool
+        Whether to download file attachments.
+    now : datetime or None
+        The sync time (now if None).
+    progress : callable or None
+        Called as ``progress(done, total)`` after each email.
+
+    Returns
+    -------
+    tuple[int, Stats]
+        The number of hits, and what happened (``folder_total`` is the
+        number of emails selected, threads included).
+
+    Raises
+    ------
+    ExportError
+        If `out_dir` holds another kind of export, or a folder isn't found.
+    """
+    from . import cli_search
+
+    out_dir = Path(out_dir)
+    source = {**source, "kind": "search"}
+    before = load_index(out_dir)
+    was_present = {r["message_id"] or f"ews:{r['ews_item_id']}": r["present"] for r in (before or {}).get("emails", [])}
+    existing, records = _prepare_export(out_dir, source)
+    old = (existing or {}).get("source", {})
+    queries = list(dict.fromkeys([*old.get("queries", []), *queries]))
+    exclude_subject = list(exclude_subject or [])
+    source = {**source, "queries": queries, "folders": list(folders), "limit": limit, "thread": thread,
+              "exclude_subject": exclude_subject, "attachments": attachments}
+
+    hits = cli_search.search_queries(client, queries, cli_search.resolve_search_folders(client, folders),
+                                     limit=limit, exclude_subject=exclude_subject)
+    todo = search_todo(client, hits, thread=thread)
+    stats = Stats(folder_total=len(todo))
+    _export_items(client, todo, out_dir, records, stats, attachments, progress)
+    for key, r in records.items():
+        if not r["present"] and was_present.get(key):
+            r["present"] = True  # found by an earlier run: kept as it was
+    _write_export_index(
+        out_dir, existing, records, stats, source=source, exported_by=exported_by, now=now,
+        description=(
+            f"Copy of the emails found by searching {source.get('mailbox')} for {queries!r}"
+            f"{' and their threads' if thread else ''} (source), made with `ewstui search --export`. A read-only "
+            "snapshot: changes here don't reach Exchange. Emails found once are kept. Refresh (re-runs the "
+            "search, adds new hits) with: ewstui export --update <this directory>"
+        ),
+    )
+    return len(hits), stats
 
 
 def find_messages(client, message_ids: list[str], thread: bool = False) -> list[tuple[MessageSummary, str, str]]:

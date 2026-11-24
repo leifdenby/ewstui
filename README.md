@@ -382,10 +382,16 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
 ```
 
 - The folder is its path in the folder pane, `/`-separated, any case.
-  If there's no such folder, the closest paths are listed.
+  If there's no such folder, the closest paths are listed. `ewstui
+  folders` lists every path (see below). A folder that holds no
+  emails itself, while its subfolders do, is refused with a count of
+  them, rather than exported empty: export it with `--recursive`
+  (below).
 - `--with-sent` also exports your replies from Sent Items to the
   folder's conversations (matched on Exchange's conversation id, going
-  back 30 days before the folder's oldest email).
+  back 30 days before the folder's oldest email). They're found with
+  one search of Sent Items per 50 conversations, so old folders cost no
+  more than new ones.
   `--no-attachments` skips downloading attachments.
 - Connection options are the usual ones (`--account`, `--email`,
   `--auth`, ...); with none, the default account is used. Logging in
@@ -395,6 +401,9 @@ ewstui export --update ~/proposals/sbep/emails   # later: fetch what's new
   folder, account and options from the earlier export. One directory
   holds one folder of one mailbox: exporting another one into it is
   refused.
+- Progress goes to stderr: a counter on a terminal; otherwise (in the
+  background, piped, run by an agent) a plain line when each folder
+  starts and every 50 emails in bigger ones, written straight away.
 
 What it writes:
 
@@ -427,6 +436,45 @@ Each email also carries the ids to find it on the server again:
 File names end in a hash of the Message-ID, so they stay the same across
 runs.
 
+### Exporting a folder tree (`export --recursive`)
+
+```bash
+ewstui export Collaborations --recursive --with-sent --out ~/collab/emails
+ewstui export Collaborations --recursive --subfolder Past --out ~/collab/emails   # only part of it
+ewstui export --update ~/collab/emails                 # the whole tree, new subfolders included
+ewstui export --update ~/collab/emails/Past/Bob        # one folder of it
+```
+
+- Every folder under FOLDER that holds emails is exported into its own
+  subdirectory, `DIR/<path relative to FOLDER>/`, exactly as a
+  single-folder export would write it, so each can be refreshed on its
+  own. FOLDER's own emails, if any, go to `DIR/_root/`. Empty folders
+  get no directory.
+- One line per folder is printed as it finishes, e.g.
+  `   29 (+20 sent)   Collaborations/Mariana`.
+- `DIR/index.json` has `source.kind: "tree"` and lists the folders
+  (`folders`: path, subdirectory, folder id, `present`, counts).
+  `--update DIR` refreshes them all and adds folders created since. A
+  folder that's been renamed keeps its subdirectory; one that's gone
+  from the tree is kept with `present: false`.
+- `--subfolder NAME` (repeatable; a path relative to FOLDER) restricts
+  the run to those subfolders and the folders under them. Runs into the
+  same `DIR` add up, and `--update DIR` then covers the subfolders named
+  in any run (or the whole tree, once a run had no `--subfolder`).
+
+### Listing folders (`ewstui folders`)
+
+```bash
+ewstui folders                          # every mail folder: total, unread, path
+ewstui folders --filter collaborations  # only paths containing this (any case)
+ewstui folders --json                   # path, name, depth, total, unread, hidden
+```
+
+Paths are spelled as `ewstui export FOLDER` and `ewstui search --folder`
+take them. Counts are of the folder itself, not its subfolders. Folders
+hidden by default in the folder pane (Sync Issues, Conversation History,
+...) and their subfolders are left out unless you add `--hidden`.
+
 ### Searching and exporting single emails (`ewstui search`, `export --message`)
 
 To find an email without opening the UI, and export just it (or its
@@ -453,6 +501,31 @@ ewstui export --message "<def456@mail.example>" --out ~/letters/joel/emails   # 
   same directory adds to that list. `--update DIR` refreshes them all
   (and their threads, if exported with `--thread`). A directory holds
   either a folder export or selected emails, never both.
+
+### Exporting what a search finds (`search --export`)
+
+To collect everything about one person or topic, wherever it was filed:
+
+```bash
+ewstui search Herzog --query herzog@uni.example --folder all --limit 200 \
+    --exclude-subject newsletter --export ~/collab/herzog/emails --thread
+ewstui export --update ~/collab/herzog/emails   # later: search again, add new hits
+```
+
+- Positional words are one query; each `--query` is another, searched
+  on its own. An email matching any of them is a hit. `--limit`
+  applies to each query. `--exclude-subject WORD` (repeatable) drops
+  hits whose subject contains WORD, any case. It also works without
+  `--export`, to preview the hits.
+- `--export DIR` writes the hits as `ewstui export` does. `--thread`
+  adds the rest of each hit's conversation from any folder, looking up
+  each conversation once. `--no-attachments` skips attachments.
+- `index.json` has `source.kind: "search"` with the queries, folders,
+  limit and options. `ewstui export --update DIR` runs the search again
+  and adds new hits. Searching again into the same `DIR` adds the new
+  queries to those recorded. Emails found by an earlier run stay as they
+  are, even if the search no longer finds them (with a newest-first
+  `--limit`, older hits would otherwise drop out as new mail arrives).
 
 ### Listing calendar events (`ewstui calendar`)
 

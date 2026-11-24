@@ -193,6 +193,42 @@ def test_command_line_message_export_and_update(tmp_path, capsys):
     assert "0 new, 0 updated, 2 unchanged" in capsys.readouterr().out
 
 
+def test_progress_without_a_terminal_is_plain_lines(tmp_path):
+    import io
+
+    stream = io.StringIO()
+    progress = export.ProgressPrinter(stream, every=2, tty=False)
+    progress.label = "Projects/0 - Proposals/SBEP"
+    run(proposal_client(), tmp_path, with_sent=True, progress=progress)
+    assert stream.getvalue().splitlines() == [
+        "Projects/0 - Proposals/SBEP: 3 emails",
+        "Projects/0 - Proposals/SBEP: 2/3 emails",
+        "Projects/0 - Proposals/SBEP: 3/3 emails",
+    ]
+
+
+def test_progress_without_a_terminal_skips_counts_for_small_folders(tmp_path):
+    import io
+
+    stream = io.StringIO()
+    run(proposal_client(), tmp_path, progress=export.ProgressPrinter(stream, every=50, tty=False))
+    assert stream.getvalue() == "2 emails\n"
+
+
+def test_progress_on_a_terminal_rewrites_one_line(tmp_path):
+    import io
+
+    stream = io.StringIO()
+    run(proposal_client(), tmp_path, progress=export.ProgressPrinter(stream, tty=True))
+    assert stream.getvalue() == "\r0/2 emails\r1/2 emails\r2/2 emails\n"
+
+
+def test_command_line_progress_goes_to_stderr_when_not_a_terminal(tmp_path, capsys):
+    common = ["--demo", "--config", str(tmp_path / "config.toml")]
+    assert main(["export", "Inbox", "--out", str(tmp_path / "e"), *common]) == 0
+    assert capsys.readouterr().err == "Inbox: 4 emails\n"
+
+
 def test_command_line_rejects_folder_with_message(tmp_path):
     common = ["--demo", "--config", str(tmp_path / "config.toml")]
     with pytest.raises(SystemExit):

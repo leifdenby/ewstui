@@ -423,6 +423,29 @@ class DemoMailClient:
                  for m in msgs if m.conversation_id == conversation_id]
         return sorted(found, key=lambda m: m.received or datetime.min, reverse=True)
 
+    def find_in_conversations(self, folder_id: str, conversation_ids: list[str],
+                              since: datetime | None = None) -> list[MessageSummary]:
+        """Find the emails of some conversations in one folder (like the live client).
+
+        Parameters
+        ----------
+        folder_id : str
+            The folder to look in.
+        conversation_ids : list[str]
+            The conversations' ids.
+        since : datetime or None
+            Only emails received at or after this time.
+
+        Returns
+        -------
+        list[MessageSummary]
+            The emails, newest first.
+        """
+        wanted = set(conversation_ids)
+        found = [_summarize_message(m, folder_id) for m in self._messages.get(folder_id, [])
+                 if m.conversation_id in wanted and (since is None or m.received is None or m.received >= since)]
+        return sorted(found, key=lambda m: m.received or datetime.min, reverse=True)
+
     def save_draft(self, to, subject, body, cc=None, attachments=None) -> None:
         self._add_draft(subject, body, to or [], cc or [], attachments)
 

@@ -16,6 +16,8 @@ def main(argv: list[str] | None = None) -> int:
         return _export(argv[1:])
     if argv[:1] == ["search"]:
         return _search(argv[1:])
+    if argv[:1] == ["folders"]:
+        return _folders(argv[1:])
     if argv[:1] == ["calendar"]:
         return _calendar(argv[1:])
     if argv[:1] == ["draft"]:
@@ -175,12 +177,13 @@ def _export(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         prog="ewstui export",
         usage="ewstui export FOLDER --out DIR [options]\n"
+        "       ewstui export FOLDER --recursive [--subfolder NAME ...] --out DIR [options]\n"
         "       ewstui export --message ID [--message ID ...] [--thread] --out DIR [options]\n"
         "       ewstui export --update DIR [options]",
-        description="Copy a mail folder, or selected emails, to text files + index.json (re-runs add what's "
-        'new). FOLDER is its path, e.g. "Projects/0 - Proposals/SBEP" (any case). Message-IDs are as '
-        "`ewstui search` prints them. Connection options (--account, --email, --auth, ...) are as for "
-        "ewstui itself.",
+        description="Copy a mail folder (or a folder and those under it), or selected emails, to text files + "
+        'index.json (re-runs add what\'s new). FOLDER is its path, e.g. "Projects/0 - Proposals/SBEP" (any '
+        "case; `ewstui folders` lists them). Message-IDs are as `ewstui search` prints them. Connection "
+        "options (--account, --email, --auth, ...) are as for ewstui itself.",
     )
     p.add_argument("--out", type=Path, help="Directory to export into (created if needed)")
     p.add_argument("--update", type=Path, metavar="DIR",
@@ -192,6 +195,12 @@ def _export(argv: list[str]) -> int:
                    "conversation, from any folder (incl. your replies in Sent Items)")
     p.add_argument("--with-sent", action="store_true",
                    help="With FOLDER: also export your replies from Sent Items to the folder's conversations")
+    p.add_argument("--recursive", action="store_true",
+                   help="With FOLDER: also export every folder under it, each into its own subdirectory of DIR "
+                   f"(the folder's own emails into {export.TREE_TOP}/)")
+    p.add_argument("--subfolder", action="append", default=[], metavar="NAME",
+                   help="With --recursive: only this subfolder (path relative to FOLDER) and those under it; "
+                   "repeat for more")
     p.add_argument("--no-attachments", action="store_true", help="Don't download attachments")
     ns, positionals, rest = _split_positionals(p, argv)
     if len(positionals) > 1:
@@ -201,28 +210,39 @@ def _export(argv: list[str]) -> int:
         p.error("--thread goes with --message")
     if ns.message and ns.folder:
         p.error("give either a FOLDER or --message, not both")
+    if ns.recursive and not ns.folder:
+        p.error("--recursive goes with FOLDER")
+    if ns.subfolder and not ns.recursive and not ns.update:
+        p.error("--subfolder goes with --recursive")
 
     try:
         if ns.update:
             index = export.load_index(ns.update)
             if index is None:
                 p.error(f"no {export.INDEX} in {ns.update}: nothing to update")
-            source = index["source"]
+            source = saved = index["source"]
             out_dir = ns.update
             kind = source.get("kind", "folder")
+            if ns.message and kind != "messages":
+                p.error("--message adds to an export of selected emails, not this one")
             folder_path = source.get("folder_path")
             message_ids = [*source.get("message_ids", []), *ns.message]
             thread = ns.thread or source.get("thread", False)
             with_sent = ns.with_sent or source.get("with_sent", False)
             attachments = source.get("attachments", True) and not ns.no_attachments
+            subfolders = ns.subfolder or source.get("subfolders")
+            if ns.subfolder and kind != "tree":
+                p.error("--subfolder goes with a --recursive export")
             if source.get("account") and "--account" not in rest:
                 rest = ["--account", source["account"], *rest]
         else:
+            saved = {}
             if not (ns.folder or ns.message) or not ns.out:
                 p.error("give a FOLDER or --message ID, and --out DIR (or --update DIR)")
             out_dir, folder_path, message_ids = ns.out, ns.folder, ns.message
-            kind = "messages" if ns.message else "folder"
+            kind = "messages" if ns.message else "tree" if ns.recursive else "folder"
             thread, with_sent, attachments = ns.thread, ns.with_sent, not ns.no_attachments
+            subfolders = ns.subfolder or None
     except export.ExportError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -233,16 +253,20 @@ def _export(argv: list[str]) -> int:
         return 1
     client, mailbox = opened
 
-    def progress(done: int, total: int) -> None:
-        if sys.stderr.isatty():
-            print(f"\r{done}/{total} emails", end="" if done < total else "\n", file=sys.stderr)
-
+    progress = export.ProgressPrinter()
     exported_by = {
         "tool": "ewstui",
         "version": __version__,
         "git_commit": export.git_commit(),
         "command": ["ewstui", "export", *argv],
     }
+    if kind == "search":  # made by `ewstui search --export`: run the search again
+        source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url}
+        return _run_search_export(
+            client, out_dir, source, exported_by, queries=saved["queries"], folders=saved.get("folders", []),
+            limit=saved.get("limit", 25), thread=thread, exclude_subject=saved.get("exclude_subject", []),
+            attachments=attachments,
+        )
     try:
         if kind == "messages":
             source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url, "kind": "messages",
@@ -250,8 +274,32 @@ def _export(argv: list[str]) -> int:
             stats = export.export_messages(client, message_ids, out_dir, source=source, exported_by=exported_by,
                                            thread=thread, attachments=attachments, progress=progress)
             what = f"{stats.folder_total} emails" + (" (with their threads)" if thread else "")
+        elif kind == "tree":
+            source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url}
+
+            def on_folder(entry: dict, stats) -> None:
+                sent = f"(+{stats.from_sent} sent)" if with_sent else ""
+                print(f"{stats.folder_total:5d} {sent:<11} {entry['path']}" if with_sent
+                      else f"{stats.folder_total:5d}  {entry['path']}", flush=True)
+
+            entries, stats = export.export_tree(
+                client, folder_path, out_dir, source=source, exported_by=exported_by, with_sent=with_sent,
+                attachments=attachments, subfolders=subfolders, progress=progress, on_folder=on_folder,
+            )
+            top = export.load_index(out_dir)["source"]["folder_path"]
+            what = (f"{top}: {len(entries)} folders, {stats.folder_total} emails"
+                    + (f" + {stats.from_sent} of your replies" if with_sent else ""))
         else:
-            path, folder = export.find_folder(client.list_folders(), folder_path)
+            folders = client.list_folders()
+            path, folder = export.find_folder(folders, folder_path)
+            if not ns.update and not folder.total_count:
+                n_sub, n_emails = export.describe_subfolders(folders, path)
+                if n_sub:
+                    print(f"error: {path!r} holds no emails itself, but {n_sub} of its subfolders hold {n_emails}. "
+                          f"Add --recursive to export each into its own subdirectory of {out_dir} "
+                          f"(list them with: ewstui folders --filter {path!r})",
+                          file=sys.stderr)
+                    return 1
             source = {
                 "mailbox": mailbox,
                 "account": cfg.account,
@@ -261,6 +309,7 @@ def _export(argv: list[str]) -> int:
                 "with_sent": with_sent,
                 "attachments": attachments,
             }
+            progress.label = path
             stats = export.export_folder(client, folder, out_dir, source=source, exported_by=exported_by,
                                          with_sent=with_sent, attachments=attachments, progress=progress)
             what = (f"{path}: {stats.folder_total} emails in the folder"
@@ -269,12 +318,58 @@ def _export(argv: list[str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    print(
-        f"{what} -> {out_dir}\n"
-        f"  {stats.new} new, {stats.updated} updated, {stats.unchanged} unchanged; "
-        f"{stats.attachments} attachments"
-        + (f", {stats.skipped_embedded} embedded items skipped" if stats.skipped_embedded else "")
+    _print_export_summary(what, out_dir, stats)
+    return 0
+
+
+def _folders(argv: list[str]) -> int:
+    """`ewstui folders [--filter TEXT] [--json]`: every mail folder's path
+    with its total and unread counts, spelled as `ewstui export FOLDER`
+    takes it. Any other options are the usual connection/account ones.
+
+    Parameters
+    ----------
+    argv : list[str]
+        The arguments after ``folders``.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 if the connection failed.
+    """
+    import argparse
+    import json
+
+    from . import export
+
+    p = argparse.ArgumentParser(
+        prog="ewstui folders",
+        usage="ewstui folders [--filter TEXT] [--hidden] [--json] [options]",
+        description="List the mail folders: total and unread emails, then the folder's path as `ewstui export "
+        "FOLDER` and `ewstui search --folder` take it. Counts are of the folder itself, not its subfolders. "
+        "Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
     )
+    p.add_argument("--filter", metavar="TEXT", help="Only folders whose path contains TEXT (any case)")
+    p.add_argument("--hidden", action="store_true",
+                   help="Also list the folders hidden by default (Sync Issues, Conversation History, ...)")
+    p.add_argument("--json", action="store_true", help="Print the folders as a JSON list")
+    ns, positionals, rest = _split_positionals(p, argv)
+    if positionals:
+        p.error(f"unrecognized arguments: {' '.join(positionals)}")
+
+    opened = _open_mail_client(config_from_args(rest))
+    if opened is None:
+        return 1
+    client, _ = opened
+    records = export.folder_records(client.list_folders(), include_hidden=ns.hidden, text=ns.filter)
+    if ns.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+    elif records:
+        print(f"{'total':>6} {'unread':>6}  path")
+        for r in records:
+            print(f"{r['total']:6d} {r['unread']:6d}  {r['path']}")
+    else:
+        print("No folders." if not ns.filter else f"No folder path contains {ns.filter!r}.")
     return 0
 
 
@@ -298,34 +393,62 @@ def _search(argv: list[str]) -> int:
 
     from . import cli_search, export
 
+    from . import __version__
+
     p = argparse.ArgumentParser(
         prog="ewstui search",
-        usage="ewstui search QUERY [--folder PATH ...] [--limit N] [--json] [options]",
+        usage="ewstui search QUERY [--query QUERY ...] [--folder PATH ...] [--limit N] [--exclude-subject WORD ...] "
+        "[--json] [options]\n"
+        "       ewstui search QUERY [...] --export DIR [--thread] [--no-attachments] [options]",
         description="Search the mailbox with Exchange's own search (words in the subject, body and people; a "
         "word also matches the start of a longer one), in the Inbox and Sent Items unless --folder says "
-        "otherwise. Prints each hit's Message-ID, for `ewstui export --message`. Connection options "
-        "(--account, --email, --auth, ...) are as for ewstui itself.",
+        "otherwise. Prints each hit's Message-ID, for `ewstui export --message`, or exports the hits with "
+        "--export. Connection options (--account, --email, --auth, ...) are as for ewstui itself.",
     )
+    p.add_argument("--query", action="append", default=[], metavar="QUERY",
+                   help="Also search for this, on its own (e.g. a person's address besides their name); repeat for "
+                   "more. An email matching any query is a hit")
     p.add_argument("--folder", action="append", default=[], metavar="PATH",
                    help='Search this folder (path, any case; repeat for more) instead of Inbox + Sent Items; '
                    f'"{cli_search.ALL_FOLDERS}" searches every mail folder')
-    p.add_argument("--limit", type=int, default=25, help="Show at most this many hits, newest first (default 25)")
+    p.add_argument("--limit", type=int, default=25,
+                   help="At most this many hits per query, newest first (default 25)")
+    p.add_argument("--exclude-subject", action="append", default=[], metavar="WORD",
+                   help="Drop hits whose subject contains WORD (any case); repeat for more")
     p.add_argument("--json", action="store_true", help="Print the hits as a JSON list")
+    p.add_argument("--export", type=Path, metavar="DIR",
+                   help="Export the hits into DIR (as `ewstui export` does; re-runs add new hits, and "
+                   "`ewstui export --update DIR` repeats the search)")
+    p.add_argument("--thread", action="store_true",
+                   help="With --export: also export the rest of each hit's conversation, from any folder")
+    p.add_argument("--no-attachments", action="store_true", help="With --export: don't download attachments")
     ns, positionals, rest = _split_positionals(p, argv)
-    query = " ".join(positionals).strip()
-    if not query:
+    queries = [q for q in [" ".join(positionals).strip(), *(q.strip() for q in ns.query)] if q]
+    if not queries:
         p.error("give a QUERY")
+    if (ns.thread or ns.no_attachments) and not ns.export:
+        p.error("--thread and --no-attachments go with --export")
+    if ns.json and ns.export:
+        p.error("give either --json or --export, not both")
 
-    opened = _open_mail_client(config_from_args(rest))
+    cfg = config_from_args(rest)
+    opened = _open_mail_client(cfg)
     if opened is None:
         return 1
-    client, _ = opened
+    client, mailbox = opened
+    if ns.export:
+        exported_by = {"tool": "ewstui", "version": __version__, "git_commit": export.git_commit(),
+                       "command": ["ewstui", "search", *argv]}
+        source = {"mailbox": mailbox, "account": cfg.account, "ews_url": cfg.ews_url}
+        return _run_search_export(client, ns.export, source, exported_by, queries=queries, folders=ns.folder,
+                                  limit=ns.limit, thread=ns.thread, exclude_subject=ns.exclude_subject,
+                                  attachments=not ns.no_attachments)
     try:
         folders = cli_search.resolve_search_folders(client, ns.folder)
     except export.ExportError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    hits = cli_search.search_folders(client, query, folders, limit=ns.limit)
+    hits = cli_search.search_queries(client, queries, folders, limit=ns.limit, exclude_subject=ns.exclude_subject)
     names = {f.id: f.name for f in folders}
     if ns.json:
         print(json.dumps([cli_search.build_hit_record(m, names) for m in hits], indent=2, ensure_ascii=False))
@@ -333,6 +456,62 @@ def _search(argv: list[str]) -> int:
         print("\n".join(cli_search.format_hit_lines(hits, names)) if hits else "No matches.")
         print(f"\n{len(hits)} hits in {', '.join(f.name for f in folders)}", file=sys.stderr)
     return 0
+
+
+def _run_search_export(client, out_dir: Path, source: dict, exported_by: dict, **search) -> int:
+    """Export what a search finds and print the outcome (`search --export`,
+    and `export --update` of such an export).
+
+    Parameters
+    ----------
+    client : MailClient or DemoMailClient
+        The mailbox.
+    out_dir : Path
+        The export directory.
+    source : dict
+        Mailbox, account and EWS URL.
+    exported_by : dict
+        Written into index.json as it is.
+    **search
+        queries, folders, limit, thread, exclude_subject, attachments, as
+        ``export.export_search`` takes them.
+
+    Returns
+    -------
+    int
+        Exit code: 0, or 1 on folder errors or another export in `out_dir`.
+    """
+    from . import export
+
+    try:
+        n_hits, stats = export.export_search(client, out_dir, source=source, exported_by=exported_by,
+                                             progress=export.ProgressPrinter(), **search)
+    except export.ExportError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    _print_export_summary(f"{n_hits} hits, {stats.folder_total} emails"
+                          + (" with their threads" if search.get("thread") else ""), out_dir, stats)
+    return 0
+
+
+def _print_export_summary(what: str, out_dir: Path, stats) -> None:
+    """Print what an export did (`what -> DIR`, then the counts).
+
+    Parameters
+    ----------
+    what : str
+        What was exported, e.g. ``Inbox: 4 emails in the folder``.
+    out_dir : Path
+        The export directory.
+    stats : export.Stats
+        The run's counts.
+    """
+    print(
+        f"{what} -> {out_dir}\n"
+        f"  {stats.new} new, {stats.updated} updated, {stats.unchanged} unchanged; "
+        f"{stats.attachments} attachments"
+        + (f", {stats.skipped_embedded} embedded items skipped" if stats.skipped_embedded else "")
+    )
 
 
 def _calendar(argv: list[str]) -> int:

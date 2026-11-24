@@ -6,6 +6,41 @@ numbers [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `ewstui folders [--filter TEXT] [--hidden] [--json]` lists every mail
+  folder's path, as `ewstui export` takes it, with its total and unread
+  counts.
+- `ewstui export FOLDER --recursive --out DIR` exports every non-empty
+  folder under FOLDER into its own subdirectory `DIR/<relative path>/`
+  (each a normal, separately refreshable export) and lists them in
+  `DIR/index.json` (`source.kind: "tree"`), so `--update DIR` refreshes
+  the whole tree, including subfolders created since. Prints one line
+  per folder; `--subfolder NAME` (repeatable) restricts a run to part of
+  the tree.
+- `ewstui search QUERY --export DIR [--thread] [--no-attachments]`
+  exports the hits; with `--thread` each conversation is looked up once.
+  The search is recorded in `index.json` (`source.kind: "search"`), so
+  `ewstui export --update DIR` runs it again and adds new hits.
+- `ewstui search --query QUERY` (repeatable) searches for several
+  things in one run (e.g. a name and an address), and
+  `--exclude-subject WORD` (repeatable) drops hits by subject.
+
+### Changed
+
+- `ewstui export FOLDER` refuses a folder that holds no emails itself
+  while its subfolders do, and says how many subfolders and emails there
+  are (pointing to `--recursive`), instead of quietly writing an empty
+  export.
+- `ewstui export --with-sent` finds your replies with one Sent Items
+  search per 50 of the folder's conversations, instead of paging through
+  Sent Items back to the folder's oldest email. The same replies are
+  found, but a folder with mail from years ago no longer takes minutes.
+  `scripts/time_with_sent.py` times both ways against a real mailbox.
+- `ewstui export` shows progress when stderr isn't a terminal too: a
+  plain line when each folder starts and every 50 emails in bigger ones,
+  flushed at once, instead of nothing until the end.
+
 ## [0.1.0] — 2026-11-20
 
 First release. A terminal email + calendar client for Microsoft Exchange
